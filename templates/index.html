@@ -1,0 +1,1003 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Crypto Analysis Dashboard</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+  <style>
+    :root {
+      --bg-base:    #0d1117;
+      --bg-card:    #161b22;
+      --bg-card2:   #1c2128;
+      --border:     #30363d;
+      --text-dim:   #8b949e;
+      --green:      #3fb950;
+      --red:        #f85149;
+      --yellow:     #d29922;
+      --blue:       #58a6ff;
+      --purple:     #bc8cff;
+      --orange:     #f0883e;
+    }
+    body { background: var(--bg-base); font-family: 'Segoe UI', system-ui, sans-serif; }
+    .navbar-custom { background: var(--bg-card); border-bottom: 1px solid var(--border); padding: 10px 16px; }
+    .sym-btn {
+      background: var(--bg-card2); border: 1px solid var(--border); color: #e6edf3;
+      border-radius: 6px; padding: 4px 14px; font-size: 13px; font-weight: 600;
+      cursor: pointer; transition: all .15s;
+    }
+    .sym-btn:hover  { border-color: var(--blue); color: var(--blue); }
+    .sym-btn.active { background: var(--blue); border-color: var(--blue); color: #fff; }
+    .sym-btn.remove { font-size: 10px; padding: 2px 6px; color: var(--red); background: transparent; border: none; }
+
+    /* Hero metrics */
+    .hero { background: var(--bg-card); border-bottom: 1px solid var(--border); padding: 10px 16px; display: flex; gap: 24px; flex-wrap: wrap; align-items: center; }
+    .metric { display: flex; flex-direction: column; }
+    .metric .label { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .06em; }
+    .metric .value { font-size: 18px; font-weight: 700; color: #e6edf3; line-height: 1.2; }
+    .metric .value.sm { font-size: 14px; }
+
+    /* Charts */
+    .chart-section { padding: 12px 16px 0; }
+    #main-chart, #rsi-chart { width: 100%; border-radius: 6px; overflow: hidden; }
+    #main-chart { height: 480px; }
+    #rsi-chart  { height: 110px; margin-top: 2px; }
+    .chart-legend { font-size: 11px; color: var(--text-dim); padding: 4px 0; display: flex; gap: 16px; }
+    .legend-dot { display: inline-block; width: 10px; height: 2px; vertical-align: middle; margin-right: 4px; }
+
+    /* Cards */
+    .card-section { padding: 12px 16px; }
+    .analysis-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; height: 100%; }
+    .card-hdr { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .08em; font-weight: 600; padding: 10px 14px 6px; border-bottom: 1px solid var(--border); }
+    .card-body-inner { padding: 12px 14px; }
+
+    /* Tables inside cards */
+    .info-row { display: flex; justify-content: space-between; align-items: flex-start; padding: 4px 0; border-bottom: 1px solid #21262d; font-size: 13px; }
+    .info-row:last-child { border-bottom: none; }
+    .info-label { color: var(--text-dim); }
+    .info-val   { text-align: right; font-weight: 500; }
+
+    /* Badges */
+    .badge-regime { display: inline-block; font-size: 13px; font-weight: 700; padding: 4px 10px; border-radius: 5px; margin-bottom: 8px; }
+
+    /* Confluence bar */
+    .conf-bar-wrap { background: #21262d; border-radius: 4px; height: 10px; width: 100%; overflow: hidden; margin: 6px 0; }
+    .conf-bar-fill { height: 100%; border-radius: 4px; transition: width .4s; }
+    .conf-reason { font-size: 12px; padding: 3px 0; display: flex; align-items: flex-start; gap: 6px; }
+    .conf-dot { width: 7px; height: 7px; border-radius: 50%; margin-top: 4px; flex-shrink: 0; }
+
+    /* Score badge */
+    .score-badge { font-size: 36px; font-weight: 800; line-height: 1; }
+    .score-label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; margin-top: 2px; }
+
+    /* Fib table */
+    .fib-row { display: flex; justify-content: space-between; font-size: 12px; padding: 3px 0; border-bottom: 1px solid #21262d; }
+    .fib-row.active { background: rgba(208,146,34,.12); border-radius: 4px; padding: 3px 6px; }
+
+    /* Sweep pill */
+    .sweep-pill { font-size: 11px; padding: 2px 8px; border-radius: 20px; display: inline-block; margin: 2px 2px 2px 0; }
+
+    /* Level pills */
+    .level-pill { font-size: 12px; padding: 2px 8px; border-radius: 4px; display: inline-block; margin: 2px 2px 2px 0; font-weight: 600; }
+
+    /* Loading */
+    #loading-overlay {
+      position: fixed; inset: 0; background: rgba(13,17,23,.9);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 9999; flex-direction: column; gap: 12px;
+    }
+    .spinner { width: 36px; height: 36px; border: 3px solid var(--border); border-top-color: var(--blue); border-radius: 50%; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Error */
+    #error-banner { display: none; background: #3d1a1a; border: 1px solid var(--red); color: var(--red); padding: 10px 16px; font-size: 13px; }
+
+    /* Add symbol modal */
+    .modal-content { background: var(--bg-card); border: 1px solid var(--border); }
+
+    /* Timestamp */
+    #timestamp { font-size: 11px; color: var(--text-dim); }
+
+    /* Scrollable swing list */
+    .swing-list { max-height: 120px; overflow-y: auto; }
+    .swing-item { display: flex; justify-content: space-between; font-size: 12px; padding: 3px 0; border-bottom: 1px solid #21262d; }
+    .swing-item:last-child { border-bottom: none; }
+
+    .text-g { color: var(--green) !important; }
+    .text-r { color: var(--red) !important; }
+    .text-y { color: var(--yellow) !important; }
+    .text-b { color: var(--blue) !important; }
+    .text-p { color: var(--purple) !important; }
+    .text-o { color: var(--orange) !important; }
+    .text-dim { color: var(--text-dim) !important; }
+
+    /* Signal overlay on chart */
+    #chart-wrap { position: relative; }
+    #signal-overlay {
+      display: none;
+      position: absolute; top: 12px; left: 12px; z-index: 10;
+      background: rgba(13,17,23,0.93);
+      border: 1px solid #30363d;
+      border-radius: 8px; padding: 10px 14px;
+      min-width: 210px; max-width: 260px;
+      pointer-events: none;
+    }
+    #signal-overlay.no-signal {
+      display: block;
+      border-color: #21262d;
+    }
+  </style>
+</head>
+<body>
+
+<!-- ═══ LOADING OVERLAY ═══ -->
+<div id="loading-overlay">
+  <div class="spinner"></div>
+  <div style="color:#8b949e;font-size:13px" id="loading-msg">Fetching market data...</div>
+</div>
+
+<!-- ═══ ERROR BANNER ═══ -->
+<div id="error-banner"></div>
+
+<!-- ═══ NAVBAR ═══ -->
+<div class="navbar-custom d-flex align-items-center justify-content-between flex-wrap gap-2">
+  <div class="d-flex align-items-center gap-2 flex-wrap" id="symbol-bar">
+    <!-- symbols rendered by JS -->
+  </div>
+  <div class="d-flex align-items-center gap-3">
+    <span id="timestamp">—</span>
+    <button class="sym-btn" onclick="forceRefresh()" title="Force refresh (bypasses cache)">↻ Refresh</button>
+    <button class="sym-btn" id="auto-btn" onclick="toggleAuto()">Auto ⏸</button>
+    <button class="sym-btn" onclick="openAddSymbol()">+ Add</button>
+  </div>
+</div>
+
+<!-- ═══ HERO METRICS ═══ -->
+<div class="hero" id="hero-bar">
+  <div class="metric"><span class="label">Symbol</span><span class="value" id="h-symbol">—</span></div>
+  <div class="metric"><span class="label">Price</span><span class="value" id="h-price">—</span></div>
+  <div class="metric"><span class="label">Regime</span><span class="value sm" id="h-regime">—</span></div>
+  <div class="metric"><span class="label">Confluence</span><span class="value" id="h-score">—</span></div>
+  <div class="metric"><span class="label">RSI (4H)</span><span class="value sm" id="h-rsi">—</span></div>
+  <div class="metric"><span class="label">Struct. Bias</span><span class="value sm" id="h-struct">—</span></div>
+  <div class="metric"><span class="label">R:R</span><span class="value sm" id="h-rr">—</span></div>
+  <div class="metric"><span class="label">ATR (4H)</span><span class="value sm" id="h-atr">—</span></div>
+  <div class="metric"><span class="label">200 EMA (Daily)</span><span class="value sm" id="h-ema">—</span></div>
+</div>
+
+<!-- ═══ CHART ═══ -->
+<div class="chart-section">
+  <div class="chart-legend">
+    <span><span class="legend-dot" style="background:#58a6ff;height:1.5px"></span>EMA 50</span>
+    <span><span class="legend-dot" style="background:#f0883e;height:2px"></span>EMA 200</span>
+    <span><span class="legend-dot" style="background:#3fb950;border-top:1px dashed #3fb950"></span>Support</span>
+    <span><span class="legend-dot" style="background:#f85149;border-top:1px dashed #f85149"></span>Resistance</span>
+    <span><span class="legend-dot" style="background:#d29922;border-top:1px dotted #d29922"></span>Fib</span>
+    <span><span style="color:#3fb950;font-size:12px">▲</span> Long signal</span>
+    <span><span style="color:#f85149;font-size:12px">▼</span> Short signal</span>
+  </div>
+  <div id="chart-wrap">
+    <div id="main-chart"></div>
+    <!-- Signal overlay — top-left of chart -->
+    <div id="signal-overlay">
+      <div style="font-size:11px;color:#8b949e">Waiting for data...</div>
+    </div>
+  </div>
+  <div style="font-size:10px;color:var(--text-dim);padding:2px 0">RSI (14)</div>
+  <div id="rsi-chart"></div>
+</div>
+
+<!-- ═══ ANALYSIS CARDS — ROW 1 ═══ -->
+<div class="card-section">
+  <div class="row g-3">
+
+    <!-- SECTION 1: REGIME -->
+    <div class="col-xl-4 col-md-6">
+      <div class="analysis-card">
+        <div class="card-hdr">Section 1 — Market Regime</div>
+        <div class="card-body-inner" id="card-regime">
+          <div class="text-dim" style="font-size:13px">Loading...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SECTION 2: STRUCTURE -->
+    <div class="col-xl-4 col-md-6">
+      <div class="analysis-card">
+        <div class="card-hdr">Section 2 — Structure Analysis (4H)</div>
+        <div class="card-body-inner" id="card-structure">
+          <div class="text-dim" style="font-size:13px">Loading...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SECTION 3: VOLUME & RSI -->
+    <div class="col-xl-4 col-md-12">
+      <div class="analysis-card">
+        <div class="card-hdr">Section 3 — Volume &amp; Momentum</div>
+        <div class="card-body-inner" id="card-volume">
+          <div class="text-dim" style="font-size:13px">Loading...</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══ ANALYSIS CARDS — ROW 2 ═══ -->
+<div class="card-section" style="padding-top:0">
+  <div class="row g-3">
+
+    <!-- SECTION 4+5: FIB + VOLATILITY -->
+    <div class="col-xl-4 col-md-6">
+      <div class="analysis-card">
+        <div class="card-hdr">Section 4 — Fibonacci Retracement</div>
+        <div class="card-body-inner" id="card-fib">
+          <div class="text-dim" style="font-size:13px">Loading...</div>
+        </div>
+      </div>
+      <div class="analysis-card mt-3">
+        <div class="card-hdr">Section 5 — Volatility Filter</div>
+        <div class="card-body-inner" id="card-vol2">
+          <div class="text-dim" style="font-size:13px">Loading...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SECTION 6: CONFLUENCE SCORE -->
+    <div class="col-xl-8 col-md-6">
+      <div class="analysis-card" style="height:100%">
+        <div class="card-hdr">Section 6 — Confluence Score</div>
+        <div class="card-body-inner" id="card-confluence">
+          <div class="text-dim" style="font-size:13px">Loading...</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══ SECTION 7: RISK ═══ -->
+<div class="card-section" style="padding-top:0;padding-bottom:24px">
+  <div class="analysis-card">
+    <div class="card-hdr">Section 7 — Risk Context</div>
+    <div class="card-body-inner" id="card-risk">
+      <div class="text-dim" style="font-size:13px">Loading...</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ ADD SYMBOL MODAL ═══ -->
+<div class="modal fade" id="addModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header border-secondary py-2">
+        <span class="fw-bold" style="font-size:14px">Add Symbol</span>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">Enter ticker (USDT pair assumed):<br>e.g. SOL, BNB, AVAX</div>
+        <input type="text" id="add-input" class="form-control form-control-sm bg-dark border-secondary text-white"
+               placeholder="SOL" maxlength="10" style="text-transform:uppercase">
+        <div id="add-error" style="color:var(--red);font-size:12px;margin-top:6px;display:none"></div>
+      </div>
+      <div class="modal-footer border-secondary py-2">
+        <button class="sym-btn" onclick="confirmAdd()">Add</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+// ═══════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════
+let currentSymbol  = 'BTCUSDT';
+let symbolList     = JSON.parse(localStorage.getItem('cryptoDashSymbols') || '["BTCUSDT","ETHUSDT","XRPUSDT","DOGEUSDT"]');
+let autoRefreshOn  = false;
+let autoTimer      = null;
+let mainChart      = null;
+let rsiChart       = null;
+let seriesMap      = {};
+let priceLines     = [];
+let addModal       = null;
+
+// ═══════════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════════
+document.addEventListener('DOMContentLoaded', () => {
+  addModal = new bootstrap.Modal(document.getElementById('addModal'));
+  initCharts();
+  renderSymbolBar();
+  loadAnalysis(currentSymbol);
+});
+
+// ═══════════════════════════════════════════════════════
+// CHART SETUP
+// ═══════════════════════════════════════════════════════
+function chartOptions(height) {
+  return {
+    layout: { background: { color: '#0d1117' }, textColor: '#8b949e' },
+    grid:   { vertLines: { color: '#1c2128' }, horzLines: { color: '#1c2128' } },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    rightPriceScale: { borderColor: '#30363d' },
+    timeScale: { borderColor: '#30363d', timeVisible: true, secondsVisible: false },
+    width: document.getElementById('main-chart').clientWidth,
+    height: height,
+  };
+}
+
+function initCharts() {
+  const mainEl = document.getElementById('main-chart');
+  const rsiEl  = document.getElementById('rsi-chart');
+
+  mainChart = LightweightCharts.createChart(mainEl, chartOptions(480));
+
+  seriesMap.candles = mainChart.addCandlestickSeries({
+    upColor:        '#3fb950', downColor:       '#f85149',
+    borderUpColor:  '#3fb950', borderDownColor: '#f85149',
+    wickUpColor:    '#3fb950', wickDownColor:   '#f85149',
+  });
+
+  seriesMap.vol = mainChart.addHistogramSeries({
+    priceFormat:  { type: 'volume' },
+    priceScaleId: 'vol',
+    color: '#26a69a',
+  });
+  mainChart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+
+  seriesMap.ema50 = mainChart.addLineSeries({
+    color: '#58a6ff', lineWidth: 1, title: 'EMA50',
+    priceLineVisible: false, lastValueVisible: false,
+  });
+  seriesMap.ema200 = mainChart.addLineSeries({
+    color: '#f0883e', lineWidth: 1.5, title: 'EMA200',
+    priceLineVisible: false, lastValueVisible: false,
+  });
+
+  // RSI chart
+  rsiChart = LightweightCharts.createChart(rsiEl, {
+    ...chartOptions(110),
+    timeScale: { borderColor: '#30363d', timeVisible: true, visible: false },
+  });
+  seriesMap.rsi = rsiChart.addLineSeries({
+    color: '#bc8cff', lineWidth: 1.5,
+    priceLineVisible: false, lastValueVisible: true, title: 'RSI',
+  });
+  [[70,'#f85149'],[50,'#30363d'],[30,'#3fb950']].forEach(([p, c]) => {
+    seriesMap.rsi.createPriceLine({
+      price: p, color: c, lineWidth: 1,
+      lineStyle: LightweightCharts.LineStyle.Dotted,
+      axisLabelVisible: true, title: String(p),
+    });
+  });
+
+  // Sync timescales
+  let syncing = false;
+  mainChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+    if (range && !syncing) { syncing=true; rsiChart.timeScale().setVisibleLogicalRange(range); syncing=false; }
+  });
+  rsiChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+    if (range && !syncing) { syncing=true; mainChart.timeScale().setVisibleLogicalRange(range); syncing=false; }
+  });
+
+  // Responsive resize
+  const ro = new ResizeObserver(() => {
+    const w = mainEl.clientWidth;
+    mainChart.applyOptions({ width: w });
+    rsiChart.applyOptions({ width: w });
+  });
+  ro.observe(mainEl);
+}
+
+function updateChartData(chart, signal) {
+  // ── Price scale reset: clear all data first so switching BTC→XRP auto-scales ──
+  priceLines.forEach(pl => { try { seriesMap.candles.removePriceLine(pl); } catch(e){} });
+  priceLines = [];
+  seriesMap.candles.setData([]);
+  seriesMap.vol.setData([]);
+  seriesMap.ema50.setData([]);
+  seriesMap.ema200.setData([]);
+  seriesMap.rsi.setData([]);
+  mainChart.priceScale('right').applyOptions({ autoScale: true });
+  rsiChart.priceScale('right').applyOptions({ autoScale: true });
+
+  // ── Set fresh data ──
+  seriesMap.candles.setData(chart.candles);
+  seriesMap.vol.setData(chart.volume);
+  seriesMap.ema50.setData(chart.ema50);
+  seriesMap.ema200.setData(chart.ema200);
+  seriesMap.rsi.setData(chart.rsi);
+
+  // ── Signal marker on last bar ──
+  if (signal) {
+    const isLong = signal.direction === 'LONG';
+    seriesMap.candles.setMarkers([{
+      time: signal.bar_time,
+      position: isLong ? 'belowBar' : 'aboveBar',
+      color: isLong ? '#3fb950' : '#f85149',
+      shape: isLong ? 'arrowUp' : 'arrowDown',
+      text: `${signal.direction}  ${signal.score}/10`,
+      size: 2,
+    }]);
+  } else {
+    seriesMap.candles.setMarkers([]);
+  }
+
+  const lvl = chart.levels;
+
+  (lvl.support || []).forEach(p => {
+    priceLines.push(seriesMap.candles.createPriceLine({
+      price: p, color: '#3fb950', lineWidth: 1,
+      lineStyle: LightweightCharts.LineStyle.Dashed,
+      axisLabelVisible: true, title: 'S',
+    }));
+  });
+
+  (lvl.resistance || []).forEach(p => {
+    priceLines.push(seriesMap.candles.createPriceLine({
+      price: p, color: '#f85149', lineWidth: 1,
+      lineStyle: LightweightCharts.LineStyle.Dashed,
+      axisLabelVisible: true, title: 'R',
+    }));
+  });
+
+  const fibColors = {'0.382':'#ffd700','0.5':'#ffc040','0.618':'#ffaa00'};
+  Object.entries(lvl.fib || {}).forEach(([k, p]) => {
+    if (['0.382','0.5','0.618'].includes(k)) {
+      priceLines.push(seriesMap.candles.createPriceLine({
+        price: p, color: fibColors[k], lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.SparseDotted,
+        axisLabelVisible: true, title: `F${k}`,
+      }));
+    }
+  });
+
+  if (lvl.invalidation) {
+    priceLines.push(seriesMap.candles.createPriceLine({
+      price: lvl.invalidation, color: '#ff4444', lineWidth: 1,
+      lineStyle: LightweightCharts.LineStyle.Solid,
+      axisLabelVisible: true, title: '✖ Inval',
+    }));
+  }
+  if (lvl.target) {
+    priceLines.push(seriesMap.candles.createPriceLine({
+      price: lvl.target, color: '#44ff88', lineWidth: 1,
+      lineStyle: LightweightCharts.LineStyle.Solid,
+      axisLabelVisible: true, title: '⊕ Target',
+    }));
+  }
+
+  mainChart.timeScale().fitContent();
+}
+
+// ═══════════════════════════════════════════════════════
+// DATA LOADING
+// ═══════════════════════════════════════════════════════
+async function loadAnalysis(symbol, forceRefresh = false) {
+  showLoading(`Fetching ${symbol}...`);
+  hideError();
+  try {
+    const endpoint = forceRefresh ? `/api/refresh/${symbol}` : `/api/analysis/${symbol}`;
+    const resp = await fetch(endpoint);
+    const data = await resp.json();
+    if (data.error) throw new Error(data.error);
+    renderAll(data);
+  } catch(e) {
+    showError(`Failed to load ${symbol}: ${e.message}`);
+  } finally {
+    hideLoading();
+  }
+}
+
+function forceRefresh() { loadAnalysis(currentSymbol, true); }
+
+// ═══════════════════════════════════════════════════════
+// RENDER ALL
+// ═══════════════════════════════════════════════════════
+function renderAll(d) {
+  updateChartData(d.chart, d.signal);
+  renderHero(d);
+  renderSignal(d.signal);
+  renderRegime(d.regime);
+  renderStructure(d.structure, d.swings, d.sweeps, d.key_support, d.key_resistance);
+  renderVolume(d.volume, d.rsi);
+  renderFib(d.fibonacci);
+  renderVolatility(d.volatility);
+  renderConfluence(d.confluence);
+  renderRisk(d.risk, d.confluence);
+  setTimestamp(d.fetched_at, d.cache_age);
+}
+
+// ═══════════════════════════════════════════════════════
+// HERO BAR
+// ═══════════════════════════════════════════════════════
+function renderHero(d) {
+  const sym = d.symbol.replace('USDT','');
+  const r   = d.regime;
+  const c   = d.confluence;
+  const rsk = d.risk;
+
+  set('h-symbol', sym, regimeColor(r.regime));
+  set('h-price',  '$' + fmt(d.current_price));
+  set('h-regime', r.regime, regimeColor(r.regime));
+
+  const sc = c.score;
+  const scColor = sc >= 7 ? '#3fb950' : sc >= 5 ? '#d29922' : '#f85149';
+  set('h-score', `${sc}/10`, scColor);
+
+  const rsiC = d.rsi.range === 'Bullish' ? '#3fb950' : d.rsi.range === 'Bearish' ? '#f85149' : '#8b949e';
+  set('h-rsi', `${d.rsi.value} (${d.rsi.range})`, rsiC);
+
+  let biasText = 'No BOS';
+  let biasColor = '#8b949e';
+  if (d.structure) {
+    if (d.structure.bullish_bos) { biasText = 'Bullish BOS'; biasColor = '#3fb950'; }
+    else if (d.structure.bearish_bos) { biasText = 'Bearish BOS'; biasColor = '#f85149'; }
+    else if (d.structure.hh_hl) { biasText = 'HH/HL'; biasColor = '#3fb950'; }
+    else if (d.structure.lh_ll) { biasText = 'LH/LL'; biasColor = '#f85149'; }
+  }
+  set('h-struct', biasText, biasColor);
+  set('h-rr', rsk.rr + ':1', rsk.favorable ? '#3fb950' : '#d29922');
+  set('h-atr', '$' + fmt(d.volatility.current), d.volatility.expanding ? '#3fb950' : '#d29922');
+  set('h-ema', '$' + fmt(r.ema200), r.above_200 ? '#3fb950' : '#f85149');
+}
+
+// ═══════════════════════════════════════════════════════
+// SECTION 1: REGIME
+// ═══════════════════════════════════════════════════════
+function renderRegime(r) {
+  const color = regimeColor(r.regime);
+  const patt = r.hh_hl ? 'HH / HL' : r.lh_ll ? 'LH / LL' : 'Mixed / Unclear';
+  const pattC = r.hh_hl ? '#3fb950' : r.lh_ll ? '#f85149' : '#d29922';
+
+  document.getElementById('card-regime').innerHTML = `
+    <div class="badge-regime" style="background:${color}22;color:${color};border:1px solid ${color}44">
+      ${r.regime}
+    </div>
+    ${row('Price vs 200 EMA (Daily)',
+      `${yn(r.above_200,'Above','Below')} &nbsp;<span class="text-dim">($${fmt(r.ema200)})</span>`)}
+    ${row('Price Structure', `<span style="color:${pattC}">${patt}</span>`)}
+    ${row('Daily ATR', `$${fmt(r.atr)} — ${r.atr_expanding
+      ? '<span class="text-g">Expanding</span>'
+      : '<span class="text-y">Contracting</span>'}`)}
+    ${row('Trend Filter', r.above_200
+      ? '<span class="text-g">Bullish context (above 200 EMA)</span>'
+      : '<span class="text-r">Bearish context (below 200 EMA)</span>')}
+  `;
+}
+
+// ═══════════════════════════════════════════════════════
+// SECTION 2: STRUCTURE
+// ═══════════════════════════════════════════════════════
+function renderStructure(s, swings, sweeps, support, resistance) {
+  let bosHtml = '<span class="text-dim">No confirmed BOS</span>';
+  if (s) {
+    if (s.bullish_bos) bosHtml = '<span class="text-g fw-bold">Bullish BOS — price closed above last swing high</span>';
+    else if (s.bearish_bos) bosHtml = '<span class="text-r fw-bold">Bearish BOS — price closed below last swing low</span>';
+  }
+
+  const shList = (swings.highs || []).slice(-3).reverse().map((x,i) =>
+    `<div class="swing-item">
+      <span class="text-dim">SH${i===0?'(last)':''}</span>
+      <span class="text-r fw-bold">$${fmt(x[1])}</span>
+      <span class="text-dim" style="font-size:10px">${fmtDate(x[0])}</span>
+    </div>`).join('');
+
+  const slList = (swings.lows || []).slice(-3).reverse().map((x,i) =>
+    `<div class="swing-item">
+      <span class="text-dim">SL${i===0?'(last)':''}</span>
+      <span class="text-g fw-bold">$${fmt(x[1])}</span>
+      <span class="text-dim" style="font-size:10px">${fmtDate(x[0])}</span>
+    </div>`).join('');
+
+  const sweepHtml = sweeps && sweeps.length
+    ? sweeps.slice(0,3).map(sw =>
+        `<span class="sweep-pill" style="background:${sw.type.includes('bull')?'#3fb95022':'#f8514922'};color:${sw.type.includes('bull')?'#3fb950':'#f85149'};border:1px solid ${sw.type.includes('bull')?'#3fb95044':'#f8514944'}">
+          ${sw.type === 'bullish_sweep' ? '↑' : '↓'} $${fmt(sw.level)}
+        </span>`).join('')
+    : '<span class="text-dim" style="font-size:12px">None detected</span>';
+
+  const supHtml = support.length
+    ? support.map(p => `<span class="level-pill" style="background:#3fb95022;color:#3fb950;border:1px solid #3fb95044">$${fmt(p)}</span>`).join('')
+    : '<span class="text-dim">—</span>';
+  const resHtml = resistance.length
+    ? resistance.map(p => `<span class="level-pill" style="background:#f8514922;color:#f85149;border:1px solid #f8514944">$${fmt(p)}</span>`).join('')
+    : '<span class="text-dim">—</span>';
+
+  document.getElementById('card-structure').innerHTML = `
+    ${row('Break of Structure', bosHtml)}
+    ${row('Pattern', s ? (s.hh_hl ? '<span class="text-g">Higher Highs / Higher Lows</span>' : s.lh_ll ? '<span class="text-r">Lower Highs / Lower Lows</span>' : '<span class="text-y">Mixed</span>') : '<span class="text-dim">—</span>')}
+    ${row('Liquidity Sweeps', sweepHtml)}
+    ${row('Key Support', supHtml)}
+    ${row('Key Resistance', resHtml)}
+    <div style="margin-top:10px">
+      <div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Swing Highs (4H)</div>
+      <div class="swing-list">${shList || '<span class="text-dim" style="font-size:12px">Insufficient data</span>'}</div>
+    </div>
+    <div style="margin-top:8px">
+      <div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Swing Lows (4H)</div>
+      <div class="swing-list">${slList || '<span class="text-dim" style="font-size:12px">Insufficient data</span>'}</div>
+    </div>
+  `;
+}
+
+// ═══════════════════════════════════════════════════════
+// SECTION 3: VOLUME & RSI
+// ═══════════════════════════════════════════════════════
+function renderVolume(v, r) {
+  const divHtml = v.bullish_obv_div
+    ? '<span class="text-g">Bullish OBV divergence — price lower, OBV higher</span>'
+    : v.bearish_obv_div
+    ? '<span class="text-r">Bearish OBV divergence — price higher, OBV lower</span>'
+    : '<span class="text-dim">No divergence</span>';
+
+  const rsiDivHtml = r.bullish_div
+    ? '<span class="text-g">Bullish RSI divergence detected</span>'
+    : r.bearish_div
+    ? '<span class="text-r">Bearish RSI divergence detected</span>'
+    : '<span class="text-dim">None</span>';
+
+  const rsiResetHtml = r.reset_oversold
+    ? '<span class="text-g">Reset from oversold (&lt;30)</span>'
+    : r.reset_overbought
+    ? '<span class="text-y">Reset from overbought (&gt;70)</span>'
+    : '<span class="text-dim">No recent extreme</span>';
+
+  const rsiColor = r.range === 'Bullish' ? '#3fb950' : r.range === 'Bearish' ? '#f85149' : '#8b949e';
+  const rsiExtreme = r.overbought ? ' <span style="color:#f85149;font-size:11px">OVERBOUGHT</span>'
+                   : r.oversold   ? ' <span style="color:#3fb950;font-size:11px">OVERSOLD</span>' : '';
+
+  document.getElementById('card-volume').innerHTML = `
+    <div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Volume</div>
+    ${row('Trend', v.expanding
+      ? '<span class="text-g">Expanding — participation increasing</span>'
+      : '<span class="text-y">Declining — weak participation</span>')}
+    ${row('Recent Spike', yn(v.recent_spike, '2x+ avg in last 10 bars', 'No spike'))}
+    ${row('OBV Direction', v.obv_bullish
+      ? '<span class="text-g">Bullish — OBV trending up</span>'
+      : '<span class="text-r">Bearish — OBV trending down</span>')}
+    ${row('OBV Divergence', divHtml)}
+    <div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em;margin:10px 0 6px">RSI (14) — 4H</div>
+    ${row('Value', `<span style="color:${rsiColor};font-weight:700;font-size:16px">${r.value}</span>${rsiExtreme}`)}
+    ${row('Range', `<span style="color:${rsiColor}">${r.range}</span>`)}
+    ${row('Divergence', rsiDivHtml)}
+    ${row('Extreme Reset', rsiResetHtml)}
+  `;
+}
+
+// ═══════════════════════════════════════════════════════
+// SECTION 4: FIBONACCI
+// ═══════════════════════════════════════════════════════
+function renderFib(fib) {
+  if (!fib) {
+    document.getElementById('card-fib').innerHTML =
+      '<span class="text-dim" style="font-size:13px">Fibonacci not applied — regime is Range / Compression. Fib is only calculated in trending conditions.</span>';
+    return;
+  }
+
+  const rows = Object.entries(fib.levels).map(([k, v]) => {
+    const isNearest = k === fib.nearest_level;
+    const isKey = ['0.382','0.5','0.618'].includes(k);
+    const cls = isNearest && fib.at_fib ? 'fib-row active' : 'fib-row';
+    const labelColor = k === '0.0' || k === '1.0' ? '#8b949e' : isKey ? '#d29922' : '#6e7681';
+    return `<div class="${cls}">
+      <span style="color:${labelColor}">${k === '0.0' ? 'Swing Low (0.0)' : k === '1.0' ? 'Swing High (1.0)' : `${k} Retrace`}</span>
+      <span style="color:${isNearest && fib.at_fib ? '#d29922' : '#e6edf3'};font-weight:${isNearest && fib.at_fib ? '700' : '400'}">
+        $${fmt(v)} ${isNearest && fib.at_fib ? '← HERE' : ''}
+      </span>
+    </div>`;
+  }).join('');
+
+  document.getElementById('card-fib').innerHTML = `
+    <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">
+      Swing: $${fmt(fib.swing_low)} → $${fmt(fib.swing_high)}
+    </div>
+    ${rows}
+    <div style="margin-top:10px;font-size:12px">
+      ${fib.at_fib
+        ? `<span class="text-y">Price within 1.5% of Fib ${fib.nearest_level} ($${fmt(fib.nearest_price)}) — confluence zone</span>`
+        : `<span class="text-dim">Nearest level: ${fib.nearest_level} at $${fmt(fib.nearest_price)} (${fib.distance_pct}% away)</span>`}
+    </div>
+  `;
+}
+
+// ═══════════════════════════════════════════════════════
+// SECTION 5: VOLATILITY
+// ═══════════════════════════════════════════════════════
+function renderVolatility(v) {
+  const ratio = (v.current / v.avg).toFixed(2);
+  document.getElementById('card-vol2').innerHTML = `
+    ${row('ATR (4H)', `$${fmt(v.current)}`)}
+    ${row('ATR 20-bar avg', `$${fmt(v.avg)}`)}
+    ${row('ATR Ratio', `${ratio}x avg — ${v.expanding
+      ? '<span class="text-g">Expanding — breakout potential</span>'
+      : v.compressing
+      ? '<span class="text-r">Compressed — fakeout risk elevated</span>'
+      : '<span class="text-y">Normal range</span>'}`)}
+    ${row('Breakout Risk', v.compressing
+      ? '<span class="text-r">High fakeout risk — wait for expansion</span>'
+      : v.expanding
+      ? '<span class="text-g">Low fakeout risk — expansion underway</span>'
+      : '<span class="text-dim">Moderate</span>')}
+  `;
+}
+
+// ═══════════════════════════════════════════════════════
+// SECTION 6: CONFLUENCE
+// ═══════════════════════════════════════════════════════
+function renderConfluence(c) {
+  const pct   = (c.score / c.max) * 100;
+  const color = c.score >= 7 ? '#3fb950' : c.score >= 5 ? '#d29922' : '#f85149';
+  const strLabel = c.score >= 7 ? 'HIGH PROBABILITY' : c.score >= 5 ? 'MODERATE SETUP' : 'LOW QUALITY';
+
+  const reasonsHtml = c.reasons.map(r => `
+    <div class="conf-reason">
+      <div class="conf-dot" style="background:${r.earned ? '#3fb950' : '#30363d'};border:1px solid ${r.earned ? '#3fb950' : '#484f58'}"></div>
+      <div>
+        <span style="color:${r.earned ? '#3fb950' : '#8b949e'};font-weight:${r.earned ? '600' : '400'}">${r.earned ? '+' : ''}${r.pts} pts</span>
+        <span style="color:${r.earned ? '#e6edf3' : '#6e7681'};margin-left:6px">${r.text}</span>
+      </div>
+    </div>`).join('');
+
+  const improveHtml = c.improve && c.improve.length
+    ? c.improve.map(t => `<div style="font-size:12px;color:#8b949e;padding:2px 0">→ ${t}</div>`).join('')
+    : '<div style="font-size:12px;color:#3fb950">All factors satisfied</div>';
+
+  document.getElementById('card-confluence').innerHTML = `
+    <div class="d-flex align-items-center gap-4 mb-3">
+      <div>
+        <div class="score-badge" style="color:${color}">${c.score}<span style="font-size:18px;color:#8b949e">/${c.max}</span></div>
+        <div class="score-label" style="color:${color}">${strLabel}</div>
+      </div>
+      <div style="flex:1">
+        <div class="conf-bar-wrap">
+          <div class="conf-bar-fill" style="width:${pct}%;background:${color}"></div>
+        </div>
+        <div style="font-size:12px;color:#8b949e;margin-top:4px">${c.strength}</div>
+      </div>
+    </div>
+    <div>${reasonsHtml}</div>
+    ${c.improve && c.score < 10 ? `
+    <div style="margin-top:12px;border-top:1px solid #21262d;padding-top:10px">
+      <div style="font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">What would improve this setup</div>
+      ${improveHtml}
+    </div>` : ''}
+  `;
+}
+
+// ═══════════════════════════════════════════════════════
+// SECTION 7: RISK
+// ═══════════════════════════════════════════════════════
+function renderRisk(rsk, c) {
+  const biasColor = rsk.bias === 'Long' ? '#3fb950' : rsk.bias === 'Short' ? '#f85149' : '#8b949e';
+  const rrColor   = rsk.favorable ? '#3fb950' : '#d29922';
+
+  document.getElementById('card-risk').innerHTML = `
+    <div class="row g-3">
+      <div class="col-md-6">
+        ${row('Directional Bias', `<span style="color:${biasColor};font-weight:700">${rsk.bias}</span>`)}
+        ${row('Current Price', `<span class="fw-bold">$${fmt(rsk.current)}</span>`)}
+        ${row('Invalidation Level', `<span class="text-r fw-bold">$${fmt(rsk.invalidation)}</span>`)}
+        ${row('Next Target', `<span class="text-g fw-bold">$${fmt(rsk.target)}</span>`)}
+        ${row('R:R Ratio', `<span style="color:${rrColor};font-weight:700;font-size:16px">${rsk.rr}:1</span> ${rsk.favorable ? '<span class="text-g" style="font-size:11px">✓ FAVORABLE</span>' : '<span class="text-y" style="font-size:11px">⚠ BELOW 2:1</span>'}`)}
+      </div>
+      <div class="col-md-6">
+        <div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Invalidation Condition</div>
+        <div style="font-size:13px;color:#e6edf3;padding:8px 10px;background:#21262d;border-radius:6px;border-left:3px solid #f85149">
+          ${rsk.invalidation_note}
+        </div>
+        ${c.improve && c.improve.length ? `
+        <div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em;margin:12px 0 6px">What would invalidate setup</div>
+        <div style="font-size:12px;color:#8b949e;padding:8px 10px;background:#21262d;border-radius:6px">
+          <div>→ ${rsk.invalidation_note}</div>
+          <div>→ Daily regime shifts from current classification</div>
+          <div>→ Volume collapses on directional move</div>
+        </div>` : ''}
+      </div>
+    </div>
+  `;
+}
+
+// ═══════════════════════════════════════════════════════
+// SIGNAL OVERLAY
+// ═══════════════════════════════════════════════════════
+function renderSignal(sig) {
+  const el = document.getElementById('signal-overlay');
+  if (!sig) {
+    el.className = 'no-signal';
+    el.style.borderColor = '#21262d';
+    el.innerHTML = `
+      <div style="font-size:10px;color:#484f58;text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px">Signal</div>
+      <div style="font-size:12px;color:#6e7681">No high-confluence setup<br>Score below 7/10</div>`;
+    return;
+  }
+
+  const isLong  = sig.direction === 'LONG';
+  const color   = isLong ? '#3fb950' : '#f85149';
+  const arrow   = isLong ? '▲' : '▼';
+  const rrColor = sig.favorable ? '#3fb950' : '#d29922';
+
+  el.className = '';
+  el.style.display = 'block';
+  el.style.borderColor = color + '55';
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+      <span style="color:${color};font-size:18px;font-weight:800;line-height:1">${arrow} ${sig.direction}</span>
+      <span style="background:${color}22;color:${color};border:1px solid ${color}44;border-radius:4px;padding:1px 7px;font-size:11px;font-weight:700">${sig.score}/10</span>
+    </div>
+    <div style="display:grid;grid-template-columns:42px auto;gap:3px 10px;font-size:12px;margin-bottom:8px">
+      <span style="color:#8b949e">Entry</span>
+      <span style="color:#e6edf3;font-weight:600">$${fmt(sig.entry)}</span>
+      <span style="color:#8b949e">Target</span>
+      <span style="color:#3fb950;font-weight:600">$${fmt(sig.target)}</span>
+      <span style="color:#8b949e">Stop</span>
+      <span style="color:#f85149;font-weight:600">$${fmt(sig.stop)}</span>
+      <span style="color:#8b949e">R:R</span>
+      <span style="color:${rrColor};font-weight:700">${sig.rr}:1 ${sig.favorable ? '✓' : '⚠'}</span>
+    </div>
+    <div style="font-size:10px;color:#8b949e;border-top:1px solid #21262d;padding-top:6px;line-height:1.4">
+      ${sig.reason}
+    </div>
+    ${sig.top_reasons.length ? `
+    <div style="margin-top:6px">
+      ${sig.top_reasons.slice(0,3).map(r =>
+        `<div style="font-size:10px;color:#6e7681;padding:1px 0">· ${r}</div>`
+      ).join('')}
+    </div>` : ''}
+  `;
+}
+
+// ═══════════════════════════════════════════════════════
+// SYMBOL MANAGEMENT
+// ═══════════════════════════════════════════════════════
+function renderSymbolBar() {
+  const bar = document.getElementById('symbol-bar');
+  bar.innerHTML = symbolList.map(s => {
+    const ticker = s.replace('USDT','');
+    const isActive = s === currentSymbol;
+    const isDefault = ['BTCUSDT','ETHUSDT','XRPUSDT','DOGEUSDT'].includes(s);
+    return `
+      <div style="display:inline-flex;align-items:center;gap:2px">
+        <button class="sym-btn ${isActive?'active':''}" onclick="switchSymbol('${s}')">${ticker}</button>
+        ${!isDefault ? `<button class="sym-btn remove" onclick="removeSymbol('${s}')" title="Remove">✕</button>` : ''}
+      </div>`;
+  }).join('');
+}
+
+function switchSymbol(sym) {
+  currentSymbol = sym;
+  renderSymbolBar();
+  loadAnalysis(sym);
+}
+
+function removeSymbol(sym) {
+  symbolList = symbolList.filter(s => s !== sym);
+  localStorage.setItem('cryptoDashSymbols', JSON.stringify(symbolList));
+  if (currentSymbol === sym) currentSymbol = symbolList[0] || 'BTCUSDT';
+  renderSymbolBar();
+  if (currentSymbol !== sym) return;
+  loadAnalysis(currentSymbol);
+}
+
+function openAddSymbol() {
+  document.getElementById('add-input').value = '';
+  document.getElementById('add-error').style.display = 'none';
+  addModal.show();
+  setTimeout(() => document.getElementById('add-input').focus(), 300);
+}
+
+async function confirmAdd() {
+  const val = document.getElementById('add-input').value.trim().toUpperCase();
+  if (!val) return;
+  const sym = val.endsWith('USDT') ? val : val + 'USDT';
+  const errEl = document.getElementById('add-error');
+  errEl.style.display = 'none';
+
+  // Quick validity check
+  try {
+    const r = await fetch(`/api/analysis/${sym}`);
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    if (!symbolList.includes(sym)) {
+      symbolList.push(sym);
+      localStorage.setItem('cryptoDashSymbols', JSON.stringify(symbolList));
+    }
+    addModal.hide();
+    switchSymbol(sym);
+    renderSymbolBar();
+  } catch(e) {
+    errEl.textContent = `Symbol not found or fetch failed: ${e.message}`;
+    errEl.style.display = 'block';
+  }
+}
+
+document.getElementById('add-input').addEventListener('keydown', e => { if(e.key==='Enter') confirmAdd(); });
+
+// ═══════════════════════════════════════════════════════
+// AUTO REFRESH
+// ═══════════════════════════════════════════════════════
+function toggleAuto() {
+  autoRefreshOn = !autoRefreshOn;
+  const btn = document.getElementById('auto-btn');
+  if (autoRefreshOn) {
+    btn.textContent = 'Auto ▶ 5m';
+    btn.style.color = '#3fb950';
+    autoTimer = setInterval(() => forceRefresh(), 5 * 60 * 1000);
+  } else {
+    btn.textContent = 'Auto ⏸';
+    btn.style.color = '';
+    clearInterval(autoTimer);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════════════════════
+function set(id, html, color) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.innerHTML = html;
+  if (color) el.style.color = color;
+}
+
+function row(label, valueHtml) {
+  return `<div class="info-row">
+    <span class="info-label">${label}</span>
+    <span class="info-val">${valueHtml}</span>
+  </div>`;
+}
+
+function yn(v, trueLabel='Yes', falseLabel='No') {
+  return v
+    ? `<span class="text-g">${trueLabel}</span>`
+    : `<span class="text-r">${falseLabel}</span>`;
+}
+
+function fmt(v) {
+  if (v == null) return '—';
+  const n = Number(v);
+  if (n >= 10000) return n.toLocaleString('en-US', {minimumFractionDigits:0, maximumFractionDigits:0});
+  if (n >= 1)     return n.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:4});
+  return n.toLocaleString('en-US', {minimumFractionDigits:4, maximumFractionDigits:6});
+}
+
+function fmtDate(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  return d.toLocaleDateString('en-US', {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
+}
+
+function regimeColor(regime) {
+  if (!regime) return '#8b949e';
+  if (regime.includes('Strong Up'))   return '#3fb950';
+  if (regime.includes('Weak Up'))     return '#2ea043';
+  if (regime.includes('Strong Down')) return '#f85149';
+  if (regime.includes('Weak Down'))   return '#da3633';
+  return '#d29922';
+}
+
+function setTimestamp(iso, age) {
+  const d = new Date(iso);
+  const ageStr = age < 60 ? 'just fetched' : `cached ${Math.floor(age/60)}m ago`;
+  document.getElementById('timestamp').textContent =
+    `Last: ${d.toLocaleTimeString()} UTC — ${ageStr}`;
+}
+
+function showLoading(msg) {
+  const el = document.getElementById('loading-overlay');
+  document.getElementById('loading-msg').textContent = msg || 'Loading...';
+  el.style.display = 'flex';
+}
+function hideLoading() { document.getElementById('loading-overlay').style.display = 'none'; }
+function showError(msg) {
+  const el = document.getElementById('error-banner');
+  el.textContent = '⚠ ' + msg;
+  el.style.display = 'block';
+}
+function hideError() { document.getElementById('error-banner').style.display = 'none'; }
+</script>
+</body>
+</html>
