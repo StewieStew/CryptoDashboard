@@ -116,6 +116,14 @@ def detect_structure(df: pd.DataFrame, swing_highs, swing_lows) -> dict:
     )
 
 
+def find_level_touches(df: pd.DataFrame, price: float, side: str = "low",
+                       tolerance: float = 0.005, max_results: int = 5) -> list:
+    """Return unix timestamps of 4H candles that came within tolerance% of price on the given side."""
+    col = "low" if side == "low" else "high"
+    hits = df[np.abs(df[col] - price) / price <= tolerance]
+    return [int(ts.timestamp()) for ts in hits.index[-max_results:]]
+
+
 def detect_sweeps(df: pd.DataFrame, swing_highs, swing_lows, lookback: int = 12) -> list:
     recent = df.iloc[-lookback:]
     sweeps = []
@@ -306,24 +314,37 @@ def confluence_score(regime, structure, vol, rsi_data, sweeps, fib) -> dict:
         reasons.append({"pts": 0, "earned": False,
                         "text": "No recent liquidity sweep detected on 4H"})
 
-    # 4. Volume expansion (1 pt)
-    if vol["expanding"]:
+    # 4. Volume expansion or spike (1 pt)
+    if vol["expanding"] or vol["recent_spike"]:
         score += 1
+        vtxt = "Volume expanding" if vol["expanding"] else "Volume spike (2× avg detected)"
         reasons.append({"pts": 1, "earned": True,
-                        "text": "Volume expanding on recent moves — conviction present"})
+                        "text": f"{vtxt} — real participation behind the move"})
     else:
         reasons.append({"pts": 0, "earned": False,
-                        "text": "Volume not expanding — weak participation"})
+                        "text": "Volume declining, no spike — weak participation on current move"})
 
-    # 5. OBV divergence (1 pt)
-    if vol["bullish_obv_div"] or vol["bearish_obv_div"]:
+    # 5. OBV confirms bias or diverges (1 pt)
+    bias_up = "Uptrend" in regime["regime"] or bool(structure and structure.get("bullish_bos"))
+    bias_dn = "Downtrend" in regime["regime"] or bool(structure and structure.get("bearish_bos"))
+    obv_ok = (
+        (bias_up and vol["obv_bullish"]) or
+        (bias_dn and not vol["obv_bullish"]) or
+        vol["bullish_obv_div"] or vol["bearish_obv_div"]
+    )
+    if obv_ok:
         score += 1
-        d = "Bullish" if vol["bullish_obv_div"] else "Bearish"
-        reasons.append({"pts": 1, "earned": True,
-                        "text": f"{d} OBV divergence detected — volume not confirming price"})
+        if vol["bullish_obv_div"] or vol["bearish_obv_div"]:
+            obv_dir = "Bullish" if vol["bullish_obv_div"] else "Bearish"
+            obv_txt = f"{obv_dir} OBV divergence — smart money accumulating/distributing"
+        elif bias_up:
+            obv_txt = "OBV trending up — confirms bullish bias, institutional buying"
+        else:
+            obv_txt = "OBV trending down — confirms bearish bias, institutional selling"
+        reasons.append({"pts": 1, "earned": True, "text": obv_txt})
     else:
         reasons.append({"pts": 0, "earned": False,
-                        "text": "No OBV divergence — price and volume in agreement"})
+                        "text": "OBV not confirming trade direction — volume flow opposing bias"})
 
     # 6. RSI confirmation (1 pt)
     rsi_ok = (
@@ -410,6 +431,8 @@ def chart_for_timeframe(symbol: str, interval: str) -> dict:
     ema50_s  = ema(df["close"], 50)
     ema200_s = ema(df["close"], 200)
     rsi_s    = rsi(df["close"])
+    obv_s    = obv(df)
+    obv_ema_s = ema(obv_s, 20)
 
     candles = [{"time": int(r.Index.timestamp()),
                 "open": r.open, "high": r.high, "low": r.low, "close": r.close}
@@ -423,9 +446,14 @@ def chart_for_timeframe(symbol: str, interval: str) -> dict:
                   for ts, v in ema200_s.items()]
     rsi_pts    = [{"time": int(ts.timestamp()), "value": round(v, 2)}
                   for ts, v in rsi_s.items() if not np.isnan(v)]
+    obv_pts    = [{"time": int(ts.timestamp()), "value": round(float(v), 2)}
+                  for ts, v in obv_s.items() if not np.isnan(v)]
+    obv_ema_pts = [{"time": int(ts.timestamp()), "value": round(float(v), 2)}
+                   for ts, v in obv_ema_s.items() if not np.isnan(v)]
 
     return dict(candles=candles, volume=volumes,
-                ema50=ema50_pts, ema200=ema200_pts, rsi=rsi_pts)
+                ema50=ema50_pts, ema200=ema200_pts, rsi=rsi_pts,
+                obv=obv_pts, obv_ema=obv_ema_pts)
 
 
 # ─────────────────────────────────────────────
@@ -627,10 +655,16 @@ def full_analysis(symbol: str) -> dict:
     key_support    = [round(sl[1], 2) for sl in sl4[-2:]] if len(sl4) >= 2 else ([round(sl4[-1][1], 2)] if sl4 else [])
     key_resistance = [round(sh[1], 2) for sh in sh4[-2:]] if len(sh4) >= 2 else ([round(sh4[-1][1], 2)] if sh4 else [])
 
+    # Level touch timestamps (for multi-circle highlighting)
+    support_touches    = {str(p): find_level_touches(h4, p, "low")  for p in key_support}
+    resistance_touches = {str(p): find_level_touches(h4, p, "high") for p in key_resistance}
+
     # Chart data
-    ema50_s  = ema(h4["close"], 50)
-    ema200_s = ema(h4["close"], 200)
-    rsi_s    = rsi(h4["close"])
+    ema50_s   = ema(h4["close"], 50)
+    ema200_s  = ema(h4["close"], 200)
+    rsi_s     = rsi(h4["close"])
+    obv_s     = obv(h4)
+    obv_ema_s = ema(obv_s, 20)
 
     candles = [{"time": int(r.Index.timestamp()),
                 "open": r.open, "high": r.high, "low": r.low, "close": r.close}
@@ -640,12 +674,11 @@ def full_analysis(symbol: str) -> dict:
                 "color": "#26a69a" if r.close >= r.open else "#ef5350"}
                for r in h4.itertuples()]
 
-    ema50_pts  = [{"time": int(ts.timestamp()), "value": round(v, 2)}
-                  for ts, v in ema50_s.items()]
-    ema200_pts = [{"time": int(ts.timestamp()), "value": round(v, 2)}
-                  for ts, v in ema200_s.items()]
-    rsi_pts    = [{"time": int(ts.timestamp()), "value": round(v, 2)}
-                  for ts, v in rsi_s.items() if not np.isnan(v)]
+    ema50_pts   = [{"time": int(ts.timestamp()), "value": round(v, 2)} for ts, v in ema50_s.items()]
+    ema200_pts  = [{"time": int(ts.timestamp()), "value": round(v, 2)} for ts, v in ema200_s.items()]
+    rsi_pts     = [{"time": int(ts.timestamp()), "value": round(v, 2)} for ts, v in rsi_s.items() if not np.isnan(v)]
+    obv_pts     = [{"time": int(ts.timestamp()), "value": round(float(v), 2)} for ts, v in obv_s.items() if not np.isnan(v)]
+    obv_ema_pts = [{"time": int(ts.timestamp()), "value": round(float(v), 2)} for ts, v in obv_ema_s.items() if not np.isnan(v)]
 
     return dict(
         symbol=symbol,
@@ -674,9 +707,13 @@ def full_analysis(symbol: str) -> dict:
             ema50=ema50_pts,
             ema200=ema200_pts,
             rsi=rsi_pts,
+            obv=obv_pts,
+            obv_ema=obv_ema_pts,
             levels=dict(
                 support=key_support,
                 resistance=key_resistance,
+                support_touches=support_touches,
+                resistance_touches=resistance_touches,
                 fib=fib["levels"] if fib else {},
                 invalidation=risk["invalidation"],
                 target=risk["target"],

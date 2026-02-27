@@ -40,9 +40,10 @@
 
     /* Charts */
     .chart-section { padding: 12px 16px 0; }
-    #main-chart, #rsi-chart { width: 100%; border-radius: 6px; overflow: hidden; }
+    #main-chart, #rsi-chart, #obv-chart { width: 100%; border-radius: 6px; overflow: hidden; }
     #main-chart { height: 480px; }
     #rsi-chart  { height: 110px; margin-top: 2px; }
+    #obv-chart  { height: 80px;  margin-top: 2px; }
     .chart-legend { font-size: 11px; color: var(--text-dim); padding: 4px 0; display: flex; gap: 16px; }
     .legend-dot { display: inline-block; width: 10px; height: 2px; vertical-align: middle; margin-right: 4px; }
 
@@ -236,6 +237,8 @@
       <span><span class="legend-dot" style="background:#d29922;border-top:1px dotted #d29922"></span>Fib</span>
       <span><span style="color:#3fb950;font-size:12px">▲</span> Long</span>
       <span><span style="color:#f85149;font-size:12px">▼</span> Short</span>
+      <span><span class="legend-dot" style="background:#26c6da"></span>OBV</span>
+      <span><span class="legend-dot" style="background:#26c6da44"></span>OBV EMA20</span>
     </div>
     <div class="d-flex align-items-center gap-1">
       <span style="font-size:10px;color:#484f58;text-transform:uppercase;letter-spacing:.06em">Chart TF</span>
@@ -258,6 +261,8 @@
   </div>
   <div style="font-size:10px;color:var(--text-dim);padding:2px 0">RSI (14)</div>
   <div id="rsi-chart"></div>
+  <div style="font-size:10px;color:var(--text-dim);padding:2px 0 0">OBV — On Balance Volume &nbsp;<span style="color:#484f58">(teal = OBV · dimmed = 20-EMA)</span></div>
+  <div id="obv-chart"></div>
 </div>
 
 <!-- ═══ ANALYSIS CARDS — ROW 1 ═══ -->
@@ -297,19 +302,23 @@
   </div>
 </div>
 
-<!-- ═══ ANALYSIS CARDS — ROW 2 ═══ -->
+<!-- ═══ ANALYSIS CARDS — ROW 2: FIB + VOLATILITY ═══ -->
 <div class="card-section" style="padding-top:0">
   <div class="row g-3">
 
-    <!-- SECTION 4+5: FIB + VOLATILITY -->
-    <div class="col-xl-4 col-md-6">
-      <div class="analysis-card">
+    <!-- SECTION 4: FIBONACCI -->
+    <div class="col-xl-6 col-md-6">
+      <div class="analysis-card h-100">
         <div class="card-hdr">Section 4 — Fibonacci Retracement</div>
         <div class="card-body-inner" id="card-fib">
           <div class="text-dim" style="font-size:13px">Loading...</div>
         </div>
       </div>
-      <div class="analysis-card mt-3">
+    </div>
+
+    <!-- SECTION 5: VOLATILITY -->
+    <div class="col-xl-6 col-md-6">
+      <div class="analysis-card h-100">
         <div class="card-hdr">Section 5 — Volatility Filter</div>
         <div class="card-body-inner" id="card-vol2">
           <div class="text-dim" style="font-size:13px">Loading...</div>
@@ -317,16 +326,16 @@
       </div>
     </div>
 
-    <!-- SECTION 6: CONFLUENCE SCORE -->
-    <div class="col-xl-8 col-md-6">
-      <div class="analysis-card" style="height:100%">
-        <div class="card-hdr">Section 6 — Confluence Score</div>
-        <div class="card-body-inner" id="card-confluence">
-          <div class="text-dim" style="font-size:13px">Loading...</div>
-        </div>
-      </div>
-    </div>
+  </div>
+</div>
 
+<!-- ═══ ANALYSIS CARDS — ROW 3: CONFLUENCE ═══ -->
+<div class="card-section" style="padding-top:0">
+  <div class="analysis-card">
+    <div class="card-hdr">Section 6 — Confluence Score</div>
+    <div class="card-body-inner" id="card-confluence">
+      <div class="text-dim" style="font-size:13px">Loading...</div>
+    </div>
   </div>
 </div>
 
@@ -774,6 +783,7 @@ let autoRefreshOn  = false;
 let autoTimer      = null;
 let mainChart      = null;
 let rsiChart       = null;
+let obvChart       = null;
 let seriesMap      = {};
 let priceLines       = [];
 let addModal         = null;
@@ -853,13 +863,46 @@ function initCharts() {
     });
   });
 
-  // Sync timescales
+  // OBV chart
+  const obvEl = document.getElementById('obv-chart');
+  obvChart = LightweightCharts.createChart(obvEl, {
+    ...chartOptions(80),
+    timeScale: { borderColor: '#30363d', timeVisible: true, visible: false },
+  });
+  seriesMap.obv = obvChart.addLineSeries({
+    color: '#26c6da', lineWidth: 1.5,
+    priceLineVisible: false, lastValueVisible: true, title: 'OBV',
+  });
+  seriesMap.obv_ema = obvChart.addLineSeries({
+    color: '#26c6da44', lineWidth: 1,
+    priceLineVisible: false, lastValueVisible: false,
+  });
+
+  // Sync all three timescales
   let syncing = false;
   mainChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-    if (range && !syncing) { syncing=true; rsiChart.timeScale().setVisibleLogicalRange(range); syncing=false; }
+    if (range && !syncing) {
+      syncing = true;
+      rsiChart.timeScale().setVisibleLogicalRange(range);
+      obvChart.timeScale().setVisibleLogicalRange(range);
+      syncing = false;
+    }
   });
   rsiChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-    if (range && !syncing) { syncing=true; mainChart.timeScale().setVisibleLogicalRange(range); syncing=false; }
+    if (range && !syncing) {
+      syncing = true;
+      mainChart.timeScale().setVisibleLogicalRange(range);
+      obvChart.timeScale().setVisibleLogicalRange(range);
+      syncing = false;
+    }
+  });
+  obvChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+    if (range && !syncing) {
+      syncing = true;
+      mainChart.timeScale().setVisibleLogicalRange(range);
+      rsiChart.timeScale().setVisibleLogicalRange(range);
+      syncing = false;
+    }
   });
 
   // Responsive resize
@@ -867,6 +910,7 @@ function initCharts() {
     const w = mainEl.clientWidth;
     mainChart.applyOptions({ width: w });
     rsiChart.applyOptions({ width: w });
+    obvChart.applyOptions({ width: w });
   });
   ro.observe(mainEl);
 
@@ -882,8 +926,11 @@ function updateChartData(chart, signal) {
   seriesMap.ema50.setData([]);
   seriesMap.ema200.setData([]);
   seriesMap.rsi.setData([]);
+  seriesMap.obv.setData([]);
+  seriesMap.obv_ema.setData([]);
   mainChart.priceScale('right').applyOptions({ autoScale: true });
   rsiChart.priceScale('right').applyOptions({ autoScale: true });
+  obvChart.priceScale('right').applyOptions({ autoScale: true });
 
   // ── Set fresh data ──
   seriesMap.candles.setData(chart.candles);
@@ -891,6 +938,8 @@ function updateChartData(chart, signal) {
   seriesMap.ema50.setData(chart.ema50);
   seriesMap.ema200.setData(chart.ema200);
   seriesMap.rsi.setData(chart.rsi);
+  if (chart.obv)     seriesMap.obv.setData(chart.obv);
+  if (chart.obv_ema) seriesMap.obv_ema.setData(chart.obv_ema);
 
   const lvl = chart.levels;
 
@@ -1359,21 +1408,32 @@ function setMarkersWithSignal(signal) {
 }
 
 function showHighlightMarker(lineInfo) {
-  if (!lineInfo.candle_time) return;
-  if (lineInfo.candle_time === lastHighlightTs) return;
-  lastHighlightTs = lineInfo.candle_time;
+  const times = lineInfo.candle_times || [];
+  if (times.length === 0) {
+    if (highlightActive) clearHighlightMarker();
+    return;
+  }
+
+  // Skip re-render if same level already highlighted
+  const key = times[0];
+  if (highlightActive && lastHighlightTs === key) return;
+  lastHighlightTs = key;
   highlightActive = true;
 
-  const highlight = {
-    time: lineInfo.candle_time,
-    position: (lineInfo.type === 'support') ? 'belowBar' : 'aboveBar',
-    color: '#ffffff',
-    shape: 'circle',
-    size: 2,
-    text: '',
-  };
+  const isAbove = lineInfo.type === 'resistance' || lineInfo.type === 'invalidation' || lineInfo.type === 'ema200';
+  const pos = isAbove ? 'aboveBar' : 'belowBar';
 
-  let markers = [...permanentMarkers, highlight];
+  // Build circle markers: first touch = white/large, subsequent = colored/smaller
+  const highlights = times.map((t, i) => ({
+    time: t,
+    position: pos,
+    color: i === 0 ? '#ffffff' : lineInfo.color + 'bb',
+    shape: 'circle',
+    size: i === 0 ? 2 : 1.5,
+    text: '',
+  }));
+
+  let markers = [...permanentMarkers, ...highlights];
   if (lastSignal) {
     const isLong = lastSignal.direction === 'LONG';
     markers.push({
@@ -1402,82 +1462,105 @@ function clearHighlightMarker() {
 function buildLineContext(d) {
   lineContext = [];
   if (!d || !d.chart) return;
-  const lvl        = d.chart.levels;
-  const swingLows  = d.swings ? (d.swings.lows  || []) : [];
-  const swingHighs = d.swings ? (d.swings.highs || []) : [];
+  const lvl = d.chart.levels;
 
-  const findSwingTs = (arr, price) => {
-    const entry = arr.find(s => s[1] === price);
-    return entry ? Math.floor(new Date(entry[0]).getTime() / 1000) : null;
-  };
-
-  // Support zones
+  // ── Support zones (with touch timestamps from Python) ──
   (lvl.support || []).forEach((p) => {
-    const ct   = findSwingTs(swingLows, p);
-    const bos  = d.structure && d.structure.bullish_bos && d.risk && p === d.risk.invalidation;
+    const touches = (lvl.support_touches && lvl.support_touches[String(p)]) || [];
+    const n = touches.length;
+    const bos = d.structure && d.structure.bullish_bos && d.risk && p === d.risk.invalidation;
     lineContext.push({
       price: p, label: 'Support Zone', color: '#3fb950', type: 'support',
-      candle_time: ct,
-      why: `4H swing low at $${fmt(p)}. ${bos
-        ? 'This doubles as the invalidation — a 4H close below here breaks the bullish thesis.'
-        : 'Buyers stepped in here and pushed price back up. Watch for reactions on any retest.'}`,
+      candle_times: touches,
+      why: `4H swing low at $${fmt(p)}. `
+         + (n >= 2
+            ? `${n} candle touches detected — price has bounced from this level multiple times, confirming structural support.`
+            : 'Buyers stepped in here, pushing price back up. Watch for reactions on any retest.')
+         + (bos ? ' This level also serves as the trade invalidation.' : ''),
     });
   });
 
-  // Resistance zones
+  // ── Resistance zones ──
   (lvl.resistance || []).forEach((p) => {
-    const ct   = findSwingTs(swingHighs, p);
-    const bos  = d.structure && d.structure.bearish_bos && d.risk && p === d.risk.invalidation;
+    const touches = (lvl.resistance_touches && lvl.resistance_touches[String(p)]) || [];
+    const n = touches.length;
+    const bos = d.structure && d.structure.bearish_bos && d.risk && p === d.risk.invalidation;
     lineContext.push({
       price: p, label: 'Resistance Zone', color: '#f85149', type: 'resistance',
-      candle_time: ct,
-      why: `4H swing high at $${fmt(p)}. ${bos
-        ? 'This doubles as the invalidation — a 4H close above here breaks the bearish thesis.'
-        : 'Sellers stepped in here and pushed price back down. Watch for rejections on any retest.'}`,
+      candle_times: touches,
+      why: `4H swing high at $${fmt(p)}. `
+         + (n >= 2
+            ? `${n} candle touches detected — sellers have stepped in here repeatedly, confirming structural resistance.`
+            : 'Sellers stepped in here, pushing price back down. Watch for rejections on any retest.')
+         + (bos ? ' This level also serves as the trade invalidation.' : ''),
     });
   });
 
-  // Fibonacci levels
+  // ── Fibonacci levels ──
   const fib = d.fibonacci;
   const fibDesc = {
-    '0.382': 'Shallow 38.2% retracement — strong trend, bulls buying early. Shallowest meaningful pullback.',
-    '0.5':   '50% retracement — the psychological midpoint. Equal split between bulls and bears.',
-    '0.618': '61.8% retracement — the golden ratio. Deepest healthy pullback. Highest-confluence fib level for long entries.',
+    '0.382': '38.2% retracement — shallow pullback in a strong trend. Bulls buying early, momentum intact.',
+    '0.5':   '50% retracement — the psychological midpoint. Equal split; strong level if price holds here.',
+    '0.618': '61.8% — the golden ratio. Deepest healthy retracement. Highest-confluence fib for long entries.',
   };
   if (fib) {
     Object.entries(fib.levels).forEach(([k, p]) => {
       if (['0.382','0.5','0.618'].includes(k)) {
         lineContext.push({
-          price: p, label: `Fib ${k}`, color: {'0.382':'#ffd700','0.5':'#ffc040','0.618':'#ffaa00'}[k], type: 'fib',
-          candle_time: null,
-          why: `${fibDesc[k]} Measured from swing low $${fmt(fib.swing_low)} to swing high $${fmt(fib.swing_high)}.`,
+          price: p, label: `Fib ${k}`, type: 'fib',
+          color: {'0.382':'#ffd700','0.5':'#ffc040','0.618':'#ffaa00'}[k],
+          candle_times: [],
+          why: `${fibDesc[k]} Measured from swing low $${fmt(fib.swing_low)} → swing high $${fmt(fib.swing_high)}.`,
         });
       }
     });
   }
 
-  // Invalidation
+  // ── Invalidation ──
   if (lvl.invalidation) {
-    const p    = lvl.invalidation;
     const bias = d.risk ? d.risk.bias : 'Neutral';
     lineContext.push({
-      price: p, label: 'Invalidation', color: '#ff4444', type: 'invalidation',
-      candle_time: null,
-      why: `Trade is invalidated on a 4H close ${bias === 'Long' ? 'below' : 'above'} this level. `
-         + `This is where the structural thesis breaks — the market is telling you the setup is wrong.`,
+      price: lvl.invalidation, label: 'Invalidation', color: '#ff4444', type: 'invalidation',
+      candle_times: [],
+      why: `A 4H close ${bias === 'Long' ? 'below' : 'above'} this level structurally breaks the ${bias.toLowerCase()} thesis. `
+         + `This is the last swing ${bias === 'Long' ? 'low' : 'high'} — once price closes beyond it, the setup is invalid.`,
     });
   }
 
-  // Target
+  // ── Swing target ──
   if (lvl.target) {
-    const p    = lvl.target;
     const bias = d.risk ? d.risk.bias : 'Neutral';
     lineContext.push({
-      price: p, label: 'Swing Target', color: '#44ff88', type: 'target',
-      candle_time: null,
-      why: `Next structural objective for the ${bias.toLowerCase()} setup. `
-         + `This is the last swing ${bias === 'Long' ? 'high (resistance)' : 'low (support)'} — where price previously reversed. `
-         + `R:R = ${d.risk ? d.risk.rr : '?'}:1.`,
+      price: lvl.target, label: 'Swing Target', color: '#44ff88', type: 'target',
+      candle_times: [],
+      why: `Next structural objective — the last swing ${bias === 'Long' ? 'high (prior resistance)' : 'low (prior support)'}. `
+         + `If the ${bias.toLowerCase()} setup plays out, price should reach this level. R:R = ${d.risk ? d.risk.rr : '?'}:1.`,
+    });
+  }
+
+  // ── EMA 50 (add current value so hovering near it shows tooltip) ──
+  if (d.chart.ema50 && d.chart.ema50.length > 0) {
+    const v = d.chart.ema50[d.chart.ema50.length - 1].value;
+    const above = d.current_price > v;
+    lineContext.push({
+      price: v, label: 'EMA 50', color: '#58a6ff', type: 'ema50',
+      candle_times: [],
+      why: `50-period EMA = $${fmt(v)} on this timeframe. `
+         + `Price is currently ${above ? 'above' : 'below'} — ${above ? 'short-term bullish momentum. Acts as dynamic support; watch for bounces on retests.' : 'short-term bearish pressure. Acts as dynamic resistance; watch for rejections on retests.'}`,
+    });
+  }
+
+  // ── EMA 200 ──
+  if (d.chart.ema200 && d.chart.ema200.length > 0) {
+    const v = d.chart.ema200[d.chart.ema200.length - 1].value;
+    const above = d.current_price > v;
+    lineContext.push({
+      price: v, label: 'EMA 200', color: '#f0883e', type: 'ema200',
+      candle_times: [],
+      why: `200-period EMA = $${fmt(v)} on this timeframe. `
+         + `Price is ${above ? 'above' : 'below'} the long-term baseline. `
+         + `${above ? 'Institutional buyers are generally positioned long above this level.' : 'Institutional players are generally positioned short below this level.'} `
+         + 'The most-watched EMA by professional desks.',
     });
   }
 }
@@ -1528,8 +1611,13 @@ function initTooltip() {
 
 function showTooltip(info, mouseX, mouseY, wrapRect) {
   const tooltip = document.getElementById('chart-tooltip');
-  const dateStr = info.candle_time
-    ? new Date(info.candle_time * 1000).toLocaleDateString('en-US',
+  const times = info.candle_times || [];
+  const n = times.length;
+
+  // Show oldest touch (creator) date + count
+  const primaryTs = n > 0 ? times[0] : null;
+  const dateStr = primaryTs
+    ? new Date(primaryTs * 1000).toLocaleDateString('en-US',
         { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })
     : null;
 
@@ -1539,7 +1627,7 @@ function showTooltip(info, mouseX, mouseY, wrapRect) {
     <div style="font-size:12px;color:#8b949e;line-height:1.55">${info.why}</div>
     ${dateStr ? `
     <div style="font-size:10px;color:#484f58;border-top:1px solid #21262d;padding-top:6px;margin-top:6px">
-      Source candle: ${dateStr} &nbsp;<span style="color:#bc8cff">◉ highlighted on chart</span>
+      First touched: ${dateStr}${n > 1 ? ` &nbsp;·&nbsp; <span style="color:${info.color}">${n} touches ◉ shown</span>` : ' &nbsp;<span style="color:#bc8cff">◉ highlighted</span>'}
     </div>` : ''}
   `;
 
@@ -1741,6 +1829,8 @@ async function switchTF(tf, btn) {
     seriesMap.ema50.setData(data.ema50);
     seriesMap.ema200.setData(data.ema200);
     seriesMap.rsi.setData(data.rsi);
+    if (data.obv)     seriesMap.obv.setData(data.obv);
+    if (data.obv_ema) seriesMap.obv_ema.setData(data.obv_ema);
     setMarkersWithSignal(lastSignal);
     mainChart.timeScale().fitContent();
   } catch(e) {
