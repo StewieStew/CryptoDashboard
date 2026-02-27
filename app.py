@@ -3,15 +3,21 @@ Crypto Analysis Dashboard — Flask Server
 """
 
 from flask import Flask, jsonify, render_template
-from analysis import full_analysis
+from analysis import full_analysis, chart_for_timeframe
 import time
 import threading
 import os
 
-app   = Flask(__name__)
-_cache = {}
-_lock  = threading.Lock()
-TTL    = 300  # 5-minute cache
+app          = Flask(__name__)
+_cache       = {}
+_lock        = threading.Lock()
+TTL          = 300   # 5-min analysis cache
+
+_chart_cache = {}
+_clk         = threading.Lock()
+CHART_TTL    = 120   # 2-min chart cache
+
+VALID_INTERVALS = ["15m", "30m", "1h", "4h", "1d", "1w"]
 
 DEFAULT_SYMBOLS = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "DOGEUSDT"]
 
@@ -58,6 +64,27 @@ def refresh(symbol: str):
     with _lock:
         _cache.pop(sym, None)
     return analysis(sym.replace("USDT", ""))
+
+
+@app.route("/api/chart/<symbol>/<interval>")
+def chart_data(symbol, interval):
+    if interval not in VALID_INTERVALS:
+        return jsonify({"error": f"Invalid interval. Use: {VALID_INTERVALS}"}), 400
+    sym = symbol.upper()
+    if not sym.endswith("USDT"):
+        sym += "USDT"
+    key = f"{sym}_{interval}"
+    now = time.time()
+    with _clk:
+        if key in _chart_cache and now - _chart_cache[key][1] < CHART_TTL:
+            return jsonify(_chart_cache[key][0])
+    try:
+        data = chart_for_timeframe(sym, interval)
+        with _clk:
+            _chart_cache[key] = (data, now)
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/symbols")

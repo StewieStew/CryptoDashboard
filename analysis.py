@@ -399,6 +399,36 @@ def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows) -> dict:
 
 
 # ─────────────────────────────────────────────
+# CHART DATA FOR ANY TIMEFRAME
+# ─────────────────────────────────────────────
+
+def chart_for_timeframe(symbol: str, interval: str) -> dict:
+    """Return OHLCV + indicators for any timeframe (chart display only)."""
+    limit = 300 if interval in ["15m", "30m", "1h"] else 200
+    df = fetch_ohlcv(symbol, interval, limit)
+
+    ema50_s  = ema(df["close"], 50)
+    ema200_s = ema(df["close"], 200)
+    rsi_s    = rsi(df["close"])
+
+    candles = [{"time": int(r.Index.timestamp()),
+                "open": r.open, "high": r.high, "low": r.low, "close": r.close}
+               for r in df.itertuples()]
+    volumes = [{"time": int(r.Index.timestamp()), "value": r.volume,
+                "color": "#26a69a" if r.close >= r.open else "#ef5350"}
+               for r in df.itertuples()]
+    ema50_pts  = [{"time": int(ts.timestamp()), "value": round(v, 6)}
+                  for ts, v in ema50_s.items()]
+    ema200_pts = [{"time": int(ts.timestamp()), "value": round(v, 6)}
+                  for ts, v in ema200_s.items()]
+    rsi_pts    = [{"time": int(ts.timestamp()), "value": round(v, 2)}
+                  for ts, v in rsi_s.items() if not np.isnan(v)]
+
+    return dict(candles=candles, volume=volumes,
+                ema50=ema50_pts, ema200=ema200_pts, rsi=rsi_pts)
+
+
+# ─────────────────────────────────────────────
 # SIGNAL GENERATION
 # ─────────────────────────────────────────────
 

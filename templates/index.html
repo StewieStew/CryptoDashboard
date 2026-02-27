@@ -112,6 +112,46 @@
     .text-o { color: var(--orange) !important; }
     .text-dim { color: var(--text-dim) !important; }
 
+    /* Timeframe switcher */
+    .tf-btn {
+      background: var(--bg-card2); border: 1px solid var(--border); color: #8b949e;
+      border-radius: 4px; padding: 2px 10px; font-size: 12px; font-weight: 600;
+      cursor: pointer; transition: all .12s;
+    }
+    .tf-btn:hover  { border-color: var(--blue); color: var(--blue); }
+    .tf-btn.active { background: var(--bg-card2); border-color: var(--blue); color: var(--blue); }
+    #tf-label { font-size: 10px; color: #484f58; margin-left: 8px; }
+
+    /* Methodology modal */
+    .method-modal .modal-content { background: var(--bg-base); border: none; }
+    .method-modal .modal-header  { background: var(--bg-card); border-bottom: 1px solid var(--border); padding: 12px 20px; }
+    .method-nav { padding: 12px 0; }
+    .method-nav a {
+      display: block; padding: 7px 16px; font-size: 13px; color: #8b949e;
+      text-decoration: none; border-left: 2px solid transparent; transition: all .12s;
+    }
+    .method-nav a:hover  { color: #e6edf3; background: #161b22; }
+    .method-nav a.active { color: var(--blue); border-left-color: var(--blue); background: #161b22; }
+    .method-section { padding: 0 0 40px; scroll-margin-top: 20px; }
+    .method-title   { font-size: 18px; font-weight: 700; color: #e6edf3; margin-bottom: 6px; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+    .method-lead    { font-size: 14px; color: #8b949e; margin-bottom: 16px; line-height: 1.6; }
+    .method-block   { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; margin-bottom: 12px; }
+    .method-block-title { font-size: 12px; font-weight: 700; color: var(--blue); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 8px; }
+    .method-formula {
+      font-family: 'Courier New', monospace; font-size: 12px; color: var(--purple);
+      background: #0d1117; border: 1px solid #21262d; border-radius: 4px;
+      padding: 8px 12px; margin: 8px 0; line-height: 1.8;
+    }
+    .method-p { font-size: 13px; color: #8b949e; line-height: 1.7; margin: 8px 0 0; }
+    .method-table { width: 100%; font-size: 12px; border-collapse: collapse; margin-top: 8px; }
+    .method-table td { padding: 5px 8px; border-bottom: 1px solid #21262d; color: #8b949e; }
+    .method-table td:first-child { color: #e6edf3; font-weight: 600; width: 200px; }
+    .method-tag {
+      display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 3px;
+      margin: 2px; font-weight: 600;
+    }
+    .method-divider { border: none; border-top: 1px solid var(--border); margin: 32px 0; }
+
     /* Signal overlay on chart */
     #chart-wrap { position: relative; }
     #signal-overlay {
@@ -150,6 +190,7 @@
     <button class="sym-btn" onclick="forceRefresh()" title="Force refresh (bypasses cache)">↻ Refresh</button>
     <button class="sym-btn" id="auto-btn" onclick="toggleAuto()">Auto ⏸</button>
     <button class="sym-btn" onclick="openAddSymbol()">+ Add</button>
+    <button class="sym-btn" data-bs-toggle="modal" data-bs-target="#methodologyModal" style="border-color:#bc8cff55;color:#bc8cff">? How It Works</button>
   </div>
 </div>
 
@@ -168,14 +209,25 @@
 
 <!-- ═══ CHART ═══ -->
 <div class="chart-section">
-  <div class="chart-legend">
-    <span><span class="legend-dot" style="background:#58a6ff;height:1.5px"></span>EMA 50</span>
-    <span><span class="legend-dot" style="background:#f0883e;height:2px"></span>EMA 200</span>
-    <span><span class="legend-dot" style="background:#3fb950;border-top:1px dashed #3fb950"></span>Support</span>
-    <span><span class="legend-dot" style="background:#f85149;border-top:1px dashed #f85149"></span>Resistance</span>
-    <span><span class="legend-dot" style="background:#d29922;border-top:1px dotted #d29922"></span>Fib</span>
-    <span><span style="color:#3fb950;font-size:12px">▲</span> Long signal</span>
-    <span><span style="color:#f85149;font-size:12px">▼</span> Short signal</span>
+  <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-1">
+    <div class="chart-legend">
+      <span><span class="legend-dot" style="background:#58a6ff;height:1.5px"></span>EMA 50</span>
+      <span><span class="legend-dot" style="background:#f0883e;height:2px"></span>EMA 200</span>
+      <span><span class="legend-dot" style="background:#3fb950;border-top:1px dashed #3fb950"></span>Support</span>
+      <span><span class="legend-dot" style="background:#f85149;border-top:1px dashed #f85149"></span>Resistance</span>
+      <span><span class="legend-dot" style="background:#d29922;border-top:1px dotted #d29922"></span>Fib</span>
+      <span><span style="color:#3fb950;font-size:12px">▲</span> Long</span>
+      <span><span style="color:#f85149;font-size:12px">▼</span> Short</span>
+    </div>
+    <div class="d-flex align-items-center gap-1">
+      <span style="font-size:10px;color:#484f58;text-transform:uppercase;letter-spacing:.06em">Chart TF</span>
+      <button class="tf-btn" onclick="switchTF('15m',this)">15m</button>
+      <button class="tf-btn" onclick="switchTF('1h',this)">1H</button>
+      <button class="tf-btn active" onclick="switchTF('4h',this)">4H</button>
+      <button class="tf-btn" onclick="switchTF('1d',this)">1D</button>
+      <button class="tf-btn" onclick="switchTF('1w',this)">1W</button>
+      <span id="tf-label">Analysis: 4H</span>
+    </div>
   </div>
   <div id="chart-wrap">
     <div id="main-chart"></div>
@@ -285,6 +337,398 @@
       <div class="modal-footer border-secondary py-2">
         <button class="sym-btn" onclick="confirmAdd()">Add</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ METHODOLOGY MODAL ═══ -->
+<div class="modal fade method-modal" id="methodologyModal" tabindex="-1">
+  <div class="modal-dialog modal-fullscreen">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div>
+          <div style="font-size:16px;font-weight:700;color:#e6edf3">How It Works — Analysis Methodology</div>
+          <div style="font-size:12px;color:#8b949e">Every calculation explained — from raw price data to confluence score</div>
+        </div>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body d-flex p-0" style="overflow:hidden;height:100%">
+
+        <!-- Left nav -->
+        <div style="width:210px;flex-shrink:0;background:#0d1117;border-right:1px solid #30363d;overflow-y:auto">
+          <nav class="method-nav" id="method-nav">
+            <div style="font-size:10px;color:#484f58;text-transform:uppercase;letter-spacing:.08em;padding:12px 16px 4px">Sections</div>
+            <a href="#m1" onclick="methodNav(this)">1. Market Regime</a>
+            <a href="#m2" onclick="methodNav(this)">2. Structure (4H)</a>
+            <a href="#m3" onclick="methodNav(this)">3. Volume &amp; OBV</a>
+            <a href="#m4" onclick="methodNav(this)">4. RSI</a>
+            <a href="#m5" onclick="methodNav(this)">5. Fibonacci</a>
+            <a href="#m6" onclick="methodNav(this)">6. Volatility</a>
+            <a href="#m7" onclick="methodNav(this)">7. Confluence Score</a>
+            <a href="#m8" onclick="methodNav(this)">8. Signal Generation</a>
+            <a href="#m9" onclick="methodNav(this)">9. Chart Elements</a>
+          </nav>
+        </div>
+
+        <!-- Right content -->
+        <div id="method-content" style="flex:1;overflow-y:auto;padding:28px 36px;background:#0d1117">
+
+          <!-- §1 MARKET REGIME -->
+          <section class="method-section" id="m1">
+            <div class="method-title">1. Market Regime</div>
+            <p class="method-lead">The daily regime is a top-down filter. Before looking at any 4H entry, the code first classifies what the daily chart is doing. Trading against the daily trend fails more often than it succeeds — the regime tells you which direction has institutional money behind it.</p>
+
+            <div class="method-block">
+              <div class="method-block-title">200-Period EMA (Daily)</div>
+              <div class="method-formula">k = 2 / (200 + 1) = 0.00995
+EMA(today) = Close(today) × k + EMA(yesterday) × (1 − k)</div>
+              <p class="method-p">The EMA weights recent candles more heavily than older ones. A 200-bar EMA on the daily chart represents roughly 40 weeks of price memory. Price <strong style="color:#3fb950">above</strong> the 200 EMA = macro bullish context. Price <strong style="color:#f85149">below</strong> = macro bearish. This single level is watched by more institutional desks than almost any other indicator.</p>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">ATR — Average True Range (14)</div>
+              <div class="method-formula">True Range = max( High − Low,  |High − Prev.Close|,  |Low − Prev.Close| )
+ATR = 14-period EMA of True Range</div>
+              <p class="method-p">ATR captures the full range of price movement including gaps. If price gaps up, the true range from the previous close is larger than just the day's high-low. A rising ATR means increasing volatility — trend conditions. A falling ATR means the market is compressing. ATR is used in two places: the regime (daily ATR) and the volatility filter (4H ATR).</p>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">Higher Highs / Higher Lows Detection</div>
+              <div class="method-formula">Swing High: High[i] = max( High[i−5], ..., High[i+5] )  → 11-bar window
+Swing Low:  Low[i]  = min( Low[i−5],  ..., Low[i+5]  )  → 11-bar window
+HH/HL = ( SwingHigh₂ > SwingHigh₁ ) AND ( SwingLow₂ > SwingLow₁ )</div>
+              <p class="method-p">For every candle, the code checks if its high is the highest point in the surrounding 11-bar window (5 before, 5 after). If yes, it's a swing high. The last two swing highs are compared — if each new swing high is higher than the previous, and each new swing low is higher than the previous, price is making Higher Highs and Higher Lows. That's the textbook definition of an uptrend.</p>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">Classification Logic</div>
+              <table class="method-table">
+                <tr><td><span class="method-tag" style="background:#3fb95022;color:#3fb950">Strong Uptrend</span></td><td>Above 200 EMA + HH/HL structure + ATR expanding</td></tr>
+                <tr><td><span class="method-tag" style="background:#2ea04322;color:#2ea043">Weak Uptrend</span></td><td>Above 200 EMA + HH/HL structure + ATR contracting</td></tr>
+                <tr><td><span class="method-tag" style="background:#f8514922;color:#f85149">Strong Downtrend</span></td><td>Below 200 EMA + LH/LL structure + ATR expanding</td></tr>
+                <tr><td><span class="method-tag" style="background:#da363322;color:#da3633">Weak Downtrend</span></td><td>Below 200 EMA + LH/LL structure + ATR contracting</td></tr>
+                <tr><td><span class="method-tag" style="background:#d2922222;color:#d29222">Range / Compression</span></td><td>None of the above conditions are satisfied</td></tr>
+              </table>
+            </div>
+          </section>
+
+          <hr class="method-divider">
+
+          <!-- §2 STRUCTURE -->
+          <section class="method-section" id="m2">
+            <div class="method-title">2. Structure Analysis (4H)</div>
+            <p class="method-lead">Structure is the map of where price has been accepted and rejected. Swing highs are where sellers won. Swing lows are where buyers won. A Break of Structure means one side has decisively taken control. Liquidity sweeps are stop hunts — the market briefly fakes a direction, triggers stops, then reverses.</p>
+
+            <div class="method-block">
+              <div class="method-block-title">Swing Detection Algorithm</div>
+              <div class="method-formula">For each candle at index i (with n=5 lookback):
+  Is Swing High? → High[i] == max( High[i−5 : i+5] )
+  Is Swing Low?  → Low[i]  == min( Low[i−5  : i+5] )
+
+The last 5 bars cannot be swing points (no future bars to compare yet)</div>
+              <p class="method-p">This is a structural pivot detection — not a smoothed indicator. The code scans 200 four-hour candles and marks every local maximum as a swing high and every local minimum as a swing low. The result is the raw price structure with no lag.</p>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">Break of Structure (BOS)</div>
+              <div class="method-formula">Bullish BOS: Current Close > Last Swing High
+Bearish BOS: Current Close < Last Swing Low</div>
+              <p class="method-p">A BOS is the most important structural event. When price closes beyond the last swing high, it proves buyers have enough force to push through the previous supply zone. This is directional conviction. Without a BOS, any move is just noise inside the existing range. BOS confirmation earns 2 points in the confluence score.</p>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">Liquidity Sweep Detection</div>
+              <div class="method-formula">Bullish Sweep: Low[i] < Swing Low AND Close[i] > Swing Low
+  → wick pierced below, then rejected upward (stops taken, bulls step in)
+
+Bearish Sweep: High[i] > Swing High AND Close[i] < Swing High
+  → wick pierced above, then rejected downward (stops taken, bears step in)
+
+Checked against last 4 swing points within the last 12 bars</div>
+              <p class="method-p">Retail stops cluster below swing lows and above swing highs. Market makers know this. A sweep is when price briefly wicks through those levels — triggering the stops — then reverses hard. The sweep itself creates trapped traders whose forced exits fuel the next move. A sweep before a BOS is the highest-quality setup in this framework.</p>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">Key Levels</div>
+              <p class="method-p"><strong style="color:#3fb950">Support zones</strong> = the last 2 swing lows on 4H. These are where buyers have demonstrated willingness to absorb selling. <strong style="color:#f85149">Resistance zones</strong> = the last 2 swing highs. These are supply areas where sellers stepped in. Both are shown as dashed lines on the chart.</p>
+            </div>
+          </section>
+
+          <hr class="method-divider">
+
+          <!-- §3 VOLUME & OBV -->
+          <section class="method-section" id="m3">
+            <div class="method-title">3. Volume &amp; OBV</div>
+            <p class="method-lead">Price can be manipulated in low-volume conditions. Volume confirms that real money is participating in a move. OBV (On Balance Volume) is a running total of volume flow that reveals whether smart money is accumulating or distributing while price appears stable.</p>
+
+            <div class="method-block">
+              <div class="method-block-title">On Balance Volume (OBV)</div>
+              <div class="method-formula">If Close > Prev.Close:  OBV = OBV + Volume   (buyers in control, add volume)
+If Close < Prev.Close:  OBV = OBV − Volume   (sellers in control, subtract)
+If Close = Prev.Close:  OBV = OBV             (unchanged)
+
+OBV is a running cumulative sum from bar 1</div>
+              <p class="method-p">OBV was developed by Joseph Granville in 1963. The idea: volume precedes price. If OBV is rising while price is flat, large buyers are quietly accumulating. If OBV is falling while price holds steady, distribution is happening. When price eventually moves, OBV already told you which direction.</p>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">OBV Divergence</div>
+              <div class="method-formula">Bearish Divergence: Price[last] > Price[20 bars ago] AND OBV[last] ≤ OBV[20 bars ago]
+  → Price making new highs but volume flow is not confirming → hidden selling
+
+Bullish Divergence: Price[last] < Price[20 bars ago] AND OBV[last] ≥ OBV[20 bars ago]
+  → Price making new lows but volume flow is not confirming → hidden buying</div>
+              <p class="method-p">Divergence is the most powerful signal OBV generates. If price prints a new high but OBV doesn't, it means the up-move happened on lower and lower volume — sellers are absorbing the buying pressure. The trend is running out of fuel.</p>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">Volume Expansion</div>
+              <div class="method-formula">Expanding = Average(Volume[last 5 bars]) > Average(Volume[bars −20 to −5])
+Spike     = Any bar in last 10 has Volume > 2× Average(last 20 bars)</div>
+              <p class="method-p">Volume expansion on a directional move means real participation. A spike (2× average) often marks capitulation (at lows) or breakout (at highs). Volume contracting on a move is a warning — the move may not sustain.</p>
+            </div>
+          </section>
+
+          <hr class="method-divider">
+
+          <!-- §4 RSI -->
+          <section class="method-section" id="m4">
+            <div class="method-title">4. RSI — Relative Strength Index</div>
+            <p class="method-lead">RSI measures the speed and magnitude of price changes. It answers: is this asset overbought (run up too fast) or oversold (sold off too hard)? More importantly, when RSI diverges from price, it signals that momentum is fading before price confirms it.</p>
+
+            <div class="method-block">
+              <div class="method-block-title">RSI Formula (14-period)</div>
+              <div class="method-formula">Average Gain = 14-period EMA of gains (bars where Close > Prev.Close)
+Average Loss = 14-period EMA of losses (bars where Close < Prev.Close)
+
+RS  = Average Gain / Average Loss
+RSI = 100 − ( 100 / (1 + RS) )</div>
+              <p class="method-p">RSI output is always 0–100. The EMA smoothing means recent bars weight more than older ones. A reading of 70+ is conventionally overbought — price has risen quickly. 30 or below is oversold. But in strong trends, RSI can stay above 60 or below 40 for extended periods — this is the "bullish range" and "bearish range" concept.</p>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">Range Classification</div>
+              <table class="method-table">
+                <tr><td><span class="method-tag" style="background:#3fb95022;color:#3fb950">Bullish Range</span></td><td>RSI &gt; 60 — momentum aligned with upward bias, trend continuation more likely</td></tr>
+                <tr><td><span class="method-tag" style="background:#8b949e22;color:#8b949e">Neutral</span></td><td>RSI 40–60 — no directional momentum conviction, range or transitioning</td></tr>
+                <tr><td><span class="method-tag" style="background:#f8514922;color:#f85149">Bearish Range</span></td><td>RSI &lt; 40 — momentum aligned with downward bias, trend continuation more likely</td></tr>
+              </table>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">RSI Divergence (14-bar lookback)</div>
+              <div class="method-formula">Bearish: Close[last] > max(Close[−14:−1]) AND RSI[last] ≤ max(RSI[−14:−1])
+  → Price new high, RSI lower high = momentum fading on up-move
+
+Bullish: Close[last] < min(Close[−14:−1]) AND RSI[last] ≥ min(RSI[−14:−1])
+  → Price new low, RSI higher low = momentum fading on down-move</div>
+              <p class="method-p">Divergence means price and momentum disagree. In a healthy uptrend, each new price high should come with an RSI high. When they diverge — price new high but RSI lower high — it reveals that each rally takes more effort to achieve and less is accomplished. Trend exhaustion signal.</p>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">Reset from Extreme</div>
+              <div class="method-formula">Reset from Overbought: RSI was ≥70 in last 8 bars AND RSI now &lt; 70
+Reset from Oversold:  RSI was ≤30 in last 8 bars AND RSI now &gt; 30</div>
+              <p class="method-p">A reset from an extreme is often a better entry signal than the extreme itself. RSI touching 30 and bouncing back above 30 is more actionable than just RSI being at 30 — it shows the selling pressure is actually exhausting and buyers are stepping in.</p>
+            </div>
+          </section>
+
+          <hr class="method-divider">
+
+          <!-- §5 FIBONACCI -->
+          <section class="method-section" id="m5">
+            <div class="method-title">5. Fibonacci Retracement</div>
+            <p class="method-lead">Fibonacci levels are only applied when the daily regime is trending. In choppy or ranging conditions, there is no clear swing to measure and the levels become noise. In a trend, price rarely goes straight — it pulls back, finds support at predictable mathematical levels, then continues.</p>
+
+            <div class="method-block">
+              <div class="method-block-title">How Levels Are Calculated</div>
+              <div class="method-formula">Measure from: Last Swing Low → Last Swing High (for uptrend)
+Range = Swing High − Swing Low
+
+0.236 level = Swing High − (0.236 × Range)
+0.382 level = Swing High − (0.382 × Range)
+0.500 level = Swing High − (0.500 × Range)   ← midpoint
+0.618 level = Swing High − (0.618 × Range)   ← golden ratio
+0.786 level = Swing High − (0.786 × Range)</div>
+              <p class="method-p">These ratios derive from the Fibonacci sequence (0, 1, 1, 2, 3, 5, 8, 13...) where each number divided by the next approaches 0.618. The golden ratio appears throughout nature, architecture, and financial markets — not because of mysticism but because enough participants use these levels to create self-fulfilling reactions.</p>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">Which Levels Matter Most</div>
+              <table class="method-table">
+                <tr><td><span class="method-tag" style="background:#ffd70022;color:#ffd700">0.382</span></td><td>Shallow retracement — strong trend, momentum intact. Bulls buying early.</td></tr>
+                <tr><td><span class="method-tag" style="background:#ffc04022;color:#ffc040">0.500</span></td><td>50% retrace — psychological midpoint. Even split between bulls and bears.</td></tr>
+                <tr><td><span class="method-tag" style="background:#ffaa0022;color:#ffaa00">0.618</span></td><td>Golden ratio — most significant level. Deepest pullback in a healthy trend. Highest confluence for long entries.</td></tr>
+              </table>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">Confluence Check</div>
+              <div class="method-formula">Price is "at a fib level" if: |Current Price − Fib Level| / Current Price &lt; 1.5%</div>
+              <p class="method-p">A fib level alone is weak. A fib level that aligns with a 4H structure support zone — where the swing low also sits near 0.618 — that's confluence. The more independent factors pointing to the same price area, the higher the probability of a reaction there. This combination earns 1 point in the confluence score.</p>
+            </div>
+          </section>
+
+          <hr class="method-divider">
+
+          <!-- §6 VOLATILITY -->
+          <section class="method-section" id="m6">
+            <div class="method-title">6. Volatility Filter</div>
+            <p class="method-lead">ATR on the 4H chart tells you whether the market is moving enough to trade. Entering during compression (low ATR) is dangerous — the eventual expansion often triggers stops before the real move starts. Entering during expansion means you're joining momentum, not fighting accumulation.</p>
+
+            <div class="method-block">
+              <div class="method-block-title">ATR Ratio</div>
+              <div class="method-formula">ATR Ratio = Current ATR(14) / Average of ATR over last 20 bars
+
+Expanding:   Ratio &gt; 1.0  → volatility increasing, breakout conditions
+Normal:      Ratio 0.7–1.0 → average conditions
+Compressing: Ratio &lt; 0.7  → market coiling, fakeout risk elevated</div>
+              <p class="method-p">Compression phases (ATR ratio below 0.7) often precede large directional moves, but the direction is unknown until the move starts. Trading breakouts from compression has a high fakeout rate — the market tests both sides before committing. The filter flags this risk explicitly.</p>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">Practical Implication</div>
+              <p class="method-p">If ATR is expanding and you have confluence, the setup is live — you're entering into an active market. If ATR is compressing but confluence is high, the setup is valid but consider waiting for ATR expansion before entering. A tight stop in a compressing market is likely to get hit before the move.</p>
+            </div>
+          </section>
+
+          <hr class="method-divider">
+
+          <!-- §7 CONFLUENCE SCORE -->
+          <section class="method-section" id="m7">
+            <div class="method-title">7. Confluence Score (0–10)</div>
+            <p class="method-lead">The score combines seven independent signals. Each signal is checked separately — no single indicator drives the whole score. The logic: if five different systems from different methodologies (trend, structure, volume, momentum, price levels) all agree, the probability of a sustained move is materially higher than if only one signal fires.</p>
+
+            <div class="method-block">
+              <div class="method-block-title">Scoring Criteria</div>
+              <table class="method-table">
+                <tr>
+                  <td><span class="method-tag" style="background:#58a6ff22;color:#58a6ff">+2 pts</span> Daily Trend Aligned</td>
+                  <td>Regime is any Uptrend or Downtrend (not Range). Directional bias exists at the macro level.</td>
+                </tr>
+                <tr>
+                  <td><span class="method-tag" style="background:#58a6ff22;color:#58a6ff">+2 pts</span> Break of Structure</td>
+                  <td>4H close above last swing high (bullish) or below last swing low (bearish). Structural proof of direction.</td>
+                </tr>
+                <tr>
+                  <td><span class="method-tag" style="background:#58a6ff22;color:#58a6ff">+2 pts</span> Liquidity Sweep</td>
+                  <td>A sweep of swing high/low in last 12 bars. Stop hunt completed — trapped traders fuel the next move.</td>
+                </tr>
+                <tr>
+                  <td><span class="method-tag" style="background:#3fb95022;color:#3fb950">+1 pt</span> Volume Expanding</td>
+                  <td>5-bar avg volume exceeds the prior 15-bar avg. Real participation behind the move.</td>
+                </tr>
+                <tr>
+                  <td><span class="method-tag" style="background:#3fb95022;color:#3fb950">+1 pt</span> OBV Divergence</td>
+                  <td>Price and OBV disagree over the last 20 bars. Hidden accumulation or distribution detected.</td>
+                </tr>
+                <tr>
+                  <td><span class="method-tag" style="background:#3fb95022;color:#3fb950">+1 pt</span> RSI Confirmation</td>
+                  <td>RSI in bullish range (>60) with uptrend, bearish range (<40) with downtrend, or reset from extreme.</td>
+                </tr>
+                <tr>
+                  <td><span class="method-tag" style="background:#3fb95022;color:#3fb950">+1 pt</span> Fib + Structure</td>
+                  <td>Price within 1.5% of a key fib level (0.382, 0.5, 0.618). Only scored in trending regimes.</td>
+                </tr>
+              </table>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">Score Thresholds</div>
+              <table class="method-table">
+                <tr><td><span class="method-tag" style="background:#3fb95022;color:#3fb950">7–10 High Probability</span></td><td>Multiple independent systems agree. Structurally sound setup. Execute with proper risk management.</td></tr>
+                <tr><td><span class="method-tag" style="background:#d2922222;color:#d29222">5–6 Moderate</span></td><td>Partial agreement. Some factors missing. Size down or wait for additional confirmation.</td></tr>
+                <tr><td><span class="method-tag" style="background:#f8514922;color:#f85149">0–4 Avoid</span></td><td>Conflicting or insufficient signals. No trade. Wait for a cleaner setup.</td></tr>
+              </table>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">Why These Specific Criteria?</div>
+              <p class="method-p">The 3 two-point criteria (trend, BOS, sweep) are the structural foundation — without at least 2 of these, there's no tradeable thesis. The 4 one-point criteria are confirmation layers. A score of 7 requires at minimum the structural foundation (4–6 pts from the big three) plus confirmation signals. This filters out low-quality setups where one indicator fires but everything else disagrees.</p>
+            </div>
+          </section>
+
+          <hr class="method-divider">
+
+          <!-- §8 SIGNAL -->
+          <section class="method-section" id="m8">
+            <div class="method-title">8. Signal Generation</div>
+            <p class="method-lead">A signal is only generated when two conditions are simultaneously met: confluence score ≥ 7 AND a confirmed Break of Structure. Score alone is not enough — there must be structural proof of direction. BOS alone is not enough — there must be multi-factor confluence.</p>
+
+            <div class="method-block">
+              <div class="method-block-title">Signal Trigger Conditions</div>
+              <div class="method-formula">Signal fires when ALL of these are true:
+  1. Confluence Score ≥ 7
+  2. Bullish BOS (for LONG) OR Bearish BOS (for SHORT)
+
+Direction:
+  LONG  → Bullish BOS confirmed (price closed above last swing high)
+  SHORT → Bearish BOS confirmed (price closed below last swing low)</div>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">Entry, Target, Stop Calculation</div>
+              <div class="method-formula">Entry  = Current price at the time the signal fires
+
+LONG signal:
+  Target       = Last Swing High (nearest resistance to clear)
+  Stop (Inval) = Last Swing Low  (structure is broken if price goes here)
+
+SHORT signal:
+  Target       = Last Swing Low  (nearest support to tag)
+  Stop (Inval) = Last Swing High (structure is broken if price goes here)
+
+R:R = |Target − Entry| / |Entry − Stop|
+Signal marked "favorable" if R:R ≥ 2.0</div>
+              <p class="method-p">The target and stop are structure-based, not arbitrary. The stop is placed where the structural thesis is definitively wrong. If you're long because of a bullish BOS, the thesis breaks if price closes back below the last swing low — that means the BOS failed and bears are back in control.</p>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">What No Signal Means</div>
+              <p class="method-p">When the overlay box shows "No high-confluence setup," it does not mean the market is about to crash or rally in the other direction. It means: the current conditions don't meet the threshold for a structured entry. Most of the time, markets are in between setups. Waiting is a position.</p>
+            </div>
+          </section>
+
+          <hr class="method-divider">
+
+          <!-- §9 CHART ELEMENTS -->
+          <section class="method-section" id="m9">
+            <div class="method-title">9. Chart Elements Key</div>
+            <p class="method-lead">Every line on the chart has a specific meaning. Nothing is decorative.</p>
+
+            <div class="method-block">
+              <div class="method-block-title">Lines on Price Chart</div>
+              <table class="method-table">
+                <tr><td><span style="color:#58a6ff">━ EMA 50 (blue)</span></td><td>50-period EMA on the currently selected timeframe. Short-term dynamic support/resistance.</td></tr>
+                <tr><td><span style="color:#f0883e">━ EMA 200 (orange)</span></td><td>200-period EMA on the currently selected timeframe. Long-term trend baseline.</td></tr>
+                <tr><td><span style="color:#3fb950">- - S (green dashed)</span></td><td>Last 2 major swing lows on 4H. Key support zones — where buyers previously stepped in.</td></tr>
+                <tr><td><span style="color:#f85149">- - R (red dashed)</span></td><td>Last 2 major swing highs on 4H. Key resistance zones — where sellers previously stepped in.</td></tr>
+                <tr><td><span style="color:#ffd700">··· F0.618 (gold dotted)</span></td><td>Fibonacci retracement levels (0.382, 0.5, 0.618). Only shown in trending regimes.</td></tr>
+                <tr><td><span style="color:#ff4444">━ ✖ Inval (solid red)</span></td><td>Invalidation level. If price closes beyond this, the current thesis is structurally broken.</td></tr>
+                <tr><td><span style="color:#44ff88">━ ⊕ Target (solid green)</span></td><td>Next target — the level price reaches if the bias plays out correctly.</td></tr>
+                <tr><td><span style="color:#3fb950">▲ (green arrow)</span></td><td>Long signal marker on the bar where score ≥ 7 + Bullish BOS was confirmed.</td></tr>
+                <tr><td><span style="color:#f85149">▼ (red arrow)</span></td><td>Short signal marker on the bar where score ≥ 7 + Bearish BOS was confirmed.</td></tr>
+              </table>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">RSI Chart (below main chart)</div>
+              <table class="method-table">
+                <tr><td><span style="color:#bc8cff">━ RSI line (purple)</span></td><td>14-period RSI calculated on the selected timeframe's closing prices.</td></tr>
+                <tr><td><span style="color:#f85149">··· 70 (red dotted)</span></td><td>Overbought threshold. RSI above = price has risen quickly, potential exhaustion.</td></tr>
+                <tr><td><span style="color:#484f58">··· 50 (gray dotted)</span></td><td>Midline. Bullish regime: RSI holds above 50. Bearish regime: RSI holds below 50.</td></tr>
+                <tr><td><span style="color:#3fb950">··· 30 (green dotted)</span></td><td>Oversold threshold. RSI below = price has fallen quickly, potential exhaustion.</td></tr>
+              </table>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">Timeframe Switcher</div>
+              <p class="method-p">The TF buttons (15m / 1H / 4H / 1D / 1W) change the <em>chart view only</em>. The analysis cards, confluence score, and signal are always calculated on 4H (primary) with Daily (trend filter). Switching to 15m lets you see 4H structure levels on a granular chart — useful for timing entries after a confluence signal fires.</p>
+            </div>
+          </section>
+
+        </div><!-- end right content -->
+      </div><!-- end modal-body -->
     </div>
   </div>
 </div>
@@ -869,6 +1313,10 @@ function renderSymbolBar() {
 
 function switchSymbol(sym) {
   currentSymbol = sym;
+  currentTF = '4h';
+  document.querySelectorAll('.tf-btn').forEach((b, i) => b.classList.toggle('active', i === 2));
+  const label = document.getElementById('tf-label');
+  if (label) label.textContent = 'Analysis: 4H';
   renderSymbolBar();
   loadAnalysis(sym);
 }
@@ -915,6 +1363,66 @@ async function confirmAdd() {
 }
 
 document.getElementById('add-input').addEventListener('keydown', e => { if(e.key==='Enter') confirmAdd(); });
+
+// ═══════════════════════════════════════════════════════
+// TIMEFRAME SWITCHER
+// ═══════════════════════════════════════════════════════
+let currentTF = '4h';
+
+async function switchTF(tf, btn) {
+  if (tf === currentTF) return;
+  currentTF = tf;
+
+  // Update button states
+  document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+
+  // Update label
+  const label = document.getElementById('tf-label');
+  if (label) label.textContent = tf === '4h' ? 'Analysis: 4H' : `Chart: ${tf.toUpperCase()} | Analysis: 4H`;
+
+  try {
+    const resp = await fetch(`/api/chart/${currentSymbol}/${tf}`);
+    const data = await resp.json();
+    if (data.error) throw new Error(data.error);
+    // Update candles + indicators only — keep price lines from 4H analysis
+    seriesMap.candles.setData(data.candles);
+    seriesMap.vol.setData(data.volume);
+    seriesMap.ema50.setData(data.ema50);
+    seriesMap.ema200.setData(data.ema200);
+    seriesMap.rsi.setData(data.rsi);
+    mainChart.timeScale().fitContent();
+  } catch(e) {
+    showError(`TF switch failed: ${e.message}`);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// METHODOLOGY MODAL NAV
+// ═══════════════════════════════════════════════════════
+function methodNav(el) {
+  document.querySelectorAll('.method-nav a').forEach(a => a.classList.remove('active'));
+  el.classList.add('active');
+}
+
+// Highlight nav item on scroll
+document.addEventListener('DOMContentLoaded', () => {
+  const contentEl = document.getElementById('method-content');
+  if (contentEl) {
+    contentEl.addEventListener('scroll', () => {
+      const sections = contentEl.querySelectorAll('.method-section');
+      let current = null;
+      sections.forEach(s => {
+        if (s.offsetTop - contentEl.scrollTop <= 60) current = s.id;
+      });
+      if (current) {
+        document.querySelectorAll('.method-nav a').forEach(a => {
+          a.classList.toggle('active', a.getAttribute('href') === '#' + current);
+        });
+      }
+    });
+  }
+});
 
 // ═══════════════════════════════════════════════════════
 // AUTO REFRESH
