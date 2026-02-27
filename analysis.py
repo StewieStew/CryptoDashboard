@@ -468,6 +468,117 @@ def generate_signal(confluence: dict, structure, risk: dict, h4_df) -> dict | No
 
 
 # ─────────────────────────────────────────────
+# PRICE PREDICTION
+# ─────────────────────────────────────────────
+
+def price_prediction(h4_df: pd.DataFrame, risk: dict, confluence: dict,
+                     volatility: dict, regime: dict, swing_highs, swing_lows) -> dict:
+    """Near-term (ATR-based) and swing (structure-based) price targets with scenarios."""
+    cur         = float(h4_df["close"].iloc[-1])
+    h4_atr_val  = float(atr(h4_df).iloc[-1])
+    score       = confluence["score"]
+    bias        = risk["bias"]
+
+    confidence  = "High" if score >= 7 else "Medium" if score >= 5 else "Low"
+
+    # Near-term: ±1.5×ATR
+    near_bull = round(cur + 1.5 * h4_atr_val, 2)
+    near_bear = round(cur - 1.5 * h4_atr_val, 2)
+
+    # Extended target: first structural swing beyond the immediate risk target
+    extended_target = None
+    if bias == "Long":
+        for _, p in reversed(swing_highs[:-1]):
+            if p > risk["target"]:
+                extended_target = round(p, 2)
+                break
+    elif bias == "Short":
+        for _, p in reversed(swing_lows[:-1]):
+            if p < risk["target"]:
+                extended_target = round(p, 2)
+                break
+
+    # Scenarios
+    if bias == "Long":
+        scenarios = dict(
+            bull={"price": risk["target"],
+                  "condition": f"Bullish momentum holds — target resistance at ${risk['target']:,.2f}"},
+            base={"price": near_bull,
+                  "condition": f"Mild continuation over 1-3 bars to ${near_bull:,.2f} (1.5\u00d7ATR)"},
+            bear={"price": risk["invalidation"],
+                  "condition": f"Reversal — close below ${risk['invalidation']:,.2f} invalidates long"},
+        )
+    elif bias == "Short":
+        scenarios = dict(
+            bull={"price": risk["invalidation"],
+                  "condition": f"Reversal — close above ${risk['invalidation']:,.2f} invalidates short"},
+            base={"price": near_bear,
+                  "condition": f"Mild continuation over 1-3 bars to ${near_bear:,.2f} (1.5\u00d7ATR)"},
+            bear={"price": risk["target"],
+                  "condition": f"Bearish momentum holds — target support at ${risk['target']:,.2f}"},
+        )
+    else:
+        scenarios = dict(
+            bull={"price": near_bull,
+                  "condition": f"Upside breakout — ATR-based move toward ${near_bull:,.2f}"},
+            base={"price": cur,
+                  "condition": "Range-bound — no clear directional bias, wait for structure"},
+            bear={"price": near_bear,
+                  "condition": f"Downside breakdown — ATR-based move toward ${near_bear:,.2f}"},
+        )
+
+    # Narrative
+    trend_dir = "above" if regime["above_200"] else "below"
+    atr_state = "expanding" if volatility["expanding"] else "compressing"
+    near_target = near_bull if bias == "Long" else near_bear if bias == "Short" else None
+
+    parts = [
+        f"Price is trading {trend_dir} the daily 200 EMA in a '{regime['regime']}' environment.",
+        f"4H ATR is {atr_state} at ${h4_atr_val:,.2f}.",
+    ]
+    if bias in ("Long", "Short"):
+        dir_word = "resistance" if bias == "Long" else "support"
+        parts.append(
+            f"Near-term target: ${near_target:,.2f} (1.5\u00d7ATR, achievable in 1-3 four-hour bars)."
+        )
+        parts.append(
+            f"Swing target: ${risk['target']:,.2f} — the last structural {dir_word}."
+        )
+        if extended_target:
+            parts.append(
+                f"Extended target: ${extended_target:,.2f} if momentum continues beyond the swing target."
+            )
+        inval_dir = "below" if bias == "Long" else "above"
+        parts.append(
+            f"Setup invalidated on a 4H close {inval_dir} ${risk['invalidation']:,.2f}."
+        )
+    else:
+        parts.append(
+            f"No directional bias. Expected range: ${near_bear:,.2f}\u2013${near_bull:,.2f} (\u00b11.5\u00d7ATR). "
+            "Wait for structure to resolve before entering."
+        )
+
+    return dict(
+        bias=bias,
+        confidence=confidence,
+        near_term=dict(
+            bull_target=near_bull,
+            bear_target=near_bear,
+            timeframe="1-3 four-hour bars",
+            atr=round(h4_atr_val, 2),
+            method="1.5 \u00d7 4H ATR from current price",
+        ),
+        swing=dict(
+            target=risk["target"],
+            invalidation=risk["invalidation"],
+            extended_target=extended_target,
+        ),
+        scenarios=scenarios,
+        narrative=" ".join(parts),
+    )
+
+
+# ─────────────────────────────────────────────
 # MAIN ENTRY POINT
 # ─────────────────────────────────────────────
 
@@ -508,6 +619,9 @@ def full_analysis(symbol: str) -> dict:
 
     # Signal (score >= 7 + BOS)
     signal = generate_signal(confluence, structure, risk, h4)
+
+    # Price Prediction
+    prediction = price_prediction(h4, risk, confluence, volatility, regime, sh4, sl4)
 
     # Key levels
     key_support    = [round(sl[1], 2) for sl in sl4[-2:]] if len(sl4) >= 2 else ([round(sl4[-1][1], 2)] if sl4 else [])
@@ -551,6 +665,7 @@ def full_analysis(symbol: str) -> dict:
         confluence=confluence,
         risk=risk,
         signal=signal,
+        prediction=prediction,
         key_support=key_support,
         key_resistance=key_resistance,
         chart=dict(

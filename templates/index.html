@@ -167,6 +167,24 @@
       display: block;
       border-color: #21262d;
     }
+
+    /* Chart tooltip on price lines */
+    #chart-tooltip {
+      display: none;
+      position: absolute;
+      z-index: 20;
+      background: rgba(13,17,23,0.97);
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 10px 14px;
+      min-width: 220px;
+      max-width: 290px;
+      pointer-events: none;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.6);
+    }
+
+    /* Prediction card scenarios */
+    .pred-scenario { border-radius: 6px; padding: 8px 10px; }
   </style>
 </head>
 <body>
@@ -235,6 +253,8 @@
     <div id="signal-overlay">
       <div style="font-size:11px;color:#8b949e">Waiting for data...</div>
     </div>
+    <!-- Chart line tooltip -->
+    <div id="chart-tooltip"></div>
   </div>
   <div style="font-size:10px;color:var(--text-dim);padding:2px 0">RSI (14)</div>
   <div id="rsi-chart"></div>
@@ -315,6 +335,16 @@
   <div class="analysis-card">
     <div class="card-hdr">Section 7 — Risk Context</div>
     <div class="card-body-inner" id="card-risk">
+      <div class="text-dim" style="font-size:13px">Loading...</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ PRICE PREDICTION ═══ -->
+<div class="card-section" style="padding-top:0;padding-bottom:24px">
+  <div class="analysis-card">
+    <div class="card-hdr">Price Prediction — Near-Term &amp; Swing Targets</div>
+    <div class="card-body-inner" id="card-prediction">
       <div class="text-dim" style="font-size:13px">Loading...</div>
     </div>
   </div>
@@ -745,8 +775,13 @@ let autoTimer      = null;
 let mainChart      = null;
 let rsiChart       = null;
 let seriesMap      = {};
-let priceLines     = [];
-let addModal       = null;
+let priceLines       = [];
+let addModal         = null;
+let lastSignal       = null;
+let lineContext      = [];   // [{price, label, why, candle_time, color, type}]
+let permanentMarkers = [];   // always-visible pivot arrows
+let highlightActive  = false;
+let lastHighlightTs  = null;
 
 // ═══════════════════════════════════════════════════════
 // INIT
@@ -834,6 +869,8 @@ function initCharts() {
     rsiChart.applyOptions({ width: w });
   });
   ro.observe(mainEl);
+
+  initTooltip();
 }
 
 function updateChartData(chart, signal) {
@@ -854,21 +891,6 @@ function updateChartData(chart, signal) {
   seriesMap.ema50.setData(chart.ema50);
   seriesMap.ema200.setData(chart.ema200);
   seriesMap.rsi.setData(chart.rsi);
-
-  // ── Signal marker on last bar ──
-  if (signal) {
-    const isLong = signal.direction === 'LONG';
-    seriesMap.candles.setMarkers([{
-      time: signal.bar_time,
-      position: isLong ? 'belowBar' : 'aboveBar',
-      color: isLong ? '#3fb950' : '#f85149',
-      shape: isLong ? 'arrowUp' : 'arrowDown',
-      text: `${signal.direction}  ${signal.score}/10`,
-      size: 2,
-    }]);
-  } else {
-    seriesMap.candles.setMarkers([]);
-  }
 
   const lvl = chart.levels;
 
@@ -942,7 +964,11 @@ function forceRefresh() { loadAnalysis(currentSymbol, true); }
 // RENDER ALL
 // ═══════════════════════════════════════════════════════
 function renderAll(d) {
+  lastSignal = d.signal;
   updateChartData(d.chart, d.signal);
+  buildLineContext(d);
+  buildPivotMarkers(d);
+  setMarkersWithSignal(d.signal);
   renderHero(d);
   renderSignal(d.signal);
   renderRegime(d.regime);
@@ -952,6 +978,7 @@ function renderAll(d) {
   renderVolatility(d.volatility);
   renderConfluence(d.confluence);
   renderRisk(d.risk, d.confluence);
+  renderPrediction(d.prediction);
   setTimestamp(d.fetched_at, d.cache_age);
 }
 
@@ -1295,6 +1322,329 @@ function renderSignal(sig) {
 }
 
 // ═══════════════════════════════════════════════════════
+// PIVOT MARKERS & SIGNAL MARKERS
+// ═══════════════════════════════════════════════════════
+function buildPivotMarkers(d) {
+  permanentMarkers = [];
+  const swingHighs = d.swings.highs || [];
+  const swingLows  = d.swings.lows  || [];
+
+  swingHighs.forEach(([ts]) => {
+    const t = Math.floor(new Date(ts).getTime() / 1000);
+    permanentMarkers.push({ time: t, position: 'aboveBar', color: '#f8514955', shape: 'arrowDown', size: 1, text: '' });
+  });
+  swingLows.forEach(([ts]) => {
+    const t = Math.floor(new Date(ts).getTime() / 1000);
+    permanentMarkers.push({ time: t, position: 'belowBar', color: '#3fb95055', shape: 'arrowUp', size: 1, text: '' });
+  });
+
+  permanentMarkers.sort((a, b) => a.time - b.time);
+}
+
+function setMarkersWithSignal(signal) {
+  let markers = [...permanentMarkers];
+  if (signal) {
+    const isLong = signal.direction === 'LONG';
+    markers.push({
+      time: signal.bar_time,
+      position: isLong ? 'belowBar' : 'aboveBar',
+      color: isLong ? '#3fb950' : '#f85149',
+      shape: isLong ? 'arrowUp' : 'arrowDown',
+      text: `${signal.direction}  ${signal.score}/10`,
+      size: 2,
+    });
+    markers.sort((a, b) => a.time - b.time);
+  }
+  try { seriesMap.candles.setMarkers(markers); } catch(e) {}
+}
+
+function showHighlightMarker(lineInfo) {
+  if (!lineInfo.candle_time) return;
+  if (lineInfo.candle_time === lastHighlightTs) return;
+  lastHighlightTs = lineInfo.candle_time;
+  highlightActive = true;
+
+  const highlight = {
+    time: lineInfo.candle_time,
+    position: (lineInfo.type === 'support') ? 'belowBar' : 'aboveBar',
+    color: '#ffffff',
+    shape: 'circle',
+    size: 2,
+    text: '',
+  };
+
+  let markers = [...permanentMarkers, highlight];
+  if (lastSignal) {
+    const isLong = lastSignal.direction === 'LONG';
+    markers.push({
+      time: lastSignal.bar_time,
+      position: isLong ? 'belowBar' : 'aboveBar',
+      color: isLong ? '#3fb950' : '#f85149',
+      shape: isLong ? 'arrowUp' : 'arrowDown',
+      text: `${lastSignal.direction}  ${lastSignal.score}/10`,
+      size: 2,
+    });
+  }
+  markers.sort((a, b) => a.time - b.time);
+  try { seriesMap.candles.setMarkers(markers); } catch(e) {}
+}
+
+function clearHighlightMarker() {
+  if (!highlightActive) return;
+  highlightActive = false;
+  lastHighlightTs = null;
+  setMarkersWithSignal(lastSignal);
+}
+
+// ═══════════════════════════════════════════════════════
+// CHART LINE TOOLTIPS
+// ═══════════════════════════════════════════════════════
+function buildLineContext(d) {
+  lineContext = [];
+  if (!d || !d.chart) return;
+  const lvl        = d.chart.levels;
+  const swingLows  = d.swings ? (d.swings.lows  || []) : [];
+  const swingHighs = d.swings ? (d.swings.highs || []) : [];
+
+  const findSwingTs = (arr, price) => {
+    const entry = arr.find(s => s[1] === price);
+    return entry ? Math.floor(new Date(entry[0]).getTime() / 1000) : null;
+  };
+
+  // Support zones
+  (lvl.support || []).forEach((p) => {
+    const ct   = findSwingTs(swingLows, p);
+    const bos  = d.structure && d.structure.bullish_bos && d.risk && p === d.risk.invalidation;
+    lineContext.push({
+      price: p, label: 'Support Zone', color: '#3fb950', type: 'support',
+      candle_time: ct,
+      why: `4H swing low at $${fmt(p)}. ${bos
+        ? 'This doubles as the invalidation — a 4H close below here breaks the bullish thesis.'
+        : 'Buyers stepped in here and pushed price back up. Watch for reactions on any retest.'}`,
+    });
+  });
+
+  // Resistance zones
+  (lvl.resistance || []).forEach((p) => {
+    const ct   = findSwingTs(swingHighs, p);
+    const bos  = d.structure && d.structure.bearish_bos && d.risk && p === d.risk.invalidation;
+    lineContext.push({
+      price: p, label: 'Resistance Zone', color: '#f85149', type: 'resistance',
+      candle_time: ct,
+      why: `4H swing high at $${fmt(p)}. ${bos
+        ? 'This doubles as the invalidation — a 4H close above here breaks the bearish thesis.'
+        : 'Sellers stepped in here and pushed price back down. Watch for rejections on any retest.'}`,
+    });
+  });
+
+  // Fibonacci levels
+  const fib = d.fibonacci;
+  const fibDesc = {
+    '0.382': 'Shallow 38.2% retracement — strong trend, bulls buying early. Shallowest meaningful pullback.',
+    '0.5':   '50% retracement — the psychological midpoint. Equal split between bulls and bears.',
+    '0.618': '61.8% retracement — the golden ratio. Deepest healthy pullback. Highest-confluence fib level for long entries.',
+  };
+  if (fib) {
+    Object.entries(fib.levels).forEach(([k, p]) => {
+      if (['0.382','0.5','0.618'].includes(k)) {
+        lineContext.push({
+          price: p, label: `Fib ${k}`, color: {'0.382':'#ffd700','0.5':'#ffc040','0.618':'#ffaa00'}[k], type: 'fib',
+          candle_time: null,
+          why: `${fibDesc[k]} Measured from swing low $${fmt(fib.swing_low)} to swing high $${fmt(fib.swing_high)}.`,
+        });
+      }
+    });
+  }
+
+  // Invalidation
+  if (lvl.invalidation) {
+    const p    = lvl.invalidation;
+    const bias = d.risk ? d.risk.bias : 'Neutral';
+    lineContext.push({
+      price: p, label: 'Invalidation', color: '#ff4444', type: 'invalidation',
+      candle_time: null,
+      why: `Trade is invalidated on a 4H close ${bias === 'Long' ? 'below' : 'above'} this level. `
+         + `This is where the structural thesis breaks — the market is telling you the setup is wrong.`,
+    });
+  }
+
+  // Target
+  if (lvl.target) {
+    const p    = lvl.target;
+    const bias = d.risk ? d.risk.bias : 'Neutral';
+    lineContext.push({
+      price: p, label: 'Swing Target', color: '#44ff88', type: 'target',
+      candle_time: null,
+      why: `Next structural objective for the ${bias.toLowerCase()} setup. `
+         + `This is the last swing ${bias === 'Long' ? 'high (resistance)' : 'low (support)'} — where price previously reversed. `
+         + `R:R = ${d.risk ? d.risk.rr : '?'}:1.`,
+    });
+  }
+}
+
+function initTooltip() {
+  const wrap    = document.getElementById('chart-wrap');
+  const tooltip = document.getElementById('chart-tooltip');
+  const CHART_H = 480; // main chart pixel height
+
+  wrap.addEventListener('mousemove', (e) => {
+    const rect   = wrap.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    if (mouseY > CHART_H || lineContext.length === 0) {
+      tooltip.style.display = 'none';
+      clearHighlightMarker();
+      return;
+    }
+
+    let closest = null;
+    let minDist = 9; // px threshold
+
+    lineContext.forEach(info => {
+      try {
+        const lineY = seriesMap.candles.priceToCoordinate(info.price);
+        if (lineY !== null) {
+          const dist = Math.abs(mouseY - lineY);
+          if (dist < minDist) { minDist = dist; closest = info; }
+        }
+      } catch(_) {}
+    });
+
+    if (closest) {
+      showTooltip(closest, mouseX, mouseY, rect);
+      showHighlightMarker(closest);
+    } else {
+      tooltip.style.display = 'none';
+      clearHighlightMarker();
+    }
+  });
+
+  wrap.addEventListener('mouseleave', () => {
+    tooltip.style.display = 'none';
+    clearHighlightMarker();
+  });
+}
+
+function showTooltip(info, mouseX, mouseY, wrapRect) {
+  const tooltip = document.getElementById('chart-tooltip');
+  const dateStr = info.candle_time
+    ? new Date(info.candle_time * 1000).toLocaleDateString('en-US',
+        { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+    : null;
+
+  tooltip.innerHTML = `
+    <div style="font-size:10px;font-weight:700;color:${info.color};text-transform:uppercase;letter-spacing:.07em;margin-bottom:4px">${info.label}</div>
+    <div style="font-size:14px;font-weight:700;color:#e6edf3;margin-bottom:6px">$${fmt(info.price)}</div>
+    <div style="font-size:12px;color:#8b949e;line-height:1.55">${info.why}</div>
+    ${dateStr ? `
+    <div style="font-size:10px;color:#484f58;border-top:1px solid #21262d;padding-top:6px;margin-top:6px">
+      Source candle: ${dateStr} &nbsp;<span style="color:#bc8cff">◉ highlighted on chart</span>
+    </div>` : ''}
+  `;
+
+  tooltip.style.display = 'block';
+  const ttW = tooltip.offsetWidth;
+  const ttH = tooltip.offsetHeight;
+  const W   = wrapRect.width;
+  const H   = 480;
+
+  let tx = mouseX + 18;
+  let ty = mouseY - Math.floor(ttH / 2);
+  if (tx + ttW > W - 8)  tx = mouseX - ttW - 14;
+  if (tx < 8)             tx = 8;
+  if (ty < 8)             ty = 8;
+  if (ty + ttH > H - 8)  ty = H - ttH - 8;
+
+  tooltip.style.left = tx + 'px';
+  tooltip.style.top  = ty + 'px';
+}
+
+// ═══════════════════════════════════════════════════════
+// PRICE PREDICTION CARD
+// ═══════════════════════════════════════════════════════
+function renderPrediction(pred) {
+  const el = document.getElementById('card-prediction');
+  if (!pred) {
+    el.innerHTML = '<span class="text-dim" style="font-size:13px">No prediction available.</span>';
+    return;
+  }
+
+  const biasColor = pred.bias === 'Long' ? '#3fb950' : pred.bias === 'Short' ? '#f85149' : '#8b949e';
+  const confColor = pred.confidence === 'High' ? '#3fb950' : pred.confidence === 'Medium' ? '#d29922' : '#f85149';
+  const nt  = pred.near_term;
+  const sw  = pred.swing;
+  const sc  = pred.scenarios;
+
+  const ntBullHtml = pred.bias === 'Short'
+    ? `<span class="text-dim">$${fmt(nt.bull_target)}</span>`
+    : `<span class="text-g fw-bold">$${fmt(nt.bull_target)}</span>`;
+  const ntBearHtml = pred.bias === 'Long'
+    ? `<span class="text-dim">$${fmt(nt.bear_target)}</span>`
+    : `<span class="text-r fw-bold">$${fmt(nt.bear_target)}</span>`;
+
+  el.innerHTML = `
+    <div class="row g-3">
+      <div class="col-lg-8">
+        <div style="font-size:13px;color:#8b949e;line-height:1.7;border-left:3px solid ${biasColor}44;padding-left:12px">
+          ${pred.narrative}
+        </div>
+      </div>
+      <div class="col-lg-4">
+        <div style="background:#21262d;border-radius:6px;padding:10px 12px;margin-bottom:8px">
+          <div style="font-size:10px;color:#484f58;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">
+            Near-Term (${nt.timeframe})
+          </div>
+          ${row('Bull target', ntBullHtml)}
+          ${row('Bear target', ntBearHtml)}
+          ${row('4H ATR', `$${fmt(nt.atr)}`)}
+          <div style="font-size:10px;color:#484f58;margin-top:4px">${nt.method}</div>
+        </div>
+        <div style="background:#21262d;border-radius:6px;padding:10px 12px">
+          <div style="font-size:10px;color:#484f58;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">
+            Swing Structure
+          </div>
+          ${row('Target', `<span class="text-g fw-bold">$${fmt(sw.target)}</span>`)}
+          ${row('Invalidation', `<span class="text-r fw-bold">$${fmt(sw.invalidation)}</span>`)}
+          ${sw.extended_target ? row('Extended', `<span style="color:#bc8cff;font-weight:600">$${fmt(sw.extended_target)}</span>`) : ''}
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:14px;border-top:1px solid #21262d;padding-top:12px">
+      <div style="font-size:10px;color:#484f58;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Scenarios</div>
+      <div class="row g-2">
+        <div class="col-md-4">
+          <div class="pred-scenario" style="background:#3fb95011;border:1px solid #3fb95033">
+            <div style="font-size:10px;color:#3fb950;font-weight:700;margin-bottom:4px">BULL</div>
+            <div style="font-size:14px;font-weight:700;color:#3fb950">$${fmt(sc.bull.price)}</div>
+            <div style="font-size:11px;color:#8b949e;margin-top:3px;line-height:1.4">${sc.bull.condition}</div>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="pred-scenario" style="background:#58a6ff11;border:1px solid #58a6ff33">
+            <div style="font-size:10px;color:#58a6ff;font-weight:700;margin-bottom:4px">BASE</div>
+            <div style="font-size:14px;font-weight:700;color:#58a6ff">$${fmt(sc.base.price)}</div>
+            <div style="font-size:11px;color:#8b949e;margin-top:3px;line-height:1.4">${sc.base.condition}</div>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="pred-scenario" style="background:#f8514911;border:1px solid #f8514933">
+            <div style="font-size:10px;color:#f85149;font-weight:700;margin-bottom:4px">BEAR</div>
+            <div style="font-size:14px;font-weight:700;color:#f85149">$${fmt(sc.bear.price)}</div>
+            <div style="font-size:11px;color:#8b949e;margin-top:3px;line-height:1.4">${sc.bear.condition}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div style="margin-top:8px;font-size:11px;color:#484f58">
+      Prediction confidence: <span style="color:${confColor};font-weight:700">${pred.confidence}</span>
+      — based on confluence score ${pred.bias !== 'Neutral' ? '+ structural BOS confirmation' : '(no directional BOS)'}
+    </div>
+  `;
+}
+
+// ═══════════════════════════════════════════════════════
 // SYMBOL MANAGEMENT
 // ═══════════════════════════════════════════════════════
 function renderSymbolBar() {
@@ -1391,6 +1741,7 @@ async function switchTF(tf, btn) {
     seriesMap.ema50.setData(data.ema50);
     seriesMap.ema200.setData(data.ema200);
     seriesMap.rsi.setData(data.rsi);
+    setMarkersWithSignal(lastSignal);
     mainChart.timeScale().fitContent();
   } catch(e) {
     showError(`TF switch failed: ${e.message}`);
