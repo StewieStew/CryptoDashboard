@@ -22,17 +22,18 @@ VALID_INTERVALS = ["15m", "30m", "1h", "4h", "1d", "1w"]
 DEFAULT_SYMBOLS = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "DOGEUSDT"]
 
 
-def cached_analysis(symbol: str) -> dict:
+def cached_analysis(symbol: str, interval: str = "4h") -> dict:
+    key = f"{symbol}_{interval}"
     now = time.time()
     with _lock:
-        if symbol in _cache and now - _cache[symbol][1] < TTL:
-            cached, ts = _cache[symbol]
+        if key in _cache and now - _cache[key][1] < TTL:
+            cached, ts = _cache[key]
             cached["cache_age"] = int(now - ts)
             return cached
-    data = full_analysis(symbol)
+    data = full_analysis(symbol, interval)
     data["cache_age"] = 0
     with _lock:
-        _cache[symbol] = (data, now)
+        _cache[key] = (data, now)
     return data
 
 
@@ -42,12 +43,15 @@ def index():
 
 
 @app.route("/api/analysis/<symbol>")
-def analysis(symbol: str):
+@app.route("/api/analysis/<symbol>/<interval>")
+def analysis(symbol: str, interval: str = "4h"):
     sym = symbol.upper()
     if not sym.endswith("USDT"):
         sym += "USDT"
+    if interval not in VALID_INTERVALS:
+        interval = "4h"
     try:
-        data = cached_analysis(sym)
+        data = cached_analysis(sym, interval)
         if "error" in data:
             return jsonify(data), 400
         return jsonify(data)
@@ -56,14 +60,18 @@ def analysis(symbol: str):
 
 
 @app.route("/api/refresh/<symbol>")
-def refresh(symbol: str):
+@app.route("/api/refresh/<symbol>/<interval>")
+def refresh(symbol: str, interval: str = "4h"):
     """Force-clear cache and re-fetch."""
     sym = symbol.upper()
     if not sym.endswith("USDT"):
         sym += "USDT"
+    if interval not in VALID_INTERVALS:
+        interval = "4h"
+    key = f"{sym}_{interval}"
     with _lock:
-        _cache.pop(sym, None)
-    return analysis(sym.replace("USDT", ""))
+        _cache.pop(key, None)
+    return analysis(sym.replace("USDT", ""), interval)
 
 
 @app.route("/api/chart/<symbol>/<interval>")

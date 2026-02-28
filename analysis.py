@@ -10,6 +10,16 @@ from datetime import datetime, timezone
 
 BINANCE_KLINES = "https://api.binance.us/api/v3/klines"
 
+# Maps each chart interval to (higher-TF for regime, candle limit for analysis)
+INTERVAL_HTF = {
+    "15m": ("1h",  400),
+    "30m": ("4h",  300),
+    "1h":  ("4h",  300),
+    "4h":  ("1d",  200),
+    "1d":  ("1w",  200),
+    "1w":  ("1w",  200),
+}
+
 
 # ─────────────────────────────────────────────
 # DATA FETCHING
@@ -607,72 +617,144 @@ def price_prediction(h4_df: pd.DataFrame, risk: dict, confluence: dict,
 
 
 # ─────────────────────────────────────────────
+# CHANNEL ANALYSIS
+# ─────────────────────────────────────────────
+
+def channel_analysis(df: pd.DataFrame, swing_highs, swing_lows) -> dict | None:
+    """Detect ascending / descending / horizontal channel using linear regression."""
+    if len(swing_highs) < 2 or len(swing_lows) < 2:
+        return None
+
+    n = min(4, len(swing_highs), len(swing_lows))
+
+    h_ts = np.array([float(ts.timestamp()) for ts, _ in swing_highs[-n:]])
+    h_pr = np.array([float(p) for _, p in swing_highs[-n:]])
+    l_ts = np.array([float(ts.timestamp()) for ts, _ in swing_lows[-n:]])
+    l_pr = np.array([float(p) for _, p in swing_lows[-n:]])
+
+    # Normalise timestamps to avoid floating-point blow-up in polyfit
+    t0 = min(h_ts[0], l_ts[0])
+    m_h, b_h = np.polyfit(h_ts - t0, h_pr, 1)
+    m_l, b_l = np.polyfit(l_ts - t0, l_pr, 1)
+
+    t_end = float(df.index[-1].timestamp())
+
+    def eval_line(m, b, t): return round(m * (t - t0) + b, 6)
+
+    upper_line = [
+        {"time": int(h_ts[0]),  "value": eval_line(m_h, b_h, h_ts[0])},
+        {"time": int(t_end),    "value": eval_line(m_h, b_h, t_end)},
+    ]
+    lower_line = [
+        {"time": int(l_ts[0]),  "value": eval_line(m_l, b_l, l_ts[0])},
+        {"time": int(t_end),    "value": eval_line(m_l, b_l, t_end)},
+    ]
+
+    # Slope as % per bar (normalised to current price)
+    mid = float(df["close"].iloc[-1])
+    bar_s = max((df.index[-1] - df.index[-2]).total_seconds(), 1)
+    sh_pct = m_h * bar_s / mid * 100
+    sl_pct = m_l * bar_s / mid * 100
+    THRESH = 0.025   # % per bar to be considered directional
+
+    if abs(sh_pct) < THRESH and abs(sl_pct) < THRESH:
+        ch_type, bias = "Horizontal Range", "Neutral"
+        note = "Price consolidating between flat support and resistance. Expect breakout; direction TBD."
+    elif sh_pct > THRESH and sl_pct > THRESH:
+        ch_type, bias = "Ascending Channel", "Bullish"
+        note = "Higher highs and higher lows forming a rising channel. Look for longs near the lower boundary."
+    elif sh_pct < -THRESH and sl_pct < -THRESH:
+        ch_type, bias = "Descending Channel", "Bearish"
+        note = "Lower highs and lower lows forming a falling channel. Look for shorts near the upper boundary."
+    else:
+        ch_type, bias = "Mixed Structure", "Neutral"
+        note = "Upper and lower trendlines diverge — no clean channel. Rely on horizontal S/R levels instead."
+
+    return dict(
+        channel_type=ch_type,
+        bias=bias,
+        note=note,
+        upper_line=upper_line,
+        lower_line=lower_line,
+        slope_h_pct=round(sh_pct, 4),
+        slope_l_pct=round(sl_pct, 4),
+        n_points=n,
+    )
+
+
+# ─────────────────────────────────────────────
 # MAIN ENTRY POINT
 # ─────────────────────────────────────────────
 
-def full_analysis(symbol: str) -> dict:
-    # Fetch data
-    daily = fetch_ohlcv(symbol, "1d", 300)
-    h4    = fetch_ohlcv(symbol, "4h", 200)
+def full_analysis(symbol: str, interval: str = "4h") -> dict:
+    # Resolve timeframes
+    htf, candle_limit = INTERVAL_HTF.get(interval, ("1d", 200))
 
-    # Section 1: Regime
-    regime   = market_regime(daily)
+    # Fetch data — HTF for regime context, selected TF for everything else
+    htf_df = fetch_ohlcv(symbol, htf, 300)
+    df     = fetch_ohlcv(symbol, interval, candle_limit)
+
+    # Section 1: Regime (always uses HTF for broader market context)
+    regime = market_regime(htf_df)
 
     # Section 2: Structure
-    sh4, sl4 = detect_swings(h4, n=5)
-    structure = detect_structure(h4, sh4, sl4)
-    sweeps    = detect_sweeps(h4, sh4, sl4)
+    sh, sl = detect_swings(df, n=5)
+    structure = detect_structure(df, sh, sl)
+    sweeps    = detect_sweeps(df, sh, sl)
 
     # Section 3: Volume & RSI
-    vol      = volume_analysis(h4)
-    rsi_data = rsi_analysis(h4)
+    vol      = volume_analysis(df)
+    rsi_data = rsi_analysis(df)
 
     # Section 4: Fibonacci (only in trending regimes)
-    fib = fib_analysis(h4, sh4, sl4) if "Trend" in regime["regime"] else None
+    fib = fib_analysis(df, sh, sl) if "Trend" in regime["regime"] else None
 
     # Section 5: Volatility
-    h4_atr = atr(h4)
+    df_atr = atr(df)
     volatility = dict(
-        current=round(float(h4_atr.iloc[-1]), 2),
-        avg=round(float(h4_atr.iloc[-20:].mean()), 2),
-        expanding=bool(h4_atr.iloc[-1] > h4_atr.iloc[-20:].mean()),
-        compressing=bool(h4_atr.iloc[-1] < h4_atr.iloc[-20:].mean() * 0.7),
+        current=round(float(df_atr.iloc[-1]), 2),
+        avg=round(float(df_atr.iloc[-20:].mean()), 2),
+        expanding=bool(df_atr.iloc[-1] > df_atr.iloc[-20:].mean()),
+        compressing=bool(df_atr.iloc[-1] < df_atr.iloc[-20:].mean() * 0.7),
     )
 
     # Section 6: Confluence
     confluence = confluence_score(regime, structure, vol, rsi_data, sweeps, fib)
 
     # Section 7: Risk
-    risk = risk_context(h4, structure, sh4, sl4)
+    risk = risk_context(df, structure, sh, sl)
 
     # Signal (score >= 7 + BOS)
-    signal = generate_signal(confluence, structure, risk, h4)
+    signal = generate_signal(confluence, structure, risk, df)
 
     # Price Prediction
-    prediction = price_prediction(h4, risk, confluence, volatility, regime, sh4, sl4)
+    prediction = price_prediction(df, risk, confluence, volatility, regime, sh, sl)
+
+    # Channel detection
+    channels = channel_analysis(df, sh, sl)
 
     # Key levels
-    key_support    = [round(sl[1], 2) for sl in sl4[-2:]] if len(sl4) >= 2 else ([round(sl4[-1][1], 2)] if sl4 else [])
-    key_resistance = [round(sh[1], 2) for sh in sh4[-2:]] if len(sh4) >= 2 else ([round(sh4[-1][1], 2)] if sh4 else [])
+    key_support    = [round(sl[1], 2) for sl in sl[-2:]] if len(sl) >= 2 else ([round(sl[-1][1], 2)] if sl else [])
+    key_resistance = [round(sh[1], 2) for sh in sh[-2:]] if len(sh) >= 2 else ([round(sh[-1][1], 2)] if sh else [])
 
     # Level touch timestamps (for multi-circle highlighting)
-    support_touches    = {str(p): find_level_touches(h4, p, "low")  for p in key_support}
-    resistance_touches = {str(p): find_level_touches(h4, p, "high") for p in key_resistance}
+    support_touches    = {str(p): find_level_touches(df, p, "low")  for p in key_support}
+    resistance_touches = {str(p): find_level_touches(df, p, "high") for p in key_resistance}
 
     # Chart data
-    ema50_s   = ema(h4["close"], 50)
-    ema200_s  = ema(h4["close"], 200)
-    rsi_s     = rsi(h4["close"])
-    obv_s     = obv(h4)
+    ema50_s   = ema(df["close"], 50)
+    ema200_s  = ema(df["close"], 200)
+    rsi_s     = rsi(df["close"])
+    obv_s     = obv(df)
     obv_ema_s = ema(obv_s, 20)
 
     candles = [{"time": int(r.Index.timestamp()),
                 "open": r.open, "high": r.high, "low": r.low, "close": r.close}
-               for r in h4.itertuples()]
+               for r in df.itertuples()]
 
     volumes = [{"time": int(r.Index.timestamp()), "value": r.volume,
                 "color": "#26a69a" if r.close >= r.open else "#ef5350"}
-               for r in h4.itertuples()]
+               for r in df.itertuples()]
 
     ema50_pts   = [{"time": int(ts.timestamp()), "value": round(v, 2)} for ts, v in ema50_s.items()]
     ema200_pts  = [{"time": int(ts.timestamp()), "value": round(v, 2)} for ts, v in ema200_s.items()]
@@ -682,13 +764,15 @@ def full_analysis(symbol: str) -> dict:
 
     return dict(
         symbol=symbol,
+        interval=interval,
+        htf=htf,
         fetched_at=datetime.now(timezone.utc).isoformat(),
         current_price=risk["current"],
         regime=regime,
         structure=structure,
         swings=dict(
-            highs=[(str(ts), round(v, 2)) for ts, v in sh4[-5:]],
-            lows= [(str(ts), round(v, 2)) for ts, v in sl4[-5:]],
+            highs=[(str(ts), round(v, 2)) for ts, v in sh[-5:]],
+            lows= [(str(ts), round(v, 2)) for ts, v in sl[-5:]],
         ),
         sweeps=sweeps,
         volume=vol,
@@ -699,6 +783,7 @@ def full_analysis(symbol: str) -> dict:
         risk=risk,
         signal=signal,
         prediction=prediction,
+        channels=channels,
         key_support=key_support,
         key_resistance=key_resistance,
         chart=dict(
@@ -709,6 +794,7 @@ def full_analysis(symbol: str) -> dict:
             rsi=rsi_pts,
             obv=obv_pts,
             obv_ema=obv_ema_pts,
+            channels=channels,
             levels=dict(
                 support=key_support,
                 resistance=key_resistance,

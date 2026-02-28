@@ -241,7 +241,7 @@
       <span><span class="legend-dot" style="background:#26c6da44"></span>OBV EMA20</span>
     </div>
     <div class="d-flex align-items-center gap-1">
-      <span style="font-size:10px;color:#484f58;text-transform:uppercase;letter-spacing:.06em">Chart TF</span>
+      <span style="font-size:10px;color:#484f58;text-transform:uppercase;letter-spacing:.06em">Timeframe</span>
       <button class="tf-btn" onclick="switchTF('15m',this)">15m</button>
       <button class="tf-btn" onclick="switchTF('1h',this)">1H</button>
       <button class="tf-btn active" onclick="switchTF('4h',this)">4H</button>
@@ -846,6 +846,17 @@ function initCharts() {
     priceLineVisible: false, lastValueVisible: false,
   });
 
+  seriesMap.channelUpper = mainChart.addLineSeries({
+    color: '#ffd70066', lineWidth: 1,
+    lineStyle: LightweightCharts.LineStyle.Dashed,
+    priceLineVisible: false, lastValueVisible: false,
+  });
+  seriesMap.channelLower = mainChart.addLineSeries({
+    color: '#ffd70066', lineWidth: 1,
+    lineStyle: LightweightCharts.LineStyle.Dashed,
+    priceLineVisible: false, lastValueVisible: false,
+  });
+
   // RSI chart
   rsiChart = LightweightCharts.createChart(rsiEl, {
     ...chartOptions(110),
@@ -928,6 +939,8 @@ function updateChartData(chart, signal) {
   seriesMap.rsi.setData([]);
   seriesMap.obv.setData([]);
   seriesMap.obv_ema.setData([]);
+  if (seriesMap.channelUpper) seriesMap.channelUpper.setData([]);
+  if (seriesMap.channelLower) seriesMap.channelLower.setData([]);
   mainChart.priceScale('right').applyOptions({ autoScale: true });
   rsiChart.priceScale('right').applyOptions({ autoScale: true });
   obvChart.priceScale('right').applyOptions({ autoScale: true });
@@ -940,6 +953,12 @@ function updateChartData(chart, signal) {
   seriesMap.rsi.setData(chart.rsi);
   if (chart.obv)     seriesMap.obv.setData(chart.obv);
   if (chart.obv_ema) seriesMap.obv_ema.setData(chart.obv_ema);
+
+  // ── Channel trendlines ──
+  if (chart.channels && chart.channels.upper_line) {
+    if (seriesMap.channelUpper) seriesMap.channelUpper.setData(chart.channels.upper_line);
+    if (seriesMap.channelLower) seriesMap.channelLower.setData(chart.channels.lower_line || []);
+  }
 
   const lvl = chart.levels;
 
@@ -995,7 +1014,10 @@ async function loadAnalysis(symbol, forceRefresh = false) {
   showLoading(`Fetching ${symbol}...`);
   hideError();
   try {
-    const endpoint = forceRefresh ? `/api/refresh/${symbol}` : `/api/analysis/${symbol}`;
+    const tf = currentTF;
+    const endpoint = forceRefresh
+      ? `/api/refresh/${symbol}/${tf}`
+      : `/api/analysis/${symbol}/${tf}`;
     const resp = await fetch(endpoint);
     const data = await resp.json();
     if (data.error) throw new Error(data.error);
@@ -1021,7 +1043,7 @@ function renderAll(d) {
   renderHero(d);
   renderSignal(d.signal);
   renderRegime(d.regime);
-  renderStructure(d.structure, d.swings, d.sweeps, d.key_support, d.key_resistance);
+  renderStructure(d.structure, d.swings, d.sweeps, d.key_support, d.key_resistance, d.channels, d.interval);
   renderVolume(d.volume, d.rsi);
   renderFib(d.fibonacci);
   renderVolatility(d.volatility);
@@ -1092,7 +1114,8 @@ function renderRegime(r) {
 // ═══════════════════════════════════════════════════════
 // SECTION 2: STRUCTURE
 // ═══════════════════════════════════════════════════════
-function renderStructure(s, swings, sweeps, support, resistance) {
+function renderStructure(s, swings, sweeps, support, resistance, channels, interval) {
+  const tfLabel = (interval || '4H').toUpperCase();
   let bosHtml = '<span class="text-dim">No confirmed BOS</span>';
   if (s) {
     if (s.bullish_bos) bosHtml = '<span class="text-g fw-bold">Bullish BOS — price closed above last swing high</span>';
@@ -1127,18 +1150,26 @@ function renderStructure(s, swings, sweeps, support, resistance) {
     ? resistance.map(p => `<span class="level-pill" style="background:#f8514922;color:#f85149;border:1px solid #f8514944">$${fmt(p)}</span>`).join('')
     : '<span class="text-dim">—</span>';
 
+  let channelHtml = '<span class="text-dim">None detected</span>';
+  if (channels && channels.channel_type) {
+    const cColor = channels.bias === 'Bullish' ? '#3fb950' : channels.bias === 'Bearish' ? '#f85149' : '#8b949e';
+    channelHtml = `<span style="color:${cColor};font-weight:600">${channels.channel_type}</span>`
+      + `<span class="text-dim" style="font-size:11px;margin-left:6px">${channels.note}</span>`;
+  }
+
   document.getElementById('card-structure').innerHTML = `
     ${row('Break of Structure', bosHtml)}
     ${row('Pattern', s ? (s.hh_hl ? '<span class="text-g">Higher Highs / Higher Lows</span>' : s.lh_ll ? '<span class="text-r">Lower Highs / Lower Lows</span>' : '<span class="text-y">Mixed</span>') : '<span class="text-dim">—</span>')}
+    ${row('Channel', channelHtml)}
     ${row('Liquidity Sweeps', sweepHtml)}
     ${row('Key Support', supHtml)}
     ${row('Key Resistance', resHtml)}
     <div style="margin-top:10px">
-      <div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Swing Highs (4H)</div>
+      <div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Swing Highs (${tfLabel})</div>
       <div class="swing-list">${shList || '<span class="text-dim" style="font-size:12px">Insufficient data</span>'}</div>
     </div>
     <div style="margin-top:8px">
-      <div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Swing Lows (4H)</div>
+      <div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Swing Lows (${tfLabel})</div>
       <div class="swing-list">${slList || '<span class="text-dim" style="font-size:12px">Insufficient data</span>'}</div>
     </div>
   `;
@@ -1463,6 +1494,7 @@ function buildLineContext(d) {
   lineContext = [];
   if (!d || !d.chart) return;
   const lvl = d.chart.levels;
+  const tf = (d.interval || '4H').toUpperCase();
 
   // ── Support zones (with touch timestamps from Python) ──
   (lvl.support || []).forEach((p) => {
@@ -1472,7 +1504,7 @@ function buildLineContext(d) {
     lineContext.push({
       price: p, label: 'Support Zone', color: '#3fb950', type: 'support',
       candle_times: touches,
-      why: `4H swing low at $${fmt(p)}. `
+      why: `${tf} swing low at $${fmt(p)}. `
          + (n >= 2
             ? `${n} candle touches detected — price has bounced from this level multiple times, confirming structural support.`
             : 'Buyers stepped in here, pushing price back up. Watch for reactions on any retest.')
@@ -1488,7 +1520,7 @@ function buildLineContext(d) {
     lineContext.push({
       price: p, label: 'Resistance Zone', color: '#f85149', type: 'resistance',
       candle_times: touches,
-      why: `4H swing high at $${fmt(p)}. `
+      why: `${tf} swing high at $${fmt(p)}. `
          + (n >= 2
             ? `${n} candle touches detected — sellers have stepped in here repeatedly, confirming structural resistance.`
             : 'Sellers stepped in here, pushing price back down. Watch for rejections on any retest.')
@@ -1522,7 +1554,7 @@ function buildLineContext(d) {
     lineContext.push({
       price: lvl.invalidation, label: 'Invalidation', color: '#ff4444', type: 'invalidation',
       candle_times: [],
-      why: `A 4H close ${bias === 'Long' ? 'below' : 'above'} this level structurally breaks the ${bias.toLowerCase()} thesis. `
+      why: `A ${tf} close ${bias === 'Long' ? 'below' : 'above'} this level structurally breaks the ${bias.toLowerCase()} thesis. `
          + `This is the last swing ${bias === 'Long' ? 'low' : 'high'} — once price closes beyond it, the setup is invalid.`,
     });
   }
@@ -1754,7 +1786,7 @@ function switchSymbol(sym) {
   currentTF = '4h';
   document.querySelectorAll('.tf-btn').forEach((b, i) => b.classList.toggle('active', i === 2));
   const label = document.getElementById('tf-label');
-  if (label) label.textContent = 'Analysis: 4H';
+  if (label) label.textContent = `Analysis: ${currentTF.toUpperCase()}`;
   renderSymbolBar();
   loadAnalysis(sym);
 }
@@ -1817,25 +1849,10 @@ async function switchTF(tf, btn) {
 
   // Update label
   const label = document.getElementById('tf-label');
-  if (label) label.textContent = tf === '4h' ? 'Analysis: 4H' : `Chart: ${tf.toUpperCase()} | Analysis: 4H`;
+  if (label) label.textContent = `Analysis: ${tf.toUpperCase()}`;
 
-  try {
-    const resp = await fetch(`/api/chart/${currentSymbol}/${tf}`);
-    const data = await resp.json();
-    if (data.error) throw new Error(data.error);
-    // Update candles + indicators only — keep price lines from 4H analysis
-    seriesMap.candles.setData(data.candles);
-    seriesMap.vol.setData(data.volume);
-    seriesMap.ema50.setData(data.ema50);
-    seriesMap.ema200.setData(data.ema200);
-    seriesMap.rsi.setData(data.rsi);
-    if (data.obv)     seriesMap.obv.setData(data.obv);
-    if (data.obv_ema) seriesMap.obv_ema.setData(data.obv_ema);
-    setMarkersWithSignal(lastSignal);
-    mainChart.timeScale().fitContent();
-  } catch(e) {
-    showError(`TF switch failed: ${e.message}`);
-  }
+  // Full re-analysis on the new timeframe
+  await loadAnalysis(currentSymbol);
 }
 
 // ═══════════════════════════════════════════════════════
