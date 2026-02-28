@@ -504,6 +504,16 @@ def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
     reward_d = abs(target - cur)
     rr       = round(reward_d / risk_d, 2) if risk_d > 0 else 0
 
+    # ── Enforce minimum 2:1 R:R — project target further if structural level is too close ──
+    if risk_d > 0 and rr < 2.0 and bias != "Neutral":
+        if bias == "Long":
+            target = round(cur + 2.0 * risk_d, 6)
+        else:
+            target = round(cur - 2.0 * risk_d, 6)
+        target_basis = "2:1 R:R projection (structural target too close)"
+        reward_d = abs(target - cur)
+        rr = round(reward_d / risk_d, 2)
+
     return dict(
         bias=bias,
         current=round(cur, 6),
@@ -559,11 +569,14 @@ def chart_for_timeframe(symbol: str, interval: str) -> dict:
 
 def generate_signal(confluence: dict, structure, risk: dict, h4_df,
                     signal_threshold: float | None = None) -> dict | None:
-    """Returns a signal dict if effective score >= adaptive threshold and BOS is confirmed."""
+    """Returns a signal dict if effective score >= adaptive threshold, BOS confirmed, and R:R >= 2:1."""
     threshold = signal_threshold if signal_threshold is not None else get_threshold()
     if confluence["score"] < threshold:
         return None
     if not structure:
+        return None
+    # Hard R:R gate — never log a trade with worse than 2:1
+    if risk.get("rr", 0) < 2.0:
         return None
 
     if structure["bullish_bos"]:
