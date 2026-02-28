@@ -131,20 +131,67 @@ def get_stop_multiplier() -> float:
 
 
 # ─────────────────────────────────────────────
+# TIER HELPERS
+# ─────────────────────────────────────────────
+# Two trading tiers — max 1 open trade per symbol per tier.
+# Day tier  : 15m entries (intraday, tight SL)
+# Swing tier: 4h entries  (multi-day, wider SL)
+_DAY_INTERVALS   = ("15m", "30m", "1h")
+_SWING_INTERVALS = ("4h", "1d", "1w")
+
+def _get_tier(interval: str) -> str:
+    return "day" if interval in _DAY_INTERVALS else "swing"
+
+
+def _close_internal(db, trade_id: str, close_price: float, status: str) -> None:
+    """Close a trade using an existing db connection (caller must hold _lock)."""
+    row = db.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
+    if not row or row["status"] != "open":
+        return
+    trade = dict(row)
+    if status == "cancelled" or not close_price:
+        close_price = trade["entry"]
+    roi      = _calc_roi(trade["direction"], trade["entry"], close_price)
+    analysis = _generate_analysis(trade, close_price, status, roi)
+    now      = datetime.now(timezone.utc).isoformat()
+    db.execute("""
+        UPDATE trades SET status=?, closed_at=?, close_price=?, roi_pct=?,
+        post_trade_analysis=? WHERE id=?
+    """, (status, now, round(close_price, 8), roi, json.dumps(analysis), trade_id))
+
+
+# ─────────────────────────────────────────────
 # TRADE OPERATIONS
 # ─────────────────────────────────────────────
 def log_trade(trade: dict) -> bool:
-    """Insert a new open trade. Returns False if a duplicate open trade already exists."""
+    """
+    Insert a new open trade. Returns False if skipped (duplicate direction).
+    Tier rules (enforced per symbol):
+      - Same tier, same direction already open → skip.
+      - Same tier, opposite direction open     → close existing, open new.
+    """
     sym, intv, dirn = trade["symbol"], trade["interval"], trade["direction"]
+    tier         = _get_tier(intv)
+    tier_intervals = _DAY_INTERVALS if tier == "day" else _SWING_INTERVALS
+    placeholders   = ",".join("?" * len(tier_intervals))
+
     with _lock:
         db = _conn()
         try:
-            dupe = db.execute(
-                "SELECT id FROM trades WHERE symbol=? AND interval=? AND direction=? AND status='open'",
-                (sym, intv, dirn)
-            ).fetchone()
-            if dupe:
-                return False
+            existing = db.execute(
+                f"SELECT id, direction FROM trades "
+                f"WHERE symbol=? AND interval IN ({placeholders}) AND status='open'",
+                (sym, *tier_intervals)
+            ).fetchall()
+
+            for ex in existing:
+                if ex["direction"] == dirn:
+                    return False   # already in this direction on this tier
+                else:
+                    # Opposing signal — exit the current position before opening new one
+                    _close_internal(db, ex["id"], trade["entry"], "cancelled")
+                    _adapt(db)
+
             db.execute("""
                 INSERT INTO trades
                 (id, symbol, interval, direction, entry, tp, sl, score, effective_score,

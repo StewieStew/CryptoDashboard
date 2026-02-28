@@ -2304,13 +2304,21 @@ function buildTradeMarkers() {
   const sym = currentSymbol;
   const tf  = currentTF;
 
-  trades.forEach(t => {
-    if (t.symbol !== sym) return;  // show all TFs for this symbol
+  // Tier badge: D = Day (15m), S = Swing (4h)
+  const getDayTier = iv => ['15m','30m','1h'].includes(iv) ? 'D' : 'S';
 
-    // Entry marker — purple=long, orange=short (distinct from signal green/red)
+  trades.forEach(t => {
+    if (t.symbol !== sym) return;
+
+    // Entry marker
     const entryTime = nearestCandleTime(t.opened_at);
     if (entryTime !== null) {
       const isLong = t.direction === 'LONG';
+      const tier   = getDayTier(t.interval);
+      // Day=purple/orange  Swing=blue/red  (different hues so you can tell them apart)
+      const color  = isLong
+        ? (tier === 'D' ? '#bc8cff' : '#58a6ff')
+        : (tier === 'D' ? '#f0883e' : '#ff7b72');
       tradeMarkersData.push({
         time:  entryTime,
         trade: t,
@@ -2318,9 +2326,9 @@ function buildTradeMarkers() {
         marker: {
           time:     entryTime,
           position: isLong ? 'belowBar' : 'aboveBar',
-          color:    isLong ? '#bc8cff' : '#f0883e',
+          color,
           shape:    isLong ? 'arrowUp' : 'arrowDown',
-          text:     `${t.direction.charAt(0)}${t.score}`,
+          text:     `${tier}${t.direction.charAt(0)}${t.score}`,
           size:     1.5,
         },
       });

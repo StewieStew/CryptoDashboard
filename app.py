@@ -26,9 +26,9 @@ DEFAULT_SYMBOLS  = [
     "LINKUSDT","LTCUSDT", "DOTUSDT",  "NEARUSDT", "ATOMUSDT",
 ]
 
-# Every interval scanned automatically — no clicking required
-# 15m/30m/1H = day-trade & short swing; 4H/1D/1W = swing positions
-SCAN_INTERVALS   = ["15m", "30m", "1h", "4h", "1d", "1w"]
+# Two-tier scanning: Day entries (15m) + Swing entries (4h) only.
+# This keeps max 1 open trade per symbol per tier and eliminates stacking.
+SCAN_INTERVALS   = ["15m", "4h"]
 
 # Grows as users view additional coins — persists for the life of the server process
 _known_symbols   = set(DEFAULT_SYMBOLS)
