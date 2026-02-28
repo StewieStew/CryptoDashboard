@@ -276,6 +276,23 @@
     .adapt-log-entry { font-size: 11px; color: #8b949e; padding: 4px 0; border-bottom: 1px solid #21262d; }
     .adapt-log-entry:last-child { border-bottom: none; }
     .adapt-log-ts { font-size: 10px; color: #484f58; }
+
+    /* Clickable trade rows */
+    .trade-row-clickable { cursor: pointer; transition: background .12s; }
+    .trade-row-clickable:hover td { background: rgba(88,166,255,.07) !important; }
+    .trade-row-clickable td:first-child { border-left: 2px solid transparent; transition: border-color .12s; }
+    .trade-row-clickable:hover td:first-child { border-left-color: #58a6ff; }
+    /* Risk % column coloring */
+    .risk-low  { color: #3fb950; font-weight: 700; font-size: 12px; }
+    .risk-mid  { color: #d29922; font-weight: 700; font-size: 12px; }
+    .risk-high { color: #f85149; font-weight: 700; font-size: 12px; }
+    /* Trade group headers */
+    .trade-group-hdr { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; padding: 6px 0 4px; display: flex; align-items: center; gap: 8px; }
+    .trade-group-closed { color: #484f58; cursor: pointer; }
+    .trade-group-closed:hover { color: #8b949e; }
+    /* Collapsible card */
+    .card-hdr-toggle { cursor: pointer; display: flex; align-items: center; justify-content: space-between; }
+    .card-hdr-toggle:hover { color: #e6edf3; }
   </style>
 </head>
 <body>
@@ -361,11 +378,12 @@
     </div>
     <div class="d-flex align-items-center gap-1">
       <span style="font-size:10px;color:#484f58;text-transform:uppercase;letter-spacing:.06em">Timeframe</span>
-      <button class="tf-btn" onclick="switchTF('15m',this)">15m</button>
-      <button class="tf-btn" onclick="switchTF('1h',this)">1H</button>
-      <button class="tf-btn active" onclick="switchTF('4h',this)">4H</button>
-      <button class="tf-btn" onclick="switchTF('1d',this)">1D</button>
-      <button class="tf-btn" onclick="switchTF('1w',this)">1W</button>
+      <button class="tf-btn" data-tf="15m" onclick="switchTF('15m',this)">15m</button>
+      <button class="tf-btn" data-tf="30m" onclick="switchTF('30m',this)">30m</button>
+      <button class="tf-btn" data-tf="1h"  onclick="switchTF('1h',this)">1H</button>
+      <button class="tf-btn active" data-tf="4h" onclick="switchTF('4h',this)">4H</button>
+      <button class="tf-btn" data-tf="1d"  onclick="switchTF('1d',this)">1D</button>
+      <button class="tf-btn" data-tf="1w"  onclick="switchTF('1w',this)">1W</button>
       <span id="tf-label">Analysis: 4H</span>
     </div>
   </div>
@@ -478,32 +496,20 @@
   </div>
 </div>
 
-<!-- ═══ SIGNAL CALLS LOG ═══ -->
-<div class="card-section" style="padding-top:0;padding-bottom:24px">
-  <div class="analysis-card">
-    <div class="card-hdr">
-      Signal Log — Tracked Calls
-      <span style="font-size:10px;color:#484f58;font-weight:400;margin-left:8px">
-        (SQLite · persists across restarts)
-      </span>
-    </div>
-    <div class="card-body-inner" id="card-calls">
-      <span class="text-dim" style="font-size:13px">No signals logged yet.</span>
-    </div>
-  </div>
-</div>
-
 <!-- ═══ ADAPTIVE LEARNING ═══ -->
 <div class="card-section" style="padding-top:0;padding-bottom:24px">
   <div class="analysis-card">
-    <div class="card-hdr">
-      Adaptive Learning Engine — Factor Weights &amp; Threshold
-      <span style="font-size:10px;color:#484f58;font-weight:400;margin-left:8px">
-        auto-adjusts after each trade
+    <div class="card-hdr card-hdr-toggle" onclick="toggleLearningCard()">
+      <span>
+        Adaptive Learning Engine — Factor Weights &amp; Threshold
+        <span style="font-size:10px;color:#484f58;font-weight:400;margin-left:8px">auto-adjusts after each trade</span>
       </span>
+      <span id="learning-toggle" style="font-size:11px;color:#484f58;font-weight:400">▶ expand</span>
     </div>
-    <div class="card-body-inner" id="card-learning">
-      <span class="text-dim" style="font-size:13px">Loading...</span>
+    <div id="learning-body" style="display:none">
+      <div class="card-body-inner" id="card-learning">
+        <span class="text-dim" style="font-size:13px">Loading...</span>
+      </div>
     </div>
   </div>
 </div>
@@ -1959,9 +1965,9 @@ function renderSymbolBar() {
 function switchSymbol(sym) {
   currentSymbol = sym;
   currentTF = '4h';
-  document.querySelectorAll('.tf-btn').forEach((b, i) => b.classList.toggle('active', i === 2));
+  document.querySelectorAll('.tf-btn').forEach(b => b.classList.toggle('active', b.dataset.tf === '4h'));
   const label = document.getElementById('tf-label');
-  if (label) label.textContent = `Analysis: ${currentTF.toUpperCase()}`;
+  if (label) label.textContent = 'Analysis: 4H';
   renderSymbolBar();
   loadAnalysis(sym);
 }
@@ -2149,14 +2155,48 @@ function toggleAllSignals() {
   if (btn) btn.textContent = allSignalsCollapsed ? '▼' : '▲';
 }
 
+// Navigate to symbol + timeframe chart when clicking a trade row
+function openTradeChart(symbol, interval) {
+  const sym = symbol.endsWith('USDT') ? symbol : symbol + 'USDT';
+  if (!symbolList.includes(sym)) {
+    symbolList.push(sym);
+    localStorage.setItem('cryptoDashSymbols', JSON.stringify(symbolList));
+  }
+  currentSymbol = sym;
+  currentTF     = interval;
+  document.querySelectorAll('.tf-btn').forEach(b => b.classList.toggle('active', b.dataset.tf === interval));
+  const label = document.getElementById('tf-label');
+  if (label) label.textContent = `Analysis: ${interval.toUpperCase()}`;
+  renderSymbolBar();
+  loadAnalysis(sym);
+  const chartEl = document.getElementById('chart-wrap');
+  if (chartEl) chartEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function toggleClosedTrades() {
+  const section = document.getElementById('closed-trades-section');
+  const arrow   = document.getElementById('closed-trades-arrow');
+  if (!section) return;
+  const hidden = section.style.display === 'none';
+  section.style.display = hidden ? '' : 'none';
+  if (arrow) arrow.textContent = hidden ? '▼' : '▶';
+}
+
+function toggleLearningCard() {
+  const body   = document.getElementById('learning-body');
+  const toggle = document.getElementById('learning-toggle');
+  if (!body) return;
+  const hidden = body.style.display === 'none';
+  body.style.display = hidden ? '' : 'none';
+  if (toggle) toggle.textContent = hidden ? '▼ collapse' : '▶ expand';
+  if (hidden) fetchLearning();
+}
+
 function renderAllSignals() {
   const el = document.getElementById('all-signals-body');
   if (!el) return;
 
   const trades = allSignalsData || [];
-  const filtered = allSignalsFilter === 'all'
-    ? trades
-    : trades.filter(t => t.status === allSignalsFilter);
 
   // Update open badge
   const openCount = trades.filter(t => t.status === 'open').length;
@@ -2168,135 +2208,191 @@ function renderAllSignals() {
   }
 
   if (trades.length === 0) {
-    el.innerHTML = '<span style="font-size:13px;color:var(--text-dim)">No signals yet. Signals fire when confluence score ≥ threshold and a BOS is confirmed.</span>';
+    el.innerHTML = '<span style="font-size:13px;color:var(--text-dim)">No signals yet — scanner fires when score ≥ threshold + BOS confirmed + R:R ≥ 2:1.</span>';
     return;
   }
 
-  // Stats
-  const wins   = trades.filter(t => t.status === 'win').length;
-  const losses = trades.filter(t => t.status === 'loss').length;
-  const closed = wins + losses;
-  const wrPct  = closed > 0 ? Math.round(wins / closed * 100) : null;
-  const wrColor= wrPct !== null ? (wrPct >= 50 ? '#3fb950' : '#f85149') : '#8b949e';
-  const allRois= trades.filter(t => t.roi_pct !== null).map(t => t.roi_pct);
-  const totalRoi = allRois.length > 0 ? allRois.reduce((a,b)=>a+b,0).toFixed(1) : null;
+  // Stats bar
+  const wins     = trades.filter(t => t.status === 'win').length;
+  const losses   = trades.filter(t => t.status === 'loss').length;
+  const closed   = wins + losses;
+  const wrPct    = closed > 0 ? Math.round(wins / closed * 100) : null;
+  const wrColor  = wrPct !== null ? (wrPct >= 50 ? '#3fb950' : '#f85149') : '#8b949e';
+  const allRois  = trades.filter(t => t.roi_pct !== null).map(t => t.roi_pct);
+  const totalRoi = allRois.length > 0 ? allRois.reduce((a,b) => a+b, 0).toFixed(1) : null;
+  const roiColor = totalRoi !== null && parseFloat(totalRoi) >= 0 ? '#3fb950' : '#f85149';
 
-  const statsHtml = `<div class="calls-stats-bar" style="padding-top:0;margin-bottom:8px">
-    <span><span class="text-dim">Total:</span> <b>${trades.length}</b></span>
+  const statsHtml = `<div class="calls-stats-bar" style="padding-top:0;margin-bottom:10px">
+    <span><span class="text-dim">Signals:</span> <b>${trades.length}</b></span>
     <span><span class="text-dim">Open:</span> <b style="color:#d29922">${openCount}</b></span>
     <span><span class="text-dim">Won:</span> <b style="color:#3fb950">${wins}</b></span>
     <span><span class="text-dim">Lost:</span> <b style="color:#f85149">${losses}</b></span>
     <span><span class="text-dim">Win Rate:</span> <b style="color:${wrColor}">${wrPct !== null ? wrPct + '%' : '—'}</b></span>
-    <span><span class="text-dim">Total P&amp;L:</span> <b style="color:${totalRoi !== null && parseFloat(totalRoi) >= 0 ? '#3fb950' : '#f85149'}">${totalRoi !== null ? (parseFloat(totalRoi) >= 0 ? '+' : '') + totalRoi + '%' : '—'}</b></span>
+    <span><span class="text-dim">Total P&amp;L:</span> <b style="color:${roiColor}">${totalRoi !== null ? (parseFloat(totalRoi) >= 0 ? '+' : '') + totalRoi + '%' : '—'}</b></span>
   </div>`;
+
+  // Apply filter
+  const filtered = allSignalsFilter === 'all'
+    ? trades
+    : trades.filter(t => t.status === allSignalsFilter);
 
   if (filtered.length === 0) {
     el.innerHTML = statsHtml + `<span style="font-size:13px;color:var(--text-dim)">No ${allSignalsFilter} signals.</span>`;
     return;
   }
 
-  const rows = filtered.map((t, idx) => {
-    const sym       = t.symbol.replace('USDT','');
-    const dirColor  = t.direction === 'SHORT' ? '#f85149' : '#3fb950';
-    const stColor   = {open:'#d29922',win:'#3fb950',loss:'#f85149',cancelled:'#484f58'}[t.status] || '#8b949e';
-    const roiStr    = t.roi_pct !== null ? (t.roi_pct >= 0 ? '+' : '') + t.roi_pct + '%' : '—';
-    const roiColor  = t.roi_pct !== null ? (t.roi_pct >= 0 ? '#3fb950' : '#f85149') : '#8b949e';
-    const scoreColor= t.score >= 9 ? '#3fb950' : t.score >= 7 ? '#d29922' : '#8b949e';
-    const dt        = t.opened_at ? new Date(t.opened_at) : null;
-    const dtStr     = dt ? dt.toLocaleDateString([], {month:'short',day:'numeric'}) + ' '
-      + dt.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '—';
-    const pta       = t.post_trade_analysis;
-    const ptaId     = `asf-pta-${idx}`;
-    const isOpen    = t.status === 'open';
+  // Split into groups — open first, then closed sorted newest first
+  const openTrades   = filtered.filter(t => t.status === 'open')
+                                .sort((a,b) => new Date(b.opened_at) - new Date(a.opened_at));
+  const closedTrades = filtered.filter(t => t.status !== 'open')
+                                .sort((a,b) => new Date(b.opened_at) - new Date(a.opened_at));
 
-    // R:R + % calculations
-    const rr = calcRR(t.entry, t.tp, t.sl, t.direction);
-    const dollarStr = `+$${rr.dollarGain.toLocaleString()} / -$${rr.dollarLoss.toLocaleString()}`;
+  const TABLE_HDR = `<thead><tr>
+    <th style="min-width:72px">Symbol ↗</th>
+    <th>TF</th><th>Dir</th><th>Entry</th>
+    <th>Target (+%)</th><th>Stop (-%)</th>
+    <th title="Max loss % of trade size">Risk%</th>
+    <th>R:R</th><th>Score</th>
+    <th style="min-width:80px">Date</th>
+    <th>ROI</th><th>Action</th>
+  </tr></thead>`;
 
-    const actions = isOpen
-      ? `<button class="calls-btn win-btn"    onclick="closeTrade('${t.id}','win')">✓</button>`
-        + `<button class="calls-btn loss-btn"   onclick="closeTrade('${t.id}','loss')">✗</button>`
-        + `<button class="calls-btn cancel-btn" onclick="closeTrade('${t.id}','cancelled')">—</button>`
-      : `<span style="color:${stColor};font-size:11px;text-transform:uppercase">${t.status}</span>`;
+  function buildTradeRows(list, idxOffset) {
+    return list.map((t, i) => {
+      const idx        = i + idxOffset;
+      const sym        = t.symbol.replace('USDT', '');
+      const dirColor   = t.direction === 'SHORT' ? '#f85149' : '#3fb950';
+      const dirArrow   = t.direction === 'SHORT' ? '▼' : '▲';
+      const stColor    = {open:'#d29922',win:'#3fb950',loss:'#f85149',cancelled:'#484f58'}[t.status] || '#8b949e';
+      const scoreColor = t.score >= 9 ? '#3fb950' : t.score >= 7 ? '#d29922' : '#8b949e';
+      const roiStr     = t.roi_pct !== null ? (t.roi_pct >= 0 ? '+' : '') + t.roi_pct + '%' : '—';
+      const roiColor   = t.roi_pct !== null ? (t.roi_pct >= 0 ? '#3fb950' : '#f85149') : '#8b949e';
+      const isOpen     = t.status === 'open';
+      const dt         = t.opened_at ? new Date(t.opened_at) : null;
+      const dtStr      = dt
+        ? dt.toLocaleDateString([], {month:'short',day:'numeric'}) + ' ' + dt.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})
+        : '—';
+      const ptaId      = `asf-pta-${idx}`;
+      const pta        = t.post_trade_analysis;
+      const rr         = calcRR(t.entry, t.tp, t.sl, t.direction);
+      const riskClass  = rr.lossPct > 20 ? 'risk-high' : rr.lossPct > 10 ? 'risk-mid' : 'risk-low';
 
-    // Factor chips from signal snapshot
-    const snap    = t.factors_snapshot || {};
-    const chips   = Object.entries(snap).map(([f, v]) =>
-      `<span class="pta-chip ${v ? 'on' : 'off'}">${f}</span>`
-    ).join('');
+      const actions = isOpen
+        ? `<button class="calls-btn win-btn"    onclick="event.stopPropagation();closeTrade('${t.id}','win')">✓</button>`
+          + `<button class="calls-btn loss-btn"   onclick="event.stopPropagation();closeTrade('${t.id}','loss')">✗</button>`
+          + `<button class="calls-btn cancel-btn" onclick="event.stopPropagation();closeTrade('${t.id}','cancelled')">—</button>`
+        : `<span style="color:${stColor};font-size:11px;text-transform:uppercase">${t.status}</span>`;
 
-    // Always-visible reason row — includes dollar P&L
-    const reason      = t.reason || '';
-    const targetBasis = t.target_basis ? `<span style="color:#484f58"> · TP: ${t.target_basis}</span>` : '';
-    const reasonRow = `<tr class="asf-reason-row${isOpen ? ' asf-row-open' : ''}">
-      <td colspan="11">
-        <div class="asf-reason-inner">
-          ${reason ? `<span class="asf-reason-text">${reason}</span>${targetBasis}` : '<span style="color:#484f58;font-style:italic">No reason recorded</span>'}
-          <span style="color:#484f58;margin:0 4px">·</span>
-          <span style="color:#3fb950;font-size:11px">Win: +$${rr.dollarGain.toLocaleString()}</span>
-          <span style="color:#484f58">/</span>
-          <span style="color:#f85149;font-size:11px">Loss: -$${rr.dollarLoss.toLocaleString()}</span>
-          <span style="font-size:10px;color:#484f58">(at $${tradeSize.toLocaleString()})</span>
-          ${chips ? `<span class="asf-reason-chips">${chips}</span>` : ''}
-          ${pta ? `<span class="analysis-toggle" style="margin-left:8px" onclick="togglePTA('${ptaId}')">▸ Post-trade analysis</span>` : ''}
-        </div>
-      </td>
-    </tr>`;
+      const snap   = t.factors_snapshot || {};
+      const chips  = Object.entries(snap).map(([f,v]) => `<span class="pta-chip ${v?'on':'off'}">${f}</span>`).join('');
+      const reason = t.reason || '';
+      const tbasis = t.target_basis ? ` · <span style="color:#484f58">TP: ${t.target_basis}</span>` : '';
 
-    const mainRow = `<tr class="${isOpen ? 'asf-row-open' : ''}">
-      <td><b style="color:#e6edf3">${sym}</b></td>
-      <td style="color:#8b949e">${t.interval.toUpperCase()}</td>
-      <td style="color:${dirColor};font-weight:700">${t.direction}</td>
-      <td>$${fmt(t.entry)}</td>
-      <td><span style="color:#3fb950;font-weight:600">$${fmt(t.tp)}</span><span class="pct-gain">+${rr.gainPct}%</span></td>
-      <td><span style="color:#f85149;font-weight:600">$${fmt(t.sl)}</span><span class="pct-loss">-${rr.lossPct}%</span></td>
-      <td><span class="rr-badge ${rr.rrClass}">${rr.rr}:1</span></td>
-      <td style="color:${scoreColor}">${t.score}/10</td>
-      <td style="color:#8b949e;font-size:10px">${dtStr}</td>
-      <td style="color:${roiColor};font-weight:700">${roiStr}</td>
-      <td>${actions}</td>
-    </tr>`;
+      const mainRow = `<tr class="trade-row-clickable ${isOpen ? 'asf-row-open' : ''}"
+          onclick="openTradeChart('${t.symbol}','${t.interval}')">
+        <td>
+          <span style="font-weight:700;color:#e6edf3">${sym}</span>
+          <span style="font-size:10px;color:#484f58;margin-left:2px">↗</span>
+        </td>
+        <td><span style="background:#21262d;border-radius:3px;padding:1px 5px;font-size:11px;color:#8b949e">${t.interval.toUpperCase()}</span></td>
+        <td><span style="color:${dirColor};font-weight:700">${dirArrow} ${t.direction}</span></td>
+        <td style="font-weight:600">$${fmt(t.entry)}</td>
+        <td>
+          <span style="color:#3fb950;font-weight:600">$${fmt(t.tp)}</span>
+          <span class="pct-gain">+${rr.gainPct}%</span>
+        </td>
+        <td>
+          <span style="color:#f85149;font-weight:600">$${fmt(t.sl)}</span>
+          <span class="pct-loss">-${rr.lossPct}%</span>
+        </td>
+        <td><span class="${riskClass}">${rr.lossPct}%</span></td>
+        <td><span class="rr-badge ${rr.rrClass}">${rr.rr}:1</span></td>
+        <td style="color:${scoreColor}">${t.score}/10</td>
+        <td style="color:#8b949e;font-size:10px;white-space:nowrap">${dtStr}</td>
+        <td style="color:${roiColor};font-weight:700">${roiStr}</td>
+        <td onclick="event.stopPropagation()">${actions}</td>
+      </tr>`;
 
-    if (!pta) return mainRow + reasonRow;
+      const reasonRow = `<tr class="${isOpen ? 'asf-row-open' : ''}" style="cursor:default">
+        <td colspan="12" style="padding:0 8px 6px !important;border-bottom:1px solid #21262d">
+          <div style="display:flex;align-items:center;flex-wrap:wrap;gap:5px;font-size:11px;color:#8b949e;padding:2px 0">
+            ${reason ? `<span style="color:#c9d1d9">${reason}</span>${tbasis}` : '<span style="color:#484f58;font-style:italic">No reason recorded</span>'}
+            <span style="color:#484f58;margin:0 2px">·</span>
+            <span style="color:#3fb950">+$${rr.dollarGain.toLocaleString()}</span>
+            <span style="color:#484f58">/</span>
+            <span style="color:#f85149">-$${rr.dollarLoss.toLocaleString()}</span>
+            <span style="color:#484f58;font-size:10px">@$${tradeSize.toLocaleString()}</span>
+            ${chips ? `<span style="display:flex;gap:3px;flex-wrap:wrap;margin-left:4px">${chips}</span>` : ''}
+            ${pta ? `<span class="analysis-toggle" style="margin-left:6px" onclick="event.stopPropagation();togglePTA('${ptaId}')">▸ Post-trade</span>` : ''}
+          </div>
+        </td>
+      </tr>`;
 
-    const ptaClass = pta.status === 'win' ? 'win' : pta.status === 'loss' ? 'loss' : '';
-    const present  = (pta.factors_present||[]).map(f=>`<span class="pta-chip on">${f}</span>`).join('');
-    const absent   = (pta.factors_absent ||[]).map(f=>`<span class="pta-chip off">${f}</span>`).join('');
+      if (!pta) return mainRow + reasonRow;
 
-    const ptaRow = `<tr id="${ptaId}" class="pta-row" style="display:none">
-      <td colspan="10">
-        <div class="pta-inner ${ptaClass}">
-          <div class="pta-summary">${pta.summary||''}</div>
-          ${pta.detail ? `<div class="pta-detail">${pta.detail}</div>` : ''}
-          ${pta.key_lesson ? `<div class="pta-lesson">Key lesson: ${pta.key_lesson}</div>` : ''}
-          <div class="pta-chips">${present}${absent}</div>
-        </div>
-      </td>
-    </tr>`;
+      const ptaClass = pta.status === 'win' ? 'win' : pta.status === 'loss' ? 'loss' : '';
+      const present  = (pta.factors_present||[]).map(f=>`<span class="pta-chip on">${f}</span>`).join('');
+      const absent   = (pta.factors_absent ||[]).map(f=>`<span class="pta-chip off">${f}</span>`).join('');
+      const ptaRow = `<tr id="${ptaId}" class="pta-row" style="display:none">
+        <td colspan="12">
+          <div class="pta-inner ${ptaClass}">
+            <div class="pta-summary">${pta.summary||''}</div>
+            ${pta.detail ? `<div class="pta-detail">${pta.detail}</div>` : ''}
+            ${pta.key_lesson ? `<div class="pta-lesson">Key lesson: ${pta.key_lesson}</div>` : ''}
+            <div class="pta-chips">${present}${absent}</div>
+          </div>
+        </td>
+      </tr>`;
+      return mainRow + reasonRow + ptaRow;
+    }).join('');
+  }
 
-    return mainRow + reasonRow + ptaRow;
-  }).join('');
+  let sectionsHtml = '';
 
-  el.innerHTML = statsHtml + `<div style="overflow-x:auto">
-    <table class="calls-table">
-      <thead><tr>
-        <th>Symbol</th><th>TF</th><th>Dir</th><th>Entry</th>
-        <th>TP (+%)</th><th>SL (-%)</th><th>R:R</th><th>Score</th><th>Date</th><th>ROI</th><th>Action</th>
-      </tr></thead>
-      <tbody>${rows}</tbody>
-    </table>
-  </div>`;
+  // ── Open trades section ────────────────────────────────────────────────────
+  if (openTrades.length > 0) {
+    sectionsHtml += `
+      <div class="trade-group-hdr" style="color:#d29922">
+        <span class="asf-open-dot"></span>
+        Open Signals (${openTrades.length}) — click any row to open chart
+      </div>
+      <div style="overflow-x:auto;margin-bottom:14px">
+        <table class="calls-table">
+          ${TABLE_HDR}
+          <tbody>${buildTradeRows(openTrades, 0)}</tbody>
+        </table>
+      </div>`;
+  }
+
+  // ── Closed trades section (collapsible) ───────────────────────────────────
+  if (closedTrades.length > 0 && allSignalsFilter === 'all') {
+    sectionsHtml += `
+      <div class="trade-group-hdr trade-group-closed" onclick="toggleClosedTrades()">
+        <span id="closed-trades-arrow">▶</span>
+        Closed History (${closedTrades.length})
+        <span style="font-size:10px;font-weight:400;color:#484f58">click to expand</span>
+      </div>
+      <div id="closed-trades-section" style="display:none;overflow-x:auto">
+        <table class="calls-table">
+          ${TABLE_HDR}
+          <tbody>${buildTradeRows(closedTrades, openTrades.length)}</tbody>
+        </table>
+      </div>`;
+  } else if (closedTrades.length > 0) {
+    sectionsHtml += `<div style="overflow-x:auto">
+      <table class="calls-table">${TABLE_HDR}
+        <tbody>${buildTradeRows(closedTrades, 0)}</tbody>
+      </table></div>`;
+  }
+
+  el.innerHTML = statsHtml + sectionsHtml;
 }
 
-// SIGNAL CALLS LOG
 // ═══════════════════════════════════════════════════════
 async function fetchTrades() {
   try {
-    const resp   = await fetch('/api/trades');
-    const trades = await resp.json();
-    renderTrades(trades);
-    // Keep global feed in sync (same endpoint, reuse data)
-    allSignalsData = trades;
+    const resp = await fetch('/api/trades');
+    allSignalsData = await resp.json();
     renderAllSignals();
   } catch(e) { /* silent — non-critical */ }
   fetchLearning();
@@ -2328,111 +2424,6 @@ async function closeTrade(id, status) {
     });
     fetchTrades();       // refreshes per-symbol card + global feed + learning
   } catch(e) { showError('Close trade failed: ' + e.message); }
-}
-
-function renderTrades(trades) {
-  const el = document.getElementById('card-calls');
-  if (!el) return;
-  if (!trades || trades.length === 0) {
-    el.innerHTML = '<span class="text-dim" style="font-size:13px">No signals logged yet. '
-      + 'Signals fire when confluence score ≥ threshold and a BOS is confirmed.</span>';
-    return;
-  }
-
-  const total  = trades.length;
-  const open   = trades.filter(t => t.status === 'open').length;
-  const wins   = trades.filter(t => t.status === 'win').length;
-  const losses = trades.filter(t => t.status === 'loss').length;
-  const closed = wins + losses;
-  const wrPct  = closed > 0 ? Math.round(wins / closed * 100) : null;
-  const wrColor= wrPct !== null ? (wrPct >= 50 ? '#3fb950' : '#f85149') : '#8b949e';
-  const wonRois= trades.filter(t => t.status === 'win' && t.roi_pct !== null).map(t => t.roi_pct);
-  const avgRoi = wonRois.length > 0
-    ? (wonRois.reduce((a,b) => a+b, 0) / wonRois.length).toFixed(1) + '%'
-    : '—';
-  const allRois= trades.filter(t => t.roi_pct !== null).map(t => t.roi_pct);
-  const totalRoi = allRois.length > 0
-    ? (allRois.reduce((a,b) => a+b, 0)).toFixed(1) + '%'
-    : '—';
-
-  const statsHtml = `
-    <div class="calls-stats-bar">
-      <span><span class="text-dim">Total:</span> <b>${total}</b></span>
-      <span><span class="text-dim">Open:</span> <b style="color:#d29922">${open}</b></span>
-      <span><span class="text-dim">Won:</span> <b style="color:#3fb950">${wins}</b></span>
-      <span><span class="text-dim">Lost:</span> <b style="color:#f85149">${losses}</b></span>
-      <span><span class="text-dim">Win Rate:</span> <b style="color:${wrColor}">${wrPct !== null ? wrPct + '%' : '—'}</b></span>
-      <span><span class="text-dim">Avg ROI (wins):</span> <b style="color:#3fb950">${avgRoi !== '—' ? '+' + avgRoi : '—'}</b></span>
-      <span><span class="text-dim">Total P&amp;L:</span> <b style="color:${totalRoi !== '—' && parseFloat(totalRoi) >= 0 ? '#3fb950' : '#f85149'}">${totalRoi !== '—' ? (parseFloat(totalRoi) >= 0 ? '+' : '') + totalRoi : '—'}</b></span>
-    </div>`;
-
-  const rows = trades.map((t, idx) => {
-    const sym      = t.symbol.replace('USDT','');
-    const isShort  = t.direction === 'SHORT';
-    const dirColor = isShort ? '#f85149' : '#3fb950';
-    const stColor  = {open:'#d29922', win:'#3fb950', loss:'#f85149', cancelled:'#484f58'}[t.status] || '#8b949e';
-    const roiStr   = t.roi_pct !== null ? (t.roi_pct >= 0 ? '+' : '') + t.roi_pct + '%' : '—';
-    const roiColor = t.roi_pct !== null ? (t.roi_pct >= 0 ? '#3fb950' : '#f85149') : '#8b949e';
-    const dt       = t.opened_at ? new Date(t.opened_at) : null;
-    const dtStr    = dt ? dt.toLocaleDateString() + ' '
-      + dt.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '—';
-    const scoreColor = t.score >= 9 ? '#3fb950' : t.score >= 7 ? '#d29922' : '#8b949e';
-    const pta        = t.post_trade_analysis;
-    const ptaId      = `pta-${idx}`;
-
-    const actions = t.status === 'open'
-      ? `<button class="calls-btn win-btn"    onclick="closeTrade('${t.id}','win')">✓ Won</button>`
-        + `<button class="calls-btn loss-btn"   onclick="closeTrade('${t.id}','loss')">✗ Lost</button>`
-        + `<button class="calls-btn cancel-btn" onclick="closeTrade('${t.id}','cancelled')">— Cancel</button>`
-      : `<span style="color:${stColor};font-size:11px;text-transform:uppercase">${t.status}</span>`;
-
-    const analysisToggle = pta
-      ? `<span class="analysis-toggle" onclick="togglePTA('${ptaId}')">▸ Analysis</span>`
-      : '';
-
-    const mainRow = `<tr>
-      <td><b>${sym}</b></td>
-      <td style="color:#8b949e">${t.interval.toUpperCase()}</td>
-      <td style="color:${dirColor};font-weight:700">${t.direction}</td>
-      <td>$${fmt(t.entry)}</td>
-      <td style="color:#3fb950">$${fmt(t.tp)}</td>
-      <td style="color:#f85149">$${fmt(t.sl)}</td>
-      <td style="color:${scoreColor}">${t.score}/10</td>
-      <td style="color:#8b949e;font-size:10px">${dtStr}</td>
-      <td style="color:${roiColor};font-weight:700">${roiStr}</td>
-      <td>${actions} ${analysisToggle}</td>
-    </tr>`;
-
-    if (!pta) return mainRow;
-
-    const ptaClass = pta.status === 'win' ? 'win' : pta.status === 'loss' ? 'loss' : '';
-    const present = (pta.factors_present || []).map(f => `<span class="pta-chip on">${f}</span>`).join('');
-    const absent  = (pta.factors_absent  || []).map(f => `<span class="pta-chip off">${f}</span>`).join('');
-
-    const ptaRow = `<tr id="${ptaId}" class="pta-row" style="display:none">
-      <td colspan="10">
-        <div class="pta-inner ${ptaClass}">
-          <div class="pta-summary">${pta.summary || ''}</div>
-          ${pta.detail ? `<div class="pta-detail">${pta.detail}</div>` : ''}
-          ${pta.key_lesson ? `<div class="pta-lesson">Key lesson: ${pta.key_lesson}</div>` : ''}
-          <div class="pta-chips">${present}${absent}</div>
-        </div>
-      </td>
-    </tr>`;
-
-    return mainRow + ptaRow;
-  }).join('');
-
-  el.innerHTML = statsHtml + `
-    <div style="overflow-x:auto">
-      <table class="calls-table">
-        <thead><tr>
-          <th>Symbol</th><th>TF</th><th>Dir</th><th>Entry</th>
-          <th>TP</th><th>SL</th><th>Score</th><th>Opened</th><th>ROI</th><th>Action</th>
-        </tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>`;
 }
 
 function togglePTA(id) {

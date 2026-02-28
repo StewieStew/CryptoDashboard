@@ -502,7 +502,22 @@ def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
 
     risk_d   = abs(cur - inval)
     reward_d = abs(target - cur)
-    rr       = round(reward_d / risk_d, 2) if risk_d > 0 else 0
+
+    # ── Cap stop loss at 25% of entry price ──────────────────────────────────
+    MAX_RISK_PCT = 0.25
+    if risk_d > 0 and (risk_d / cur) > MAX_RISK_PCT and bias != "Neutral":
+        risk_d = cur * MAX_RISK_PCT
+        if bias == "Long":
+            inval = round(cur - risk_d, 6)
+            inval_note = (f"Stop tightened to 25% max risk at ${inval:,.4f} — "
+                          f"structural stop exceeded maximum allowed risk")
+        else:
+            inval = round(cur + risk_d, 6)
+            inval_note = (f"Stop tightened to 25% max risk at ${inval:,.4f} — "
+                          f"structural stop exceeded maximum allowed risk")
+        reward_d = abs(target - cur)
+
+    rr = round(reward_d / risk_d, 2) if risk_d > 0 else 0
 
     # ── Enforce minimum 2:1 R:R — project target further if structural level is too close ──
     if risk_d > 0 and rr < 2.0 and bias != "Neutral":
