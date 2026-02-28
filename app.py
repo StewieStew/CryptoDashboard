@@ -19,11 +19,71 @@ _chart_cache = {}
 _clk         = threading.Lock()
 CHART_TTL    = 120   # 2-min chart cache
 
-VALID_INTERVALS = ["15m", "30m", "1h", "4h", "1d", "1w"]
+VALID_INTERVALS  = ["15m", "30m", "1h", "4h", "1d", "1w"]
+DEFAULT_SYMBOLS  = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "DOGEUSDT"]
 
-DEFAULT_SYMBOLS = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "DOGEUSDT"]
+# Intervals the background scanner checks automatically
+SCAN_INTERVALS   = ["1h", "4h", "1d"]
+
+# Grows as users view additional coins — persists for the life of the server process
+_known_symbols   = set(DEFAULT_SYMBOLS)
 
 
+# ── Shared signal-logging helper ─────────────────────────────────────────────
+def _log_signal_from_data(data: dict, sym: str, interval: str) -> None:
+    """Log a signal + auto-close trades based on current price."""
+    sig = data.get("signal")
+    if sig:
+        trade_id = f"{sym}_{interval}_{sig['direction']}_{int(time.time())}"
+        learning.log_trade({
+            "id":               trade_id,
+            "symbol":           sym,
+            "interval":         interval,
+            "direction":        sig["direction"],
+            "entry":            sig["entry"],
+            "tp":               sig["target"],
+            "sl":               sig["stop"],
+            "score":            sig["score"],
+            "effective_score":  sig["score"],
+            "reason":           sig.get("reason", ""),
+            "factors_snapshot": sig.get("factors_snapshot", {}),
+            "target_basis":     sig.get("target_basis", ""),
+            "opened_at":        datetime.now(timezone.utc).isoformat(),
+        })
+    cur_price = data.get("current_price", 0)
+    if cur_price:
+        learning.auto_close(sym, interval, float(cur_price))
+
+
+# ── Background scanner ────────────────────────────────────────────────────────
+def _background_scanner() -> None:
+    """
+    Runs forever in a daemon thread.
+    Every 5 minutes scans all known symbols × SCAN_INTERVALS for new signals
+    and auto-closes trades — no user interaction required.
+    """
+    time.sleep(30)          # let gunicorn fully start before the first scan
+    while True:
+        syms = list(_known_symbols)
+        for sym in syms:
+            for interval in SCAN_INTERVALS:
+                try:
+                    data = full_analysis(sym, interval)
+                    now  = time.time()
+                    data["cache_age"] = 0
+                    with _lock:
+                        _cache[f"{sym}_{interval}"] = (data, now)
+                    _log_signal_from_data(data, sym, interval)
+                except Exception:
+                    pass
+                time.sleep(2)   # small gap — respect Binance rate limits
+        time.sleep(300)         # wait 5 min before the next full sweep
+
+
+threading.Thread(target=_background_scanner, daemon=True).start()
+
+
+# ── Analysis cache ────────────────────────────────────────────────────────────
 def cached_analysis(symbol: str, interval: str = "4h") -> dict:
     key = f"{symbol}_{interval}"
     now = time.time()
@@ -39,6 +99,7 @@ def cached_analysis(symbol: str, interval: str = "4h") -> dict:
     return data
 
 
+# ── Routes ────────────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -52,35 +113,12 @@ def analysis(symbol: str, interval: str = "4h"):
         sym += "USDT"
     if interval not in VALID_INTERVALS:
         interval = "4h"
+    _known_symbols.add(sym)     # register so the scanner picks it up too
     try:
         data = cached_analysis(sym, interval)
         if "error" in data:
             return jsonify(data), 400
-
-        # Log new signal to SQLite and auto-close existing trades
-        sig = data.get("signal")
-        if sig:
-            trade_id = f"{sym}_{interval}_{sig['direction']}_{int(time.time())}"
-            learning.log_trade({
-                "id":               trade_id,
-                "symbol":           sym,
-                "interval":         interval,
-                "direction":        sig["direction"],
-                "entry":            sig["entry"],
-                "tp":               sig["target"],
-                "sl":               sig["stop"],
-                "score":            sig["score"],
-                "effective_score":  sig["score"],
-                "reason":           sig.get("reason", ""),
-                "factors_snapshot": sig.get("factors_snapshot", {}),
-                "target_basis":     sig.get("target_basis", ""),
-                "opened_at":        datetime.now(timezone.utc).isoformat(),
-            })
-
-        cur_price = data.get("current_price", 0)
-        if cur_price:
-            learning.auto_close(sym, interval, float(cur_price))
-
+        _log_signal_from_data(data, sym, interval)
         return jsonify(data)
     except Exception as e:
         return jsonify({"error": str(e), "symbol": sym}), 500
@@ -95,9 +133,8 @@ def refresh(symbol: str, interval: str = "4h"):
         sym += "USDT"
     if interval not in VALID_INTERVALS:
         interval = "4h"
-    key = f"{sym}_{interval}"
     with _lock:
-        _cache.pop(key, None)
+        _cache.pop(f"{sym}_{interval}", None)
     return analysis(sym.replace("USDT", ""), interval)
 
 
@@ -134,8 +171,6 @@ def close_trade(trade_id):
     price  = body.get("price")
     if status not in ("win", "loss", "cancelled"):
         return jsonify({"error": "status must be win, loss, or cancelled"}), 400
-
-    # For cancelled we still need a close price — fall back to 0 (learning handles it)
     try:
         close_px = float(price) if price else 0.0
         result   = learning.close_trade(trade_id, close_px, status)

@@ -239,6 +239,15 @@
     .asf-filter-btn:hover  { border-color: var(--blue); color: var(--blue); }
     .asf-filter-btn.active { border-color: var(--blue); color: var(--blue); background: #1a2535; }
     .asf-row-open td { background: rgba(210,153,34,.06); }
+    /* Always-visible reason sub-row */
+    .asf-reason-row td { padding: 0 8px 6px !important; border-bottom: 1px solid #21262d; }
+    .asf-reason-inner {
+      display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+      font-size: 11px; color: #8b949e; padding: 2px 0;
+    }
+    .asf-reason-text  { color: #c9d1d9; }
+    .asf-reason-chips { display: flex; gap: 3px; flex-wrap: wrap; }
+
     .asf-toggle-btn {
       background: none; border: 1px solid var(--border); color: #8b949e;
       border-radius: 4px; padding: 2px 8px; font-size: 11px; cursor: pointer;
@@ -2121,9 +2130,24 @@ function renderAllSignals() {
         + `<button class="calls-btn cancel-btn" onclick="closeTrade('${t.id}','cancelled')">—</button>`
       : `<span style="color:${stColor};font-size:11px;text-transform:uppercase">${t.status}</span>`;
 
-    const toggle = pta
-      ? `<span class="analysis-toggle" onclick="togglePTA('${ptaId}')">▸</span>`
-      : '';
+    // Factor chips from signal snapshot
+    const snap    = t.factors_snapshot || {};
+    const chips   = Object.entries(snap).map(([f, v]) =>
+      `<span class="pta-chip ${v ? 'on' : 'off'}">${f}</span>`
+    ).join('');
+
+    // Always-visible reason row
+    const reason      = t.reason || '';
+    const targetBasis = t.target_basis ? `<span style="color:#484f58"> · TP: ${t.target_basis}</span>` : '';
+    const reasonRow = `<tr class="asf-reason-row${isOpen ? ' asf-row-open' : ''}">
+      <td colspan="10">
+        <div class="asf-reason-inner">
+          ${reason ? `<span class="asf-reason-text">${reason}</span>${targetBasis}` : '<span style="color:#484f58;font-style:italic">No reason recorded</span>'}
+          ${chips ? `<span class="asf-reason-chips">${chips}</span>` : ''}
+          ${pta ? `<span class="analysis-toggle" style="margin-left:8px" onclick="togglePTA('${ptaId}')">▸ Post-trade analysis</span>` : ''}
+        </div>
+      </td>
+    </tr>`;
 
     const mainRow = `<tr class="${isOpen ? 'asf-row-open' : ''}">
       <td><b style="color:#e6edf3">${sym}</b></td>
@@ -2135,16 +2159,16 @@ function renderAllSignals() {
       <td style="color:${scoreColor}">${t.score}/10</td>
       <td style="color:#8b949e;font-size:10px">${dtStr}</td>
       <td style="color:${roiColor};font-weight:700">${roiStr}</td>
-      <td>${actions} ${toggle}</td>
+      <td>${actions}</td>
     </tr>`;
 
-    if (!pta) return mainRow;
+    if (!pta) return mainRow + reasonRow;
 
     const ptaClass = pta.status === 'win' ? 'win' : pta.status === 'loss' ? 'loss' : '';
-    const present = (pta.factors_present||[]).map(f=>`<span class="pta-chip on">${f}</span>`).join('');
-    const absent  = (pta.factors_absent ||[]).map(f=>`<span class="pta-chip off">${f}</span>`).join('');
+    const present  = (pta.factors_present||[]).map(f=>`<span class="pta-chip on">${f}</span>`).join('');
+    const absent   = (pta.factors_absent ||[]).map(f=>`<span class="pta-chip off">${f}</span>`).join('');
 
-    return mainRow + `<tr id="${ptaId}" class="pta-row" style="display:none">
+    const ptaRow = `<tr id="${ptaId}" class="pta-row" style="display:none">
       <td colspan="10">
         <div class="pta-inner ${ptaClass}">
           <div class="pta-summary">${pta.summary||''}</div>
@@ -2154,6 +2178,8 @@ function renderAllSignals() {
         </div>
       </td>
     </tr>`;
+
+    return mainRow + reasonRow + ptaRow;
   }).join('');
 
   el.innerHTML = statsHtml + `<div style="overflow-x:auto">
