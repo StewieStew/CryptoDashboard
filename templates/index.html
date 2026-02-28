@@ -1536,8 +1536,6 @@ function renderSignal(sig) {
   const isLong  = sig.direction === 'LONG';
   const color   = isLong ? '#3fb950' : '#f85149';
   const arrow   = isLong ? '▲' : '▼';
-  const rrColor = sig.favorable ? '#3fb950' : '#d29922';
-
   const rr      = calcRR(sig.entry, sig.target, sig.stop, sig.direction);
   const rrColor = rr.rr >= 2 ? '#3fb950' : rr.rr >= 1.5 ? '#d29922' : '#f85149';
 
