@@ -289,7 +289,8 @@ def market_regime(daily_df: pd.DataFrame) -> dict:
 # CONFLUENCE SCORE
 # ─────────────────────────────────────────────
 
-def confluence_score(regime, structure, vol, rsi_data, sweeps, fib) -> dict:
+def confluence_score(regime, structure, vol, rsi_data, sweeps, fib,
+                     interval: str = "4h") -> dict:
     score   = 0
     reasons = []
 
@@ -303,16 +304,17 @@ def confluence_score(regime, structure, vol, rsi_data, sweeps, fib) -> dict:
         reasons.append({"pts": 0, "earned": False,
                         "text": f"Regime is '{regime['regime']}' — no directional trend to align"})
 
-    # 2. Clear BOS on 4H (2 pts)
+    # 2. Clear BOS (2 pts)
+    tf = interval.upper()
     bos = structure and (structure["bullish_bos"] or structure["bearish_bos"])
     if bos:
         score += 2
         d = "Bullish" if structure["bullish_bos"] else "Bearish"
         reasons.append({"pts": 2, "earned": True,
-                        "text": f"{d} Break of Structure confirmed on 4H — price outside last swing"})
+                        "text": f"{d} Break of Structure confirmed on {tf} — price outside last swing"})
     else:
         reasons.append({"pts": 0, "earned": False,
-                        "text": "No confirmed Break of Structure on 4H — price inside structure"})
+                        "text": f"No confirmed Break of Structure on {tf} — price inside structure"})
 
     # 3. Liquidity sweep (2 pts)
     if sweeps:
@@ -394,17 +396,27 @@ def confluence_score(regime, structure, vol, rsi_data, sweeps, fib) -> dict:
 # RISK CONTEXT
 # ─────────────────────────────────────────────
 
-def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows) -> dict:
-    cur = float(df["close"].iloc[-1])
+def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
+                 interval: str = "4h") -> dict:
+    cur     = float(df["close"].iloc[-1])
+    atr_val = float(atr(df).iloc[-1])
 
     if structure and structure["bullish_bos"]:
-        inval  = structure["last_swing_low"]  or cur * 0.95
-        target = structure["last_swing_high"] or cur * 1.10
-        bias   = "Long"
+        # Stop: last swing low below entry (wide structural stop)
+        inval  = structure["last_swing_low"] or (cur - 2.0 * atr_val)
+        # Target: MUST be above entry — use prev swing high, fallback to +2 ATR
+        prev_sh = structure.get("prev_swing_high")
+        target  = prev_sh if (prev_sh and prev_sh > cur) else round(cur + 2.0 * atr_val, 6)
+        bias    = "Long"
+
     elif structure and structure["bearish_bos"]:
-        inval  = structure["last_swing_high"] or cur * 1.05
-        target = structure["last_swing_low"]  or cur * 0.90
-        bias   = "Short"
+        # Stop: last swing high above entry (wide structural stop)
+        inval  = structure["last_swing_high"] or (cur + 2.0 * atr_val)
+        # Target: MUST be below entry — use prev swing low, fallback to -2 ATR
+        prev_sl = structure.get("prev_swing_low")
+        target  = prev_sl if (prev_sl and prev_sl < cur) else round(cur - 2.0 * atr_val, 6)
+        bias    = "Short"
+
     else:
         inval  = swing_lows[-1][1]  if swing_lows  else cur * 0.95
         target = swing_highs[-1][1] if swing_highs else cur * 1.05
@@ -414,8 +426,10 @@ def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows) -> dict:
     reward_d = abs(target - cur)
     rr       = round(reward_d / risk_d, 2) if risk_d > 0 else 0
 
+    inval_dir  = "below" if bias == "Long" else "above"
+    inval_swing = "low" if bias == "Long" else "high"
     invalidation_note = (
-        f"4H close {'below' if bias == 'Long' else 'above'} ${inval:,.2f} (last swing {'low' if bias == 'Long' else 'high'})"
+        f"{interval.upper()} close {inval_dir} ${inval:,.2f} (last swing {inval_swing})"
     )
 
     return dict(
@@ -510,7 +524,8 @@ def generate_signal(confluence: dict, structure, risk: dict, h4_df) -> dict | No
 # ─────────────────────────────────────────────
 
 def price_prediction(h4_df: pd.DataFrame, risk: dict, confluence: dict,
-                     volatility: dict, regime: dict, swing_highs, swing_lows) -> dict:
+                     volatility: dict, regime: dict, swing_highs, swing_lows,
+                     interval: str = "4h") -> dict:
     """Near-term (ATR-based) and swing (structure-based) price targets with scenarios."""
     cur         = float(h4_df["close"].iloc[-1])
     h4_atr_val  = float(atr(h4_df).iloc[-1])
@@ -570,17 +585,18 @@ def price_prediction(h4_df: pd.DataFrame, risk: dict, confluence: dict,
     atr_state = "expanding" if volatility["expanding"] else "compressing"
     near_target = near_bull if bias == "Long" else near_bear if bias == "Short" else None
 
+    tf = interval.upper()
     parts = [
-        f"Price is trading {trend_dir} the daily 200 EMA in a '{regime['regime']}' environment.",
-        f"4H ATR is {atr_state} at ${h4_atr_val:,.2f}.",
+        f"Price is trading {trend_dir} the {risk.get('htf', 'daily').upper()} 200 EMA in a '{regime['regime']}' environment.",
+        f"{tf} ATR is {atr_state} at ${h4_atr_val:,.2f}.",
     ]
     if bias in ("Long", "Short"):
         dir_word = "resistance" if bias == "Long" else "support"
         parts.append(
-            f"Near-term target: ${near_target:,.2f} (1.5\u00d7ATR, achievable in 1-3 four-hour bars)."
+            f"Near-term target: ${near_target:,.2f} (1.5\u00d7ATR from entry)."
         )
         parts.append(
-            f"Swing target: ${risk['target']:,.2f} — the last structural {dir_word}."
+            f"Swing target: ${risk['target']:,.2f} — next structural {dir_word}."
         )
         if extended_target:
             parts.append(
@@ -588,7 +604,7 @@ def price_prediction(h4_df: pd.DataFrame, risk: dict, confluence: dict,
             )
         inval_dir = "below" if bias == "Long" else "above"
         parts.append(
-            f"Setup invalidated on a 4H close {inval_dir} ${risk['invalidation']:,.2f}."
+            f"Setup invalidated on a {tf} close {inval_dir} ${risk['invalidation']:,.2f}."
         )
     else:
         parts.append(
@@ -719,16 +735,16 @@ def full_analysis(symbol: str, interval: str = "4h") -> dict:
     )
 
     # Section 6: Confluence
-    confluence = confluence_score(regime, structure, vol, rsi_data, sweeps, fib)
+    confluence = confluence_score(regime, structure, vol, rsi_data, sweeps, fib, interval)
 
     # Section 7: Risk
-    risk = risk_context(df, structure, sh, sl)
+    risk = risk_context(df, structure, sh, sl, interval)
 
     # Signal (score >= 7 + BOS)
     signal = generate_signal(confluence, structure, risk, df)
 
     # Price Prediction
-    prediction = price_prediction(df, risk, confluence, volatility, regime, sh, sl)
+    prediction = price_prediction(df, risk, confluence, volatility, regime, sh, sl, interval)
 
     # Channel detection
     channels = channel_analysis(df, sh, sl)
