@@ -83,6 +83,28 @@ def obv(df: pd.DataFrame) -> pd.Series:
     return (sign * df["volume"]).cumsum()
 
 
+def macd(series: pd.Series, fast: int = 12, slow: int = 26, signal_p: int = 9):
+    """MACD line, signal line, and histogram as aligned Series."""
+    macd_line   = ema(series, fast) - ema(series, slow)
+    signal_line = ema(macd_line, signal_p)
+    histogram   = macd_line - signal_line
+    return macd_line, signal_line, histogram
+
+
+def obv_swing_levels(obv_s: pd.Series, n: int = 5) -> tuple:
+    """Detect recent OBV swing highs/lows for S/R visualization on the OBV chart."""
+    vals  = obv_s.values
+    times = obv_s.index
+    highs, lows = [], []
+    for i in range(n, len(vals) - n):
+        w = vals[i - n: i + n + 1]
+        if vals[i] >= max(w) - 1e-9:
+            highs.append([int(times[i].timestamp()), round(float(vals[i]), 2)])
+        if vals[i] <= min(w) + 1e-9:
+            lows.append([int(times[i].timestamp()), round(float(vals[i]), 2)])
+    return highs[-4:], lows[-4:]
+
+
 # ─────────────────────────────────────────────
 # SWING DETECTION
 # ─────────────────────────────────────────────
@@ -259,6 +281,24 @@ def rsi_analysis(df: pd.DataFrame) -> dict:
     )
 
 
+def macd_analysis(df: pd.DataFrame) -> dict:
+    """MACD state used in confluence scoring."""
+    ml, sl_s, hist = macd(df["close"])
+    cur_macd  = float(ml.iloc[-1])
+    cur_sig   = float(sl_s.iloc[-1])
+    cur_hist  = float(hist.iloc[-1])
+    prev_hist = float(hist.iloc[-2]) if len(hist) >= 2 else 0.0
+    return dict(
+        macd=round(cur_macd, 6),
+        signal=round(cur_sig, 6),
+        hist=round(cur_hist, 6),
+        bullish=bool(cur_macd > cur_sig),
+        bearish=bool(cur_macd < cur_sig),
+        bullish_cross=bool(prev_hist <= 0 and cur_hist > 0),
+        bearish_cross=bool(prev_hist >= 0 and cur_hist < 0),
+    )
+
+
 # ─────────────────────────────────────────────
 # MARKET REGIME
 # ─────────────────────────────────────────────
@@ -296,7 +336,7 @@ def market_regime(daily_df: pd.DataFrame) -> dict:
 # CONFLUENCE SCORE
 # ─────────────────────────────────────────────
 
-def confluence_score(regime, structure, vol, rsi_data, sweeps, fib,
+def confluence_score(regime, structure, vol, rsi_data, sweeps, macd_data,
                      interval: str = "4h", weights: dict | None = None) -> dict:
     """
     Score = sum of earned factor weights.
@@ -401,18 +441,30 @@ def confluence_score(regime, structure, vol, rsi_data, sweeps, fib,
         reasons.append({"pts": 0, "earned": False,
                         "text": f"RSI {rsi_data['value']} ({rsi_data['range']}) — no directional confirmation"})
 
-    # 7. Fibonacci confluence (default 1 pt)
+    # 7. MACD direction confirmation (weight key kept as "fib" for learning-engine compat)
     w = weights.get("fib", 1.0)
-    fib_ok = fib and fib["at_fib"]
-    snap["fib"] = bool(fib_ok)
-    if fib_ok:
+    bias = "long"
+    if structure:
+        if structure.get("bearish_bos") or structure.get("lh_ll"):
+            bias = "short"
+    elif not regime.get("above_200", True):
+        bias = "short"
+    macd_ok = macd_data and (
+        (bias == "long"  and macd_data.get("bullish", False)) or
+        (bias == "short" and macd_data.get("bearish", False))
+    )
+    snap["fib"] = bool(macd_ok)
+    if macd_ok:
+        cross = (" · bullish crossover" if macd_data.get("bullish_cross")
+                 else " · bearish crossover" if macd_data.get("bearish_cross")
+                 else "")
         score += w
         reasons.append({"pts": round(w, 1), "earned": True,
-                        "text": f"Price at Fib {fib['nearest_level']} (${fib['nearest_price']:,.2f}), "
-                                f"{fib['distance_pct']}% away — structure + fib confluence"})
+                        "text": f"MACD confirms {bias.upper()} — line "
+                                f"{'above' if bias == 'long' else 'below'} signal{cross}"})
     else:
         reasons.append({"pts": 0, "earned": False,
-                        "text": "Price not at a significant Fibonacci level"})
+                        "text": f"MACD not confirming {bias.upper()} bias — no momentum alignment"})
 
     score     = round(score, 1)
     max_score = round(sum(weights.values()), 1)
@@ -550,11 +602,12 @@ def chart_for_timeframe(symbol: str, interval: str) -> dict:
     limit = 300 if interval in ["15m", "30m", "1h"] else 200
     df = fetch_ohlcv(symbol, interval, limit)
 
-    ema50_s  = ema(df["close"], 50)
-    ema200_s = ema(df["close"], 200)
-    rsi_s    = rsi(df["close"])
-    obv_s    = obv(df)
+    ema50_s   = ema(df["close"], 50)
+    ema200_s  = ema(df["close"], 200)
+    rsi_s     = rsi(df["close"])
+    obv_s     = obv(df)
     obv_ema_s = ema(obv_s, 20)
+    ml, sl_s, hist = macd(df["close"])
 
     candles = [{"time": int(r.Index.timestamp()),
                 "open": r.open, "high": r.high, "low": r.low, "close": r.close}
@@ -562,20 +615,31 @@ def chart_for_timeframe(symbol: str, interval: str) -> dict:
     volumes = [{"time": int(r.Index.timestamp()), "value": r.volume,
                 "color": "#26a69a" if r.close >= r.open else "#ef5350"}
                for r in df.itertuples()]
-    ema50_pts  = [{"time": int(ts.timestamp()), "value": round(v, 6)}
-                  for ts, v in ema50_s.items()]
-    ema200_pts = [{"time": int(ts.timestamp()), "value": round(v, 6)}
-                  for ts, v in ema200_s.items()]
-    rsi_pts    = [{"time": int(ts.timestamp()), "value": round(v, 2)}
-                  for ts, v in rsi_s.items() if not np.isnan(v)]
-    obv_pts    = [{"time": int(ts.timestamp()), "value": round(float(v), 2)}
-                  for ts, v in obv_s.items() if not np.isnan(v)]
+    ema50_pts   = [{"time": int(ts.timestamp()), "value": round(v, 6)}
+                   for ts, v in ema50_s.items()]
+    ema200_pts  = [{"time": int(ts.timestamp()), "value": round(v, 6)}
+                   for ts, v in ema200_s.items()]
+    rsi_pts     = [{"time": int(ts.timestamp()), "value": round(v, 2)}
+                   for ts, v in rsi_s.items() if not np.isnan(v)]
+    obv_pts     = [{"time": int(ts.timestamp()), "value": round(float(v), 2)}
+                   for ts, v in obv_s.items() if not np.isnan(v)]
     obv_ema_pts = [{"time": int(ts.timestamp()), "value": round(float(v), 2)}
                    for ts, v in obv_ema_s.items() if not np.isnan(v)]
+    macd_pts      = [{"time": int(ts.timestamp()), "value": round(float(v), 6)}
+                     for ts, v in ml.items() if not np.isnan(v)]
+    macd_sig_pts  = [{"time": int(ts.timestamp()), "value": round(float(v), 6)}
+                     for ts, v in sl_s.items() if not np.isnan(v)]
+    macd_hist_pts = [{"time": int(ts.timestamp()), "value": round(float(v), 6),
+                      "color": "#3fb95088" if v >= 0 else "#f8514988"}
+                     for ts, v in hist.items() if not np.isnan(v)]
+
+    obv_sh, obv_sl = obv_swing_levels(obv_s)
 
     return dict(candles=candles, volume=volumes,
                 ema50=ema50_pts, ema200=ema200_pts, rsi=rsi_pts,
-                obv=obv_pts, obv_ema=obv_ema_pts)
+                obv=obv_pts, obv_ema=obv_ema_pts,
+                macd=macd_pts, macd_signal=macd_sig_pts, macd_hist=macd_hist_pts,
+                obv_highs=obv_sh, obv_lows=obv_sl)
 
 
 # ─────────────────────────────────────────────
@@ -821,12 +885,10 @@ def full_analysis(symbol: str, interval: str = "4h") -> dict:
     structure = detect_structure(df, sh, sl)
     sweeps    = detect_sweeps(df, sh, sl)
 
-    # Section 3: Volume & RSI
-    vol      = volume_analysis(df)
-    rsi_data = rsi_analysis(df)
-
-    # Section 4: Fibonacci (only in trending regimes)
-    fib = fib_analysis(df, sh, sl) if "Trend" in regime["regime"] else None
+    # Section 3: Volume & RSI & MACD
+    vol       = volume_analysis(df)
+    rsi_data  = rsi_analysis(df)
+    macd_data = macd_analysis(df)
 
     # Section 5: Volatility
     df_atr = atr(df)
@@ -842,8 +904,8 @@ def full_analysis(symbol: str, interval: str = "4h") -> dict:
     adapt_threshold = get_threshold()
     adapt_stop_mult = get_stop_multiplier()
 
-    # Section 6: Confluence (uses adaptive weights)
-    confluence = confluence_score(regime, structure, vol, rsi_data, sweeps, fib,
+    # Section 6: Confluence (uses adaptive weights; MACD replaces Fibonacci slot)
+    confluence = confluence_score(regime, structure, vol, rsi_data, sweeps, macd_data,
                                   interval, adapt_weights)
 
     # Section 7: Risk (uses adaptive stop multiplier)
@@ -872,6 +934,7 @@ def full_analysis(symbol: str, interval: str = "4h") -> dict:
     rsi_s     = rsi(df["close"])
     obv_s     = obv(df)
     obv_ema_s = ema(obv_s, 20)
+    ml, sl_s, hist = macd(df["close"])
 
     candles = [{"time": int(r.Index.timestamp()),
                 "open": r.open, "high": r.high, "low": r.low, "close": r.close}
@@ -881,11 +944,17 @@ def full_analysis(symbol: str, interval: str = "4h") -> dict:
                 "color": "#26a69a" if r.close >= r.open else "#ef5350"}
                for r in df.itertuples()]
 
-    ema50_pts   = [{"time": int(ts.timestamp()), "value": round(v, 2)} for ts, v in ema50_s.items()]
-    ema200_pts  = [{"time": int(ts.timestamp()), "value": round(v, 2)} for ts, v in ema200_s.items()]
-    rsi_pts     = [{"time": int(ts.timestamp()), "value": round(v, 2)} for ts, v in rsi_s.items() if not np.isnan(v)]
-    obv_pts     = [{"time": int(ts.timestamp()), "value": round(float(v), 2)} for ts, v in obv_s.items() if not np.isnan(v)]
-    obv_ema_pts = [{"time": int(ts.timestamp()), "value": round(float(v), 2)} for ts, v in obv_ema_s.items() if not np.isnan(v)]
+    ema50_pts     = [{"time": int(ts.timestamp()), "value": round(v, 2)} for ts, v in ema50_s.items()]
+    ema200_pts    = [{"time": int(ts.timestamp()), "value": round(v, 2)} for ts, v in ema200_s.items()]
+    rsi_pts       = [{"time": int(ts.timestamp()), "value": round(v, 2)} for ts, v in rsi_s.items() if not np.isnan(v)]
+    obv_pts       = [{"time": int(ts.timestamp()), "value": round(float(v), 2)} for ts, v in obv_s.items() if not np.isnan(v)]
+    obv_ema_pts   = [{"time": int(ts.timestamp()), "value": round(float(v), 2)} for ts, v in obv_ema_s.items() if not np.isnan(v)]
+    macd_pts      = [{"time": int(ts.timestamp()), "value": round(float(v), 6)} for ts, v in ml.items() if not np.isnan(v)]
+    macd_sig_pts  = [{"time": int(ts.timestamp()), "value": round(float(v), 6)} for ts, v in sl_s.items() if not np.isnan(v)]
+    macd_hist_pts = [{"time": int(ts.timestamp()), "value": round(float(v), 6),
+                      "color": "#3fb95088" if v >= 0 else "#f8514988"}
+                     for ts, v in hist.items() if not np.isnan(v)]
+    obv_sh, obv_sl = obv_swing_levels(obv_s)
 
     return dict(
         symbol=symbol,
@@ -902,7 +971,7 @@ def full_analysis(symbol: str, interval: str = "4h") -> dict:
         sweeps=sweeps,
         volume=vol,
         rsi=rsi_data,
-        fibonacci=fib,
+        macd=macd_data,
         volatility=volatility,
         confluence=confluence,
         risk=risk,
@@ -919,13 +988,17 @@ def full_analysis(symbol: str, interval: str = "4h") -> dict:
             rsi=rsi_pts,
             obv=obv_pts,
             obv_ema=obv_ema_pts,
+            macd=macd_pts,
+            macd_signal=macd_sig_pts,
+            macd_hist=macd_hist_pts,
+            obv_highs=obv_sh,
+            obv_lows=obv_sl,
             channels=channels,
             levels=dict(
                 support=key_support,
                 resistance=key_resistance,
                 support_touches=support_touches,
                 resistance_touches=resistance_touches,
-                fib=fib["levels"] if fib else {},
                 invalidation=risk["invalidation"],
                 target=risk["target"],
             ),

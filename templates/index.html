@@ -40,10 +40,11 @@
 
     /* Charts */
     .chart-section { padding: 12px 16px 0; }
-    #main-chart, #rsi-chart, #obv-chart { width: 100%; border-radius: 6px; overflow: hidden; }
-    #main-chart { height: 540px; }
-    #rsi-chart  { height: 110px; margin-top: 2px; }
-    #obv-chart  { height: 80px;  margin-top: 2px; }
+    #main-chart, #rsi-chart, #obv-chart, #macd-chart { width: 100%; border-radius: 6px; overflow: hidden; }
+    #main-chart  { height: 540px; }
+    #rsi-chart   { height: 100px; margin-top: 2px; }
+    #obv-chart   { height: 80px;  margin-top: 2px; }
+    #macd-chart  { height: 90px;  margin-top: 2px; }
     .chart-legend { font-size: 11px; color: var(--text-dim); padding: 4px 0; display: flex; gap: 16px; }
     .legend-dot { display: inline-block; width: 10px; height: 2px; vertical-align: middle; margin-right: 4px; }
 
@@ -372,11 +373,10 @@
       <span><span class="legend-dot" style="background:#f0883e;height:2px"></span>EMA 200</span>
       <span><span class="legend-dot" style="background:#3fb950;border-top:1px dashed #3fb950"></span>Support</span>
       <span><span class="legend-dot" style="background:#f85149;border-top:1px dashed #f85149"></span>Resistance</span>
-      <span><span class="legend-dot" style="background:#d29922;border-top:1px dotted #d29922"></span>Fib</span>
-      <span><span style="color:#3fb950;font-size:12px">▲</span> Signal Long</span>
-      <span><span style="color:#f85149;font-size:12px">▼</span> Signal Short</span>
       <span><span style="color:#bc8cff;font-size:12px">▲</span> Trade Long</span>
       <span><span style="color:#f0883e;font-size:12px">▼</span> Trade Short</span>
+      <span><span style="color:#3fb950;font-size:12px">●</span> Win Exit</span>
+      <span><span style="color:#f85149;font-size:12px">●</span> Loss Exit</span>
     </div>
     <div class="d-flex align-items-center gap-1">
       <span style="font-size:10px;color:#484f58;text-transform:uppercase;letter-spacing:.06em">Timeframe</span>
@@ -402,8 +402,10 @@
   </div>
   <div style="font-size:10px;color:var(--text-dim);padding:2px 0">RSI (14)</div>
   <div id="rsi-chart"></div>
-  <div style="font-size:10px;color:var(--text-dim);padding:2px 0 0">OBV — On Balance Volume &nbsp;<span style="color:#484f58">(teal = OBV · dimmed = 20-EMA)</span></div>
+  <div style="font-size:10px;color:var(--text-dim);padding:2px 0 0">OBV — On Balance Volume &nbsp;<span style="color:#484f58">(teal = OBV · dimmed = 20-EMA · dashed = S/R levels)</span></div>
   <div id="obv-chart"></div>
+  <div style="font-size:10px;color:var(--text-dim);padding:2px 0 0">MACD (12/26/9) &nbsp;<span style="color:#484f58">(blue = MACD · orange = signal · bars = histogram)</span></div>
+  <div id="macd-chart"></div>
 </div>
 
 <!-- ═══ ALL SIGNALS FEED ═══ -->
@@ -483,8 +485,8 @@
     <div class="row g-3">
       <div class="col-xl-6 col-md-6">
         <div class="analysis-card h-100">
-          <div class="card-hdr">Section 4 — Fibonacci Retracement</div>
-          <div class="card-body-inner" id="card-fib">
+          <div class="card-hdr">Section 4 — MACD Momentum</div>
+          <div class="card-body-inner" id="card-macd">
             <div class="text-dim" style="font-size:13px">Loading...</div>
           </div>
         </div>
@@ -975,8 +977,10 @@ let autoTimer      = null;
 let mainChart      = null;
 let rsiChart       = null;
 let obvChart       = null;
+let macdChart      = null;
 let seriesMap      = {};
-let priceLines       = [];
+let priceLines     = [];
+let obvPriceLines  = [];   // OBV S/R price lines
 let addModal         = null;
 let lastSignal       = null;
 let lastData         = null;  // full analysis response, used for manual close price
@@ -1098,14 +1102,47 @@ function initCharts() {
     color: '#26c6da44', lineWidth: 1,
     priceLineVisible: false, lastValueVisible: false,
   });
+  // OBV trendlines (connect swing lows / swing highs)
+  seriesMap.obv_low_trend = obvChart.addLineSeries({
+    color: '#3fb95088', lineWidth: 1,
+    lineStyle: LightweightCharts.LineStyle.Dashed,
+    priceLineVisible: false, lastValueVisible: false,
+  });
+  seriesMap.obv_high_trend = obvChart.addLineSeries({
+    color: '#f8514988', lineWidth: 1,
+    lineStyle: LightweightCharts.LineStyle.Dashed,
+    priceLineVisible: false, lastValueVisible: false,
+  });
 
-  // Sync all three timescales
+  // MACD chart
+  const macdEl = document.getElementById('macd-chart');
+  macdChart = LightweightCharts.createChart(macdEl, {
+    ...chartOptions(90),
+    timeScale: { borderColor: '#30363d', timeVisible: true, visible: false },
+  });
+  seriesMap.macd_hist = macdChart.addHistogramSeries({
+    color: '#3fb95088',
+    priceLineVisible: false, lastValueVisible: false,
+  });
+  seriesMap.macd_line = macdChart.addLineSeries({
+    color: '#58a6ff', lineWidth: 1.5,
+    priceLineVisible: false, lastValueVisible: true, title: 'MACD',
+  });
+  seriesMap.macd_signal = macdChart.addLineSeries({
+    color: '#f0883e', lineWidth: 1,
+    priceLineVisible: false, lastValueVisible: true, title: 'Signal',
+  });
+  // Zero line on MACD
+  macdChart.priceScale('right').applyOptions({ autoScale: true });
+
+  // Sync all four timescales
   let syncing = false;
   mainChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
     if (range && !syncing) {
       syncing = true;
       rsiChart.timeScale().setVisibleLogicalRange(range);
       obvChart.timeScale().setVisibleLogicalRange(range);
+      macdChart.timeScale().setVisibleLogicalRange(range);
       syncing = false;
     }
   });
@@ -1114,6 +1151,7 @@ function initCharts() {
       syncing = true;
       mainChart.timeScale().setVisibleLogicalRange(range);
       obvChart.timeScale().setVisibleLogicalRange(range);
+      macdChart.timeScale().setVisibleLogicalRange(range);
       syncing = false;
     }
   });
@@ -1122,6 +1160,16 @@ function initCharts() {
       syncing = true;
       mainChart.timeScale().setVisibleLogicalRange(range);
       rsiChart.timeScale().setVisibleLogicalRange(range);
+      macdChart.timeScale().setVisibleLogicalRange(range);
+      syncing = false;
+    }
+  });
+  macdChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+    if (range && !syncing) {
+      syncing = true;
+      mainChart.timeScale().setVisibleLogicalRange(range);
+      rsiChart.timeScale().setVisibleLogicalRange(range);
+      obvChart.timeScale().setVisibleLogicalRange(range);
       syncing = false;
     }
   });
@@ -1132,6 +1180,7 @@ function initCharts() {
     mainChart.applyOptions({ width: w });
     rsiChart.applyOptions({ width: w });
     obvChart.applyOptions({ width: w });
+    macdChart.applyOptions({ width: w });
   });
   ro.observe(mainEl);
 
@@ -1172,6 +1221,11 @@ function updateChartData(chart, signal) {
   mainChart.priceScale('right').applyOptions({ autoScale: true });
   rsiChart.priceScale('right').applyOptions({ autoScale: true });
   obvChart.priceScale('right').applyOptions({ autoScale: true });
+  if (macdChart) macdChart.priceScale('right').applyOptions({ autoScale: true });
+
+  // ── Clear OBV S/R lines ──
+  obvPriceLines.forEach(pl => { try { seriesMap.obv.removePriceLine(pl); } catch(e){} });
+  obvPriceLines = [];
 
   // ── Set fresh data ──
   tradeMarkersData = [];  // clear old trade markers; rebuilt after fetchTrades()
@@ -1183,6 +1237,37 @@ function updateChartData(chart, signal) {
   seriesMap.rsi.setData(chart.rsi);
   if (chart.obv)     seriesMap.obv.setData(chart.obv);
   if (chart.obv_ema) seriesMap.obv_ema.setData(chart.obv_ema);
+
+  // ── OBV S/R horizontal levels ──
+  (chart.obv_lows || []).slice(-2).forEach(([t, v]) => {
+    obvPriceLines.push(seriesMap.obv.createPriceLine({
+      price: v, color: '#3fb95066', lineWidth: 1,
+      lineStyle: LightweightCharts.LineStyle.Dashed,
+      axisLabelVisible: false, title: 'OBV S',
+    }));
+  });
+  (chart.obv_highs || []).slice(-2).forEach(([t, v]) => {
+    obvPriceLines.push(seriesMap.obv.createPriceLine({
+      price: v, color: '#f8514966', lineWidth: 1,
+      lineStyle: LightweightCharts.LineStyle.Dashed,
+      axisLabelVisible: false, title: 'OBV R',
+    }));
+  });
+
+  // ── OBV trendlines — connect last 2 swing lows (green) and highs (red) ──
+  if (seriesMap.obv_low_trend) {
+    const lows2 = (chart.obv_lows || []).slice(-2);
+    seriesMap.obv_low_trend.setData(lows2.length >= 2 ? lows2.map(([t, v]) => ({time: t, value: v})) : []);
+  }
+  if (seriesMap.obv_high_trend) {
+    const highs2 = (chart.obv_highs || []).slice(-2);
+    seriesMap.obv_high_trend.setData(highs2.length >= 2 ? highs2.map(([t, v]) => ({time: t, value: v})) : []);
+  }
+
+  // ── MACD ──
+  if (seriesMap.macd_hist)   seriesMap.macd_hist.setData(chart.macd_hist || []);
+  if (seriesMap.macd_line)   seriesMap.macd_line.setData(chart.macd || []);
+  if (seriesMap.macd_signal) seriesMap.macd_signal.setData(chart.macd_signal || []);
 
   // ── Channel trendlines ──
   if (chart.channels && chart.channels.upper_line) {
@@ -1208,17 +1293,6 @@ function updateChartData(chart, signal) {
     }));
   });
 
-  const fibColors = {'0.382':'#ffd700','0.5':'#ffc040','0.618':'#ffaa00'};
-  Object.entries(lvl.fib || {}).forEach(([k, p]) => {
-    if (['0.382','0.5','0.618'].includes(k)) {
-      priceLines.push(seriesMap.candles.createPriceLine({
-        price: p, color: fibColors[k], lineWidth: 1,
-        lineStyle: LightweightCharts.LineStyle.SparseDotted,
-        axisLabelVisible: true, title: `F${k}`,
-      }));
-    }
-  });
-
   if (lvl.invalidation) {
     priceLines.push(seriesMap.candles.createPriceLine({
       price: lvl.invalidation, color: '#ff4444', lineWidth: 1,
@@ -1234,7 +1308,12 @@ function updateChartData(chart, signal) {
     }));
   }
 
-  mainChart.timeScale().fitContent();
+  // ── Set visible range to last N candles so bars are legible ──
+  const targetCount = {'15m':100,'30m':100,'1h':120,'4h':150,'1d':180,'1w':200}[currentTF] || 150;
+  const len = chart.candles.length;
+  if (len > 0) {
+    mainChart.timeScale().setVisibleLogicalRange({ from: Math.max(0, len - targetCount), to: len - 1 });
+  }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1276,7 +1355,7 @@ function renderAll(d) {
   renderRegime(d.regime);
   renderStructure(d.structure, d.swings, d.sweeps, d.key_support, d.key_resistance, d.channels, d.interval);
   renderVolume(d.volume, d.rsi);
-  renderFib(d.fibonacci);
+  renderMacd(d.macd);
   renderVolatility(d.volatility);
   renderConfluence(d.confluence);
   renderRisk(d.risk, d.confluence);
@@ -1452,38 +1531,34 @@ function renderVolume(v, r) {
 }
 
 // ═══════════════════════════════════════════════════════
-// SECTION 4: FIBONACCI
+// SECTION 4: MACD MOMENTUM
 // ═══════════════════════════════════════════════════════
-function renderFib(fib) {
-  if (!fib) {
-    document.getElementById('card-fib').innerHTML =
-      '<span class="text-dim" style="font-size:13px">Fibonacci not applied — regime is Range / Compression. Fib is only calculated in trending conditions.</span>';
+function renderMacd(m) {
+  const el = document.getElementById('card-macd');
+  if (!el) return;
+  if (!m) {
+    el.innerHTML = '<span class="text-dim" style="font-size:13px">MACD data unavailable.</span>';
     return;
   }
-
-  const rows = Object.entries(fib.levels).map(([k, v]) => {
-    const isNearest = k === fib.nearest_level;
-    const isKey = ['0.382','0.5','0.618'].includes(k);
-    const cls = isNearest && fib.at_fib ? 'fib-row active' : 'fib-row';
-    const labelColor = k === '0.0' || k === '1.0' ? '#8b949e' : isKey ? '#d29922' : '#6e7681';
-    return `<div class="${cls}">
-      <span style="color:${labelColor}">${k === '0.0' ? 'Swing Low (0.0)' : k === '1.0' ? 'Swing High (1.0)' : `${k} Retrace`}</span>
-      <span style="color:${isNearest && fib.at_fib ? '#d29922' : '#e6edf3'};font-weight:${isNearest && fib.at_fib ? '700' : '400'}">
-        $${fmt(v)} ${isNearest && fib.at_fib ? '← HERE' : ''}
-      </span>
-    </div>`;
-  }).join('');
-
-  document.getElementById('card-fib').innerHTML = `
-    <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">
-      Swing: $${fmt(fib.swing_low)} → $${fmt(fib.swing_high)}
-    </div>
-    ${rows}
-    <div style="margin-top:10px;font-size:12px">
-      ${fib.at_fib
-        ? `<span class="text-y">Price within 1.5% of Fib ${fib.nearest_level} ($${fmt(fib.nearest_price)}) — confluence zone</span>`
-        : `<span class="text-dim">Nearest level: ${fib.nearest_level} at $${fmt(fib.nearest_price)} (${fib.distance_pct}% away)</span>`}
-    </div>
+  const bullish = m.bullish;
+  const dirColor = bullish ? '#3fb950' : '#f85149';
+  const dirLabel = bullish ? 'Bullish' : 'Bearish';
+  const crossLabel = m.bullish_cross ? '<span class="text-g"> · Bullish Crossover!</span>'
+                   : m.bearish_cross ? '<span class="text-r"> · Bearish Crossover!</span>'
+                   : '';
+  const histColor = m.hist >= 0 ? '#3fb950' : '#f85149';
+  el.innerHTML = `
+    ${row('Direction', `<span style="color:${dirColor};font-weight:700">${dirLabel}</span>${crossLabel}`)}
+    ${row('MACD Line', `<span style="color:#58a6ff">${m.macd > 0 ? '+' : ''}${m.macd.toFixed(4)}</span>`)}
+    ${row('Signal Line', `<span style="color:#f0883e">${m.signal > 0 ? '+' : ''}${m.signal.toFixed(4)}</span>`)}
+    ${row('Histogram', `<span style="color:${histColor}">${m.hist > 0 ? '+' : ''}${m.hist.toFixed(4)}</span>`)}
+    ${row('Momentum', bullish
+      ? '<span class="text-g">MACD above signal — upside momentum</span>'
+      : '<span class="text-r">MACD below signal — downside momentum</span>')}
+    ${row('Confluence', m.bullish && m.bullish_cross ? '<span class="text-g">Strong — fresh bullish cross</span>'
+      : m.bearish && m.bearish_cross ? '<span class="text-r">Strong — fresh bearish cross</span>'
+      : bullish ? '<span class="text-y">Moderate — bullish trend, no cross</span>'
+      : '<span class="text-y">Moderate — bearish trend, no cross</span>')}
   `;
 }
 
@@ -1693,17 +1768,6 @@ function showHighlightMarker(lineInfo) {
   }));
 
   let markers = [...permanentMarkers, ...highlights, ...tradeMarkersData.map(m => m.marker)];
-  if (lastSignal) {
-    const isLong = lastSignal.direction === 'LONG';
-    markers.push({
-      time: lastSignal.bar_time,
-      position: isLong ? 'belowBar' : 'aboveBar',
-      color: isLong ? '#3fb950' : '#f85149',
-      shape: isLong ? 'arrowUp' : 'arrowDown',
-      text: `${lastSignal.direction}  ${lastSignal.score}/10`,
-      size: 2,
-    });
-  }
   markers.sort((a, b) => a.time - b.time);
   try { seriesMap.candles.setMarkers(markers); } catch(e) {}
 }
@@ -1756,25 +1820,7 @@ function buildLineContext(d) {
     });
   });
 
-  // ── Fibonacci levels ──
-  const fib = d.fibonacci;
-  const fibDesc = {
-    '0.382': '38.2% retracement — shallow pullback in a strong trend. Bulls buying early, momentum intact.',
-    '0.5':   '50% retracement — the psychological midpoint. Equal split; strong level if price holds here.',
-    '0.618': '61.8% — the golden ratio. Deepest healthy retracement. Highest-confluence fib for long entries.',
-  };
-  if (fib) {
-    Object.entries(fib.levels).forEach(([k, p]) => {
-      if (['0.382','0.5','0.618'].includes(k)) {
-        lineContext.push({
-          price: p, label: `Fib ${k}`, type: 'fib',
-          color: {'0.382':'#ffd700','0.5':'#ffc040','0.618':'#ffaa00'}[k],
-          candle_times: [],
-          why: `${fibDesc[k]} Measured from swing low $${fmt(fib.swing_low)} → swing high $${fmt(fib.swing_high)}.`,
-        });
-      }
-    });
-  }
+  // Fibonacci removed — replaced by MACD
 
   // ── Invalidation ──
   if (lvl.invalidation) {
@@ -2227,6 +2273,8 @@ function toggleClosedTrades() {
   const hidden = section.style.display === 'none';
   section.style.display = hidden ? '' : 'none';
   if (arrow) arrow.textContent = hidden ? '▼' : '▶';
+  const hdr = arrow ? arrow.parentElement.querySelector('span:last-child') : null;
+  if (hdr) hdr.textContent = hidden ? 'click to collapse' : 'click to expand';
 }
 
 function toggleLearningCard() {
@@ -2268,7 +2316,7 @@ function buildTradeMarkers() {
   const tf  = currentTF;
 
   trades.forEach(t => {
-    if (t.symbol !== sym || t.interval !== tf) return;
+    if (t.symbol !== sym) return;  // show all TFs for this symbol
 
     // Entry marker — purple=long, orange=short (distinct from signal green/red)
     const entryTime = nearestCandleTime(t.opened_at);
@@ -2314,20 +2362,9 @@ function buildTradeMarkers() {
   updateAllMarkers();
 }
 
-// Central marker rebuild — permanent pivots + trade markers + current signal
+// Central marker rebuild — permanent pivots + trade markers only (signal shown in overlay box)
 function updateAllMarkers() {
   let markers = [...permanentMarkers, ...tradeMarkersData.map(m => m.marker)];
-  if (lastSignal) {
-    const isLong = lastSignal.direction === 'LONG';
-    markers.push({
-      time:     lastSignal.bar_time,
-      position: isLong ? 'belowBar' : 'aboveBar',
-      color:    isLong ? '#3fb950' : '#f85149',
-      shape:    isLong ? 'arrowUp' : 'arrowDown',
-      text:     `${lastSignal.direction}  ${lastSignal.score}/10`,
-      size:     2,
-    });
-  }
   markers.sort((a, b) => a.time - b.time);
   try { seriesMap.candles.setMarkers(markers); } catch(e) {}
 }
@@ -2573,11 +2610,11 @@ function renderAllSignals() {
   if (closedTrades.length > 0 && allSignalsFilter === 'all') {
     sectionsHtml += `
       <div class="trade-group-hdr trade-group-closed" onclick="toggleClosedTrades()">
-        <span id="closed-trades-arrow">▶</span>
+        <span id="closed-trades-arrow">▼</span>
         Closed History (${closedTrades.length})
-        <span style="font-size:10px;font-weight:400;color:#484f58">click to expand</span>
+        <span style="font-size:10px;font-weight:400;color:#484f58">click to collapse</span>
       </div>
-      <div id="closed-trades-section" style="display:none;overflow-x:auto">
+      <div id="closed-trades-section" style="overflow-x:auto">
         <table class="calls-table">
           ${TABLE_HDR}
           <tbody>${buildTradeRows(closedTrades, openTrades.length)}</tbody>
