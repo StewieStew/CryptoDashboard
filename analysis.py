@@ -8,6 +8,13 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timezone
 
+try:
+    from learning import get_weights, get_threshold, get_stop_multiplier
+except ImportError:
+    def get_weights():        return {"regime":2.0,"bos":2.0,"sweep":2.0,"volume":1.0,"obv":1.0,"rsi":1.0,"fib":1.0}
+    def get_threshold():     return 7.0
+    def get_stop_multiplier(): return 0.5
+
 BINANCE_KLINES = "https://api.binance.us/api/v3/klines"
 
 # Maps each chart interval to (higher-TF for regime, candle limit for analysis)
@@ -290,106 +297,138 @@ def market_regime(daily_df: pd.DataFrame) -> dict:
 # ─────────────────────────────────────────────
 
 def confluence_score(regime, structure, vol, rsi_data, sweeps, fib,
-                     interval: str = "4h") -> dict:
-    score   = 0
-    reasons = []
+                     interval: str = "4h", weights: dict | None = None) -> dict:
+    """
+    Score = sum of earned factor weights.
+    Weights come from the adaptive learning engine (defaults to original point values).
+    A factors_snapshot dict is returned for post-trade learning.
+    """
+    if weights is None:
+        weights = get_weights()
 
-    # 1. Daily trend aligned (2 pts)
+    score   = 0.0
+    reasons = []
+    snap    = {}   # which factors were present (for adaptive learning)
+    tf      = interval.upper()
+
+    # 1. Trend regime aligned (default 2 pts)
+    w = weights.get("regime", 2.0)
     trending = "Uptrend" in regime["regime"] or "Downtrend" in regime["regime"]
+    snap["regime"] = trending
     if trending:
-        score += 2
-        reasons.append({"pts": 2, "earned": True,
-                        "text": f"Daily regime is '{regime['regime']}' — directional trend active"})
+        score += w
+        reasons.append({"pts": round(w, 1), "earned": True,
+                        "text": f"Daily regime '{regime['regime']}' — directional trend active"})
     else:
         reasons.append({"pts": 0, "earned": False,
-                        "text": f"Regime is '{regime['regime']}' — no directional trend to align"})
+                        "text": f"Regime '{regime['regime']}' — no directional trend"})
 
-    # 2. Clear BOS (2 pts)
-    tf = interval.upper()
+    # 2. Break of Structure (default 2 pts)
+    w = weights.get("bos", 2.0)
     bos = structure and (structure["bullish_bos"] or structure["bearish_bos"])
+    snap["bos"] = bool(bos)
     if bos:
-        score += 2
+        score += w
         d = "Bullish" if structure["bullish_bos"] else "Bearish"
-        reasons.append({"pts": 2, "earned": True,
+        reasons.append({"pts": round(w, 1), "earned": True,
                         "text": f"{d} Break of Structure confirmed on {tf} — price outside last swing"})
     else:
         reasons.append({"pts": 0, "earned": False,
-                        "text": f"No confirmed Break of Structure on {tf} — price inside structure"})
+                        "text": f"No BOS on {tf} — price still inside structure"})
 
-    # 3. Liquidity sweep (2 pts)
+    # 3. Liquidity sweep (default 2 pts)
+    w = weights.get("sweep", 2.0)
+    snap["sweep"] = bool(sweeps)
     if sweeps:
-        score += 2
+        score += w
         s = sweeps[0]
-        reasons.append({"pts": 2, "earned": True,
+        reasons.append({"pts": round(w, 1), "earned": True,
                         "text": f"Liquidity sweep: {s['type']} @ {s['level']} — {s['desc']}"})
     else:
         reasons.append({"pts": 0, "earned": False,
-                        "text": "No recent liquidity sweep detected on 4H"})
+                        "text": f"No recent liquidity sweep on {tf}"})
 
-    # 4. Volume expansion or spike (1 pt)
-    if vol["expanding"] or vol["recent_spike"]:
-        score += 1
-        vtxt = "Volume expanding" if vol["expanding"] else "Volume spike (2× avg detected)"
-        reasons.append({"pts": 1, "earned": True,
+    # 4. Volume expansion or spike (default 1 pt)
+    w = weights.get("volume", 1.0)
+    vol_ok = vol["expanding"] or vol["recent_spike"]
+    snap["volume"] = vol_ok
+    if vol_ok:
+        score += w
+        vtxt = "Volume expanding" if vol["expanding"] else "Volume spike (2× avg)"
+        reasons.append({"pts": round(w, 1), "earned": True,
                         "text": f"{vtxt} — real participation behind the move"})
     else:
         reasons.append({"pts": 0, "earned": False,
-                        "text": "Volume declining, no spike — weak participation on current move"})
+                        "text": "Volume declining / no spike — weak participation"})
 
-    # 5. OBV confirms bias or diverges (1 pt)
-    bias_up = "Uptrend" in regime["regime"] or bool(structure and structure.get("bullish_bos"))
+    # 5. OBV confirms bias or diverges (default 1 pt)
+    w = weights.get("obv", 1.0)
+    bias_up = "Uptrend"   in regime["regime"] or bool(structure and structure.get("bullish_bos"))
     bias_dn = "Downtrend" in regime["regime"] or bool(structure and structure.get("bearish_bos"))
-    obv_ok = (
+    obv_ok  = (
         (bias_up and vol["obv_bullish"]) or
         (bias_dn and not vol["obv_bullish"]) or
         vol["bullish_obv_div"] or vol["bearish_obv_div"]
     )
+    snap["obv"] = obv_ok
     if obv_ok:
-        score += 1
+        score += w
         if vol["bullish_obv_div"] or vol["bearish_obv_div"]:
             obv_dir = "Bullish" if vol["bullish_obv_div"] else "Bearish"
             obv_txt = f"{obv_dir} OBV divergence — smart money accumulating/distributing"
         elif bias_up:
-            obv_txt = "OBV trending up — confirms bullish bias, institutional buying"
+            obv_txt = "OBV trending up — confirms bullish bias"
         else:
-            obv_txt = "OBV trending down — confirms bearish bias, institutional selling"
-        reasons.append({"pts": 1, "earned": True, "text": obv_txt})
+            obv_txt = "OBV trending down — confirms bearish bias"
+        reasons.append({"pts": round(w, 1), "earned": True, "text": obv_txt})
     else:
         reasons.append({"pts": 0, "earned": False,
-                        "text": "OBV not confirming trade direction — volume flow opposing bias"})
+                        "text": "OBV not confirming direction — volume flow opposing thesis"})
 
-    # 6. RSI confirmation (1 pt)
+    # 6. RSI confirmation (default 1 pt)
+    w = weights.get("rsi", 1.0)
     rsi_ok = (
         (rsi_data["range"] == "Bullish" and "Uptrend"   in regime["regime"]) or
         (rsi_data["range"] == "Bearish" and "Downtrend" in regime["regime"]) or
         rsi_data["reset_oversold"] or rsi_data["reset_overbought"]
     )
+    snap["rsi"] = rsi_ok
     if rsi_ok:
-        score += 1
-        reasons.append({"pts": 1, "earned": True,
+        score += w
+        reasons.append({"pts": round(w, 1), "earned": True,
                         "text": f"RSI {rsi_data['value']} — confirms direction or reset from extreme"})
     else:
         reasons.append({"pts": 0, "earned": False,
                         "text": f"RSI {rsi_data['value']} ({rsi_data['range']}) — no directional confirmation"})
 
-    # 7. Fib + structure confluence (1 pt)
-    if fib and fib["at_fib"]:
-        score += 1
-        reasons.append({"pts": 1, "earned": True,
-                        "text": f"Price at Fib {fib['nearest_level']} (${fib['nearest_price']:,.2f}), {fib['distance_pct']}% away — structure + fib confluence"})
+    # 7. Fibonacci confluence (default 1 pt)
+    w = weights.get("fib", 1.0)
+    fib_ok = fib and fib["at_fib"]
+    snap["fib"] = bool(fib_ok)
+    if fib_ok:
+        score += w
+        reasons.append({"pts": round(w, 1), "earned": True,
+                        "text": f"Price at Fib {fib['nearest_level']} (${fib['nearest_price']:,.2f}), "
+                                f"{fib['distance_pct']}% away — structure + fib confluence"})
     else:
         reasons.append({"pts": 0, "earned": False,
                         "text": "Price not at a significant Fibonacci level"})
 
-    if   score >= 7: strength = "High Probability Swing Environment"
-    elif score >= 5: strength = "Moderate Setup"
-    else:            strength = "Low Quality / Avoid"
+    score     = round(score, 1)
+    max_score = round(sum(weights.values()), 1)
 
-    # What would improve it
+    if   score >= max_score * 0.78: strength = "High Probability Swing Environment"
+    elif score >= max_score * 0.56: strength = "Moderate Setup"
+    else:                           strength = "Low Quality / Avoid"
+
     missing = [r["text"] for r in reasons if not r["earned"]]
     improve = missing[:3] if missing else ["All confluence factors are satisfied"]
 
-    return dict(score=score, max=10, strength=strength, reasons=reasons, improve=improve)
+    return dict(
+        score=score, max=max_score,
+        strength=strength, reasons=reasons, improve=improve,
+        factors_snapshot=snap,
+    )
 
 
 # ─────────────────────────────────────────────
@@ -397,7 +436,7 @@ def confluence_score(regime, structure, vol, rsi_data, sweeps, fib,
 # ─────────────────────────────────────────────
 
 def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
-                 interval: str = "4h") -> dict:
+                 interval: str = "4h", stop_multiplier: float = 0.5) -> dict:
     cur        = float(df["close"].iloc[-1])
     atr_val    = float(atr(df).iloc[-1])
     ema50_val  = float(ema(df["close"], 50).iloc[-1])
@@ -406,9 +445,9 @@ def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
 
     if structure and structure["bullish_bos"]:
         # ── Stop: just below the broken resistance (now acting as support)
-        #    0.5×ATR buffer absorbs noise/wicks — tighter than last swing low
+        #    stop_multiplier×ATR buffer absorbs noise/wicks — tighter than last swing low
         last_sh = structure["last_swing_high"] or cur
-        inval   = round(last_sh - 0.5 * atr_val, 6)
+        inval   = round(last_sh - stop_multiplier * atr_val, 6)
 
         # ── Target: next meaningful resistance ABOVE current price
         #    Priority: prior swing high → EMA200 → EMA50 → 2.5×ATR
@@ -431,9 +470,9 @@ def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
 
     elif structure and structure["bearish_bos"]:
         # ── Stop: just above the broken support (now acting as resistance)
-        #    0.5×ATR buffer absorbs noise/wicks
+        #    stop_multiplier×ATR buffer absorbs noise/wicks
         last_sl = structure["last_swing_low"] or cur
-        inval   = round(last_sl + 0.5 * atr_val, 6)
+        inval   = round(last_sl + stop_multiplier * atr_val, 6)
 
         # ── Target: next meaningful support BELOW current price
         #    Priority: prior swing low → EMA200 → EMA50 → 2.5×ATR
@@ -518,9 +557,11 @@ def chart_for_timeframe(symbol: str, interval: str) -> dict:
 # SIGNAL GENERATION
 # ─────────────────────────────────────────────
 
-def generate_signal(confluence: dict, structure, risk: dict, h4_df) -> dict | None:
-    """Returns a signal dict if score >= 7 and BOS is confirmed, else None."""
-    if confluence["score"] < 7:
+def generate_signal(confluence: dict, structure, risk: dict, h4_df,
+                    signal_threshold: float | None = None) -> dict | None:
+    """Returns a signal dict if effective score >= adaptive threshold and BOS is confirmed."""
+    threshold = signal_threshold if signal_threshold is not None else get_threshold()
+    if confluence["score"] < threshold:
         return None
     if not structure:
         return None
@@ -536,20 +577,20 @@ def generate_signal(confluence: dict, structure, risk: dict, h4_df) -> dict | No
 
     top_reasons = [r["text"] for r in confluence["reasons"] if r["earned"]]
 
-    # Entry zone: if fib confluence, use fib level, else current price
-    entry = risk["current"]
-
     return dict(
         direction=direction,
         score=confluence["score"],
-        entry=entry,
+        max_score=confluence["max"],
+        entry=risk["current"],
         target=risk["target"],
+        target_basis=risk.get("target_basis", ""),
         stop=risk["invalidation"],
         rr=risk["rr"],
         favorable=risk["favorable"],
         reason=reason,
         top_reasons=top_reasons,
         bar_time=int(h4_df.index[-1].timestamp()),
+        factors_snapshot=confluence.get("factors_snapshot", {}),
     )
 
 
@@ -768,14 +809,20 @@ def full_analysis(symbol: str, interval: str = "4h") -> dict:
         compressing=bool(df_atr.iloc[-1] < df_atr.iloc[-20:].mean() * 0.7),
     )
 
-    # Section 6: Confluence
-    confluence = confluence_score(regime, structure, vol, rsi_data, sweeps, fib, interval)
+    # Load adaptive parameters from learning engine
+    adapt_weights   = get_weights()
+    adapt_threshold = get_threshold()
+    adapt_stop_mult = get_stop_multiplier()
 
-    # Section 7: Risk
-    risk = risk_context(df, structure, sh, sl, interval)
+    # Section 6: Confluence (uses adaptive weights)
+    confluence = confluence_score(regime, structure, vol, rsi_data, sweeps, fib,
+                                  interval, adapt_weights)
 
-    # Signal (score >= 7 + BOS)
-    signal = generate_signal(confluence, structure, risk, df)
+    # Section 7: Risk (uses adaptive stop multiplier)
+    risk = risk_context(df, structure, sh, sl, interval, adapt_stop_mult)
+
+    # Signal (score >= adaptive threshold + BOS)
+    signal = generate_signal(confluence, structure, risk, df, adapt_threshold)
 
     # Price Prediction
     prediction = price_prediction(df, risk, confluence, volatility, regime, sh, sl, interval)
