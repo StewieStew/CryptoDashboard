@@ -20,10 +20,15 @@ _clk         = threading.Lock()
 CHART_TTL    = 120   # 2-min chart cache
 
 VALID_INTERVALS  = ["15m", "30m", "1h", "4h", "1d", "1w"]
-DEFAULT_SYMBOLS  = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "DOGEUSDT"]
+DEFAULT_SYMBOLS  = [
+    "BTCUSDT", "ETHUSDT", "XRPUSDT",  "DOGEUSDT",
+    "SOLUSDT", "BNBUSDT", "ADAUSDT",  "AVAXUSDT",
+    "LINKUSDT","LTCUSDT", "DOTUSDT",  "NEARUSDT", "ATOMUSDT",
+]
 
 # Every interval scanned automatically — no clicking required
-SCAN_INTERVALS   = ["30m", "1h", "4h", "1d", "1w"]
+# 15m/30m/1H = day-trade & short swing; 4H/1D/1W = swing positions
+SCAN_INTERVALS   = ["15m", "30m", "1h", "4h", "1d", "1w"]
 
 # Grows as users view additional coins — persists for the life of the server process
 _known_symbols   = set(DEFAULT_SYMBOLS)
@@ -119,7 +124,7 @@ def _background_scanner() -> None:
 
                 except Exception:
                     pass
-                time.sleep(2)   # respect Binance public API rate limits
+                time.sleep(1)   # respect Binance public API rate limits
 
         # Update status after each full sweep
         now_iso = datetime.now(timezone.utc).isoformat()

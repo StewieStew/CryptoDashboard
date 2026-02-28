@@ -34,7 +34,7 @@ DEFAULT_WEIGHTS = {
 DEFAULT_THRESHOLD = 7.0    # minimum score to fire a signal
 DEFAULT_STOP_MULT = 0.5    # ATR multiplier for stop placement
 ADAPT_WINDOW      = 5      # trades to look back per-factor
-MIN_SAMPLES       = 3      # minimum trades before adapting a factor
+MIN_SAMPLES       = 2      # minimum trades before adapting a factor
 WEIGHT_FLOOR      = 0.30   # minimum factor weight (as fraction of default)
 WEIGHT_CEIL       = 1.50   # maximum factor weight (as multiple of default)
 
