@@ -239,6 +239,20 @@
     .asf-filter-btn:hover  { border-color: var(--blue); color: var(--blue); }
     .asf-filter-btn.active { border-color: var(--blue); color: var(--blue); background: #1a2535; }
     .asf-row-open td { background: rgba(210,153,34,.06); }
+    /* R:R badge */
+    .rr-badge { font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
+    .rr-good   { color: #3fb950; background: #1a3a1a; }
+    .rr-ok     { color: #d29922; background: #2a2010; }
+    .rr-poor   { color: #f85149; background: #3a1010; }
+    .pct-gain  { color: #3fb950; font-size: 10px; display: block; }
+    .pct-loss  { color: #f85149; font-size: 10px; display: block; }
+    .trade-size-input {
+      background: var(--bg-card2); border: 1px solid var(--border); color: #e6edf3;
+      border-radius: 4px; padding: 2px 6px; font-size: 11px; width: 80px;
+      text-align: right;
+    }
+    .trade-size-input:focus { outline: none; border-color: var(--blue); }
+
     /* Always-visible reason sub-row */
     .asf-reason-row td { padding: 0 8px 6px !important; border-bottom: 1px solid #21262d; }
     .asf-reason-inner {
@@ -316,6 +330,12 @@
       <button class="asf-filter-btn"        id="asf-btn-open" onclick="filterAllSignals('open')">Open</button>
       <button class="asf-filter-btn"        id="asf-btn-win"  onclick="filterAllSignals('win')">Won</button>
       <button class="asf-filter-btn"        id="asf-btn-loss" onclick="filterAllSignals('loss')">Lost</button>
+      <span style="display:flex;align-items:center;gap:4px;margin-left:8px;border-left:1px solid var(--border);padding-left:8px">
+        <span style="font-size:10px;color:#484f58">Trade $</span>
+        <input class="trade-size-input" id="trade-size-input" type="number" min="1"
+               value="1000" onchange="updateTradeSize(this.value)"
+               title="Trade size in USD — used to calculate dollar P&amp;L">
+      </span>
       <button class="asf-toggle-btn" style="margin-left:4px" onclick="fetchAllSignals()" title="Refresh now">↻</button>
       <button class="asf-toggle-btn" id="asf-collapse-btn" onclick="toggleAllSignals()" title="Collapse/expand">▲</button>
     </div>
@@ -930,11 +950,17 @@ let allSignalsCollapsed= false;
 let asfCountdown       = 60;
 let asfCountdownTimer  = null;
 
+// Trade size for dollar P&L calculations (persists in localStorage)
+let tradeSize = parseFloat(localStorage.getItem('tradeSize') || '1000');
+
 // ═══════════════════════════════════════════════════════
 // INIT
 // ═══════════════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', () => {
   addModal = new bootstrap.Modal(document.getElementById('addModal'));
+  // Restore trade size from localStorage
+  const tsInput = document.getElementById('trade-size-input');
+  if (tsInput) tsInput.value = tradeSize;
   initCharts();
   renderSymbolBar();
   loadAnalysis(currentSymbol);
@@ -1512,6 +1538,9 @@ function renderSignal(sig) {
   const arrow   = isLong ? '▲' : '▼';
   const rrColor = sig.favorable ? '#3fb950' : '#d29922';
 
+  const rr      = calcRR(sig.entry, sig.target, sig.stop, sig.direction);
+  const rrColor = rr.rr >= 2 ? '#3fb950' : rr.rr >= 1.5 ? '#d29922' : '#f85149';
+
   el.className = '';
   el.style.display = 'block';
   el.style.borderColor = color + '55';
@@ -1520,20 +1549,27 @@ function renderSignal(sig) {
       <span style="color:${color};font-size:18px;font-weight:800;line-height:1">${arrow} ${sig.direction}</span>
       <span style="background:${color}22;color:${color};border:1px solid ${color}44;border-radius:4px;padding:1px 7px;font-size:11px;font-weight:700">${sig.score}/10</span>
     </div>
-    <div style="display:grid;grid-template-columns:42px auto;gap:3px 10px;font-size:12px;margin-bottom:8px">
+    <div style="display:grid;grid-template-columns:52px auto;gap:3px 10px;font-size:12px;margin-bottom:8px">
       <span style="color:#8b949e">Entry</span>
       <span style="color:#e6edf3;font-weight:600">$${fmt(sig.entry)}</span>
       <span style="color:#8b949e">Target</span>
-      <span style="color:#3fb950;font-weight:600">$${fmt(sig.target)}</span>
+      <span style="color:#3fb950;font-weight:600">$${fmt(sig.target)} <span style="font-size:10px;opacity:.8">+${rr.gainPct}%</span></span>
       <span style="color:#8b949e">Stop</span>
-      <span style="color:#f85149;font-weight:600">$${fmt(sig.stop)}</span>
+      <span style="color:#f85149;font-weight:600">$${fmt(sig.stop)} <span style="font-size:10px;opacity:.8">-${rr.lossPct}%</span></span>
       <span style="color:#8b949e">R:R</span>
-      <span style="color:${rrColor};font-weight:700">${sig.rr}:1 ${sig.favorable ? '✓' : '⚠'}</span>
+      <span style="color:${rrColor};font-weight:700">${rr.rr}:1 ${sig.favorable ? '✓' : '⚠'}</span>
+      <span style="color:#8b949e">P&amp;L</span>
+      <span style="font-size:11px">
+        <span style="color:#3fb950">+$${rr.dollarGain.toLocaleString()}</span>
+        <span style="color:#484f58"> / </span>
+        <span style="color:#f85149">-$${rr.dollarLoss.toLocaleString()}</span>
+        <span style="color:#484f58;font-size:10px"> @$${tradeSize.toLocaleString()}</span>
+      </span>
     </div>
     <div style="font-size:10px;color:#8b949e;border-top:1px solid #21262d;padding-top:6px;line-height:1.4">
       ${sig.reason}
     </div>
-    ${sig.top_reasons.length ? `
+    ${sig.top_reasons && sig.top_reasons.length ? `
     <div style="margin-top:6px">
       ${sig.top_reasons.slice(0,3).map(r =>
         `<div style="font-size:10px;color:#6e7681;padding:1px 0">· ${r}</div>`
@@ -2071,6 +2107,33 @@ function startAsfCountdown() {
   }, 1000);
 }
 
+function updateTradeSize(val) {
+  tradeSize = parseFloat(val) || 1000;
+  localStorage.setItem('tradeSize', tradeSize);
+  renderAllSignals();
+  // Also refresh chart overlay if a signal is active
+  if (lastSignal) renderSignal(lastSignal);
+}
+
+// Returns { gainPct, lossPct, rr, dollarGain, dollarLoss, rrClass }
+function calcRR(entry, tp, sl, direction) {
+  const isLong  = direction === 'LONG';
+  const gainPct = isLong ? (tp - entry) / entry * 100 : (entry - tp) / entry * 100;
+  const lossPct = isLong ? (entry - sl) / entry * 100 : (sl - entry) / entry * 100;
+  const rr      = lossPct > 0 ? gainPct / lossPct : 0;
+  const dollarGain = tradeSize * gainPct / 100;
+  const dollarLoss = tradeSize * lossPct / 100;
+  const rrClass = rr >= 2 ? 'rr-good' : rr >= 1.5 ? 'rr-ok' : 'rr-poor';
+  return {
+    gainPct:    parseFloat(gainPct.toFixed(2)),
+    lossPct:    parseFloat(lossPct.toFixed(2)),
+    rr:         parseFloat(rr.toFixed(2)),
+    dollarGain: parseFloat(dollarGain.toFixed(0)),
+    dollarLoss: parseFloat(dollarLoss.toFixed(0)),
+    rrClass,
+  };
+}
+
 function filterAllSignals(f) {
   allSignalsFilter = f;
   ['all','open','win','loss'].forEach(k => {
@@ -2148,6 +2211,10 @@ function renderAllSignals() {
     const ptaId     = `asf-pta-${idx}`;
     const isOpen    = t.status === 'open';
 
+    // R:R + % calculations
+    const rr = calcRR(t.entry, t.tp, t.sl, t.direction);
+    const dollarStr = `+$${rr.dollarGain.toLocaleString()} / -$${rr.dollarLoss.toLocaleString()}`;
+
     const actions = isOpen
       ? `<button class="calls-btn win-btn"    onclick="closeTrade('${t.id}','win')">✓</button>`
         + `<button class="calls-btn loss-btn"   onclick="closeTrade('${t.id}','loss')">✗</button>`
@@ -2160,13 +2227,18 @@ function renderAllSignals() {
       `<span class="pta-chip ${v ? 'on' : 'off'}">${f}</span>`
     ).join('');
 
-    // Always-visible reason row
+    // Always-visible reason row — includes dollar P&L
     const reason      = t.reason || '';
     const targetBasis = t.target_basis ? `<span style="color:#484f58"> · TP: ${t.target_basis}</span>` : '';
     const reasonRow = `<tr class="asf-reason-row${isOpen ? ' asf-row-open' : ''}">
-      <td colspan="10">
+      <td colspan="11">
         <div class="asf-reason-inner">
           ${reason ? `<span class="asf-reason-text">${reason}</span>${targetBasis}` : '<span style="color:#484f58;font-style:italic">No reason recorded</span>'}
+          <span style="color:#484f58;margin:0 4px">·</span>
+          <span style="color:#3fb950;font-size:11px">Win: +$${rr.dollarGain.toLocaleString()}</span>
+          <span style="color:#484f58">/</span>
+          <span style="color:#f85149;font-size:11px">Loss: -$${rr.dollarLoss.toLocaleString()}</span>
+          <span style="font-size:10px;color:#484f58">(at $${tradeSize.toLocaleString()})</span>
           ${chips ? `<span class="asf-reason-chips">${chips}</span>` : ''}
           ${pta ? `<span class="analysis-toggle" style="margin-left:8px" onclick="togglePTA('${ptaId}')">▸ Post-trade analysis</span>` : ''}
         </div>
@@ -2178,8 +2250,9 @@ function renderAllSignals() {
       <td style="color:#8b949e">${t.interval.toUpperCase()}</td>
       <td style="color:${dirColor};font-weight:700">${t.direction}</td>
       <td>$${fmt(t.entry)}</td>
-      <td style="color:#3fb950">$${fmt(t.tp)}</td>
-      <td style="color:#f85149">$${fmt(t.sl)}</td>
+      <td><span style="color:#3fb950;font-weight:600">$${fmt(t.tp)}</span><span class="pct-gain">+${rr.gainPct}%</span></td>
+      <td><span style="color:#f85149;font-weight:600">$${fmt(t.sl)}</span><span class="pct-loss">-${rr.lossPct}%</span></td>
+      <td><span class="rr-badge ${rr.rrClass}">${rr.rr}:1</span></td>
       <td style="color:${scoreColor}">${t.score}/10</td>
       <td style="color:#8b949e;font-size:10px">${dtStr}</td>
       <td style="color:${roiColor};font-weight:700">${roiStr}</td>
@@ -2210,7 +2283,7 @@ function renderAllSignals() {
     <table class="calls-table">
       <thead><tr>
         <th>Symbol</th><th>TF</th><th>Dir</th><th>Entry</th>
-        <th>TP</th><th>SL</th><th>Score</th><th>Date</th><th>ROI</th><th>Action</th>
+        <th>TP (+%)</th><th>SL (-%)</th><th>R:R</th><th>Score</th><th>Date</th><th>ROI</th><th>Action</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>
