@@ -1720,20 +1720,9 @@ function renderSignal(sig) {
 // PIVOT MARKERS & SIGNAL MARKERS
 // ═══════════════════════════════════════════════════════
 function buildPivotMarkers(d) {
+  // Pivot swing arrows removed — structure already visible via S/R price lines.
+  // Keeping them caused stacking with trade entry markers on the same bars.
   permanentMarkers = [];
-  const swingHighs = d.swings.highs || [];
-  const swingLows  = d.swings.lows  || [];
-
-  swingHighs.forEach(([ts]) => {
-    const t = Math.floor(new Date(ts).getTime() / 1000);
-    permanentMarkers.push({ time: t, position: 'aboveBar', color: '#f8514955', shape: 'arrowDown', size: 1, text: '' });
-  });
-  swingLows.forEach(([ts]) => {
-    const t = Math.floor(new Date(ts).getTime() / 1000);
-    permanentMarkers.push({ time: t, position: 'belowBar', color: '#3fb95055', shape: 'arrowUp', size: 1, text: '' });
-  });
-
-  permanentMarkers.sort((a, b) => a.time - b.time);
 }
 
 function setMarkersWithSignal(signal) {
@@ -2364,7 +2353,18 @@ function buildTradeMarkers() {
 
 // Central marker rebuild — permanent pivots + trade markers only (signal shown in overlay box)
 function updateAllMarkers() {
-  let markers = [...permanentMarkers, ...tradeMarkersData.map(m => m.marker)];
+  // Deduplicate trade markers: keep only one arrow per candle+position slot.
+  // Multiple TF trades can map to the same candle bar — keep the highest-scored.
+  // All entries remain in tradeMarkersData for click-to-popup detection.
+  const seen = {};
+  tradeMarkersData.forEach(m => {
+    const key = `${m.time}_${m.marker.position}`;
+    if (!seen[key] || (m.trade.score || 0) > (seen[key].trade.score || 0)) {
+      seen[key] = m;
+    }
+  });
+  const dedupedMarkers = Object.values(seen).map(m => m.marker);
+  let markers = [...permanentMarkers, ...dedupedMarkers];
   markers.sort((a, b) => a.time - b.time);
   try { seriesMap.candles.setMarkers(markers); } catch(e) {}
 }
