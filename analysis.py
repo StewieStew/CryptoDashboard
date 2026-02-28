@@ -398,48 +398,82 @@ def confluence_score(regime, structure, vol, rsi_data, sweeps, fib,
 
 def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
                  interval: str = "4h") -> dict:
-    cur     = float(df["close"].iloc[-1])
-    atr_val = float(atr(df).iloc[-1])
+    cur        = float(df["close"].iloc[-1])
+    atr_val    = float(atr(df).iloc[-1])
+    ema50_val  = float(ema(df["close"], 50).iloc[-1])
+    ema200_val = float(ema(df["close"], 200).iloc[-1])
+    tf         = interval.upper()
 
     if structure and structure["bullish_bos"]:
-        # Stop: last swing low below entry (wide structural stop)
-        inval  = structure["last_swing_low"] or (cur - 2.0 * atr_val)
-        # Target: MUST be above entry — use prev swing high, fallback to +2 ATR
+        # ── Stop: just below the broken resistance (now acting as support)
+        #    0.5×ATR buffer absorbs noise/wicks — tighter than last swing low
+        last_sh = structure["last_swing_high"] or cur
+        inval   = round(last_sh - 0.5 * atr_val, 6)
+
+        # ── Target: next meaningful resistance ABOVE current price
+        #    Priority: prior swing high → EMA200 → EMA50 → 2.5×ATR
         prev_sh = structure.get("prev_swing_high")
-        target  = prev_sh if (prev_sh and prev_sh > cur) else round(cur + 2.0 * atr_val, 6)
-        bias    = "Long"
+        if prev_sh and prev_sh > cur:
+            target       = prev_sh
+            target_basis = f"Prior swing high"
+        elif ema200_val > cur:
+            target       = round(ema200_val, 6)
+            target_basis = "EMA200 dynamic resistance"
+        elif ema50_val > cur:
+            target       = round(ema50_val, 6)
+            target_basis = "EMA50 dynamic resistance"
+        else:
+            target       = round(cur + 2.5 * atr_val, 6)
+            target_basis = "2.5×ATR projection"
+        bias       = "Long"
+        inval_note = (f"{tf} close below ${inval:,.4f} — reclaiming below broken resistance "
+                      f"invalidates the bullish BOS")
 
     elif structure and structure["bearish_bos"]:
-        # Stop: last swing high above entry (wide structural stop)
-        inval  = structure["last_swing_high"] or (cur + 2.0 * atr_val)
-        # Target: MUST be below entry — use prev swing low, fallback to -2 ATR
+        # ── Stop: just above the broken support (now acting as resistance)
+        #    0.5×ATR buffer absorbs noise/wicks
+        last_sl = structure["last_swing_low"] or cur
+        inval   = round(last_sl + 0.5 * atr_val, 6)
+
+        # ── Target: next meaningful support BELOW current price
+        #    Priority: prior swing low → EMA200 → EMA50 → 2.5×ATR
         prev_sl = structure.get("prev_swing_low")
-        target  = prev_sl if (prev_sl and prev_sl < cur) else round(cur - 2.0 * atr_val, 6)
-        bias    = "Short"
+        if prev_sl and prev_sl < cur:
+            target       = prev_sl
+            target_basis = "Prior swing low"
+        elif ema200_val < cur:
+            target       = round(ema200_val, 6)
+            target_basis = "EMA200 dynamic support"
+        elif ema50_val < cur:
+            target       = round(ema50_val, 6)
+            target_basis = "EMA50 dynamic support"
+        else:
+            target       = round(cur - 2.5 * atr_val, 6)
+            target_basis = "2.5×ATR projection"
+        bias       = "Short"
+        inval_note = (f"{tf} close above ${inval:,.4f} — reclaiming above broken support "
+                      f"invalidates the bearish BOS")
 
     else:
-        inval  = swing_lows[-1][1]  if swing_lows  else cur * 0.95
-        target = swing_highs[-1][1] if swing_highs else cur * 1.05
-        bias   = "Neutral"
+        inval        = swing_lows[-1][1]  if swing_lows  else cur * 0.95
+        target       = swing_highs[-1][1] if swing_highs else cur * 1.05
+        bias         = "Neutral"
+        target_basis = "Nearest swing high"
+        inval_note   = f"Last swing low ${inval:,.4f} structural floor"
 
     risk_d   = abs(cur - inval)
     reward_d = abs(target - cur)
     rr       = round(reward_d / risk_d, 2) if risk_d > 0 else 0
 
-    inval_dir  = "below" if bias == "Long" else "above"
-    inval_swing = "low" if bias == "Long" else "high"
-    invalidation_note = (
-        f"{interval.upper()} close {inval_dir} ${inval:,.2f} (last swing {inval_swing})"
-    )
-
     return dict(
         bias=bias,
-        current=round(cur, 2),
-        invalidation=round(inval, 2),
-        target=round(target, 2),
+        current=round(cur, 6),
+        invalidation=round(inval, 6),
+        target=round(target, 6),
+        target_basis=target_basis,
         rr=rr,
         favorable=rr >= 2.0,
-        invalidation_note=invalidation_note,
+        invalidation_note=inval_note,
     )
 
 

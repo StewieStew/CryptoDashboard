@@ -186,6 +186,25 @@
 
     /* Prediction card scenarios */
     .pred-scenario { border-radius: 6px; padding: 8px 10px; }
+
+    /* Signal calls table */
+    .calls-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .calls-table th { font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
+      color: var(--text-dim); border-bottom: 1px solid #30363d; padding: 4px 8px;
+      white-space: nowrap; }
+    .calls-table td { padding: 5px 8px; border-bottom: 1px solid #21262d; vertical-align: middle; }
+    .calls-table tr:last-child td { border-bottom: none; }
+    .calls-btn { font-size: 10px; padding: 2px 7px; border-radius: 4px; border: 1px solid;
+      background: transparent; cursor: pointer; margin-right: 3px; white-space: nowrap; }
+    .calls-btn.win-btn   { color: #3fb950; border-color: #3fb95066; }
+    .calls-btn.win-btn:hover { background: #3fb95022; }
+    .calls-btn.loss-btn  { color: #f85149; border-color: #f8514966; }
+    .calls-btn.loss-btn:hover { background: #f8514922; }
+    .calls-btn.cancel-btn{ color: #8b949e; border-color: #8b949e66; }
+    .calls-btn.cancel-btn:hover { background: #8b949e22; }
+    .calls-stats-bar { display: flex; gap: 20px; flex-wrap: wrap; padding: 8px 0 12px;
+      border-bottom: 1px solid #30363d; margin-bottom: 10px; }
+    .calls-stats-bar span { font-size: 12px; }
   </style>
 </head>
 <body>
@@ -355,6 +374,21 @@
     <div class="card-hdr">Price Prediction — Near-Term &amp; Swing Targets</div>
     <div class="card-body-inner" id="card-prediction">
       <div class="text-dim" style="font-size:13px">Loading...</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ SIGNAL CALLS LOG ═══ -->
+<div class="card-section" style="padding-top:0;padding-bottom:24px">
+  <div class="analysis-card">
+    <div class="card-hdr">
+      Signal Log — Tracked Calls
+      <span style="font-size:10px;color:#484f58;font-weight:400;margin-left:8px">
+        (in-memory · resets on server restart)
+      </span>
+    </div>
+    <div class="card-body-inner" id="card-calls">
+      <span class="text-dim" style="font-size:13px">No signals logged yet.</span>
     </div>
   </div>
 </div>
@@ -788,6 +822,7 @@ let seriesMap      = {};
 let priceLines       = [];
 let addModal         = null;
 let lastSignal       = null;
+let lastData         = null;  // full analysis response, used for manual close price
 let lineContext      = [];   // [{price, label, why, candle_time, color, type}]
 let permanentMarkers = [];   // always-visible pivot arrows
 let highlightActive  = false;
@@ -1035,6 +1070,7 @@ function forceRefresh() { loadAnalysis(currentSymbol, true); }
 // RENDER ALL
 // ═══════════════════════════════════════════════════════
 function renderAll(d) {
+  lastData   = d;
   lastSignal = d.signal;
   updateChartData(d.chart, d.signal);
   buildLineContext(d);
@@ -1051,6 +1087,7 @@ function renderAll(d) {
   renderRisk(d.risk, d.confluence);
   renderPrediction(d.prediction);
   setTimestamp(d.fetched_at, d.cache_age);
+  fetchTrades();
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1881,6 +1918,117 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 });
+
+// ═══════════════════════════════════════════════════════
+// SIGNAL CALLS LOG
+// ═══════════════════════════════════════════════════════
+async function fetchTrades() {
+  try {
+    const resp   = await fetch('/api/trades');
+    const trades = await resp.json();
+    renderTrades(trades);
+  } catch(e) { /* silent — non-critical */ }
+}
+
+async function closeTrade(id, status) {
+  let price = lastData ? lastData.current_price : null;
+  if (status !== 'cancelled') {
+    const sym   = lastData ? lastData.symbol.replace('USDT','') : '';
+    const label = status === 'win' ? '✓ WIN' : '✗ LOSS';
+    const hint  = price ? ` (current: $${fmt(price)})` : '';
+    const input = prompt(`${sym} ${label} — exit price?${hint}\nLeave blank to use current price.`, '');
+    if (input === null) return; // user pressed Cancel
+    if (input.trim()) price = parseFloat(input) || price;
+  }
+  try {
+    await fetch(`/api/trades/${id}/close`, {
+      method:  'POST',
+      headers: {'Content-Type': 'application/json'},
+      body:    JSON.stringify({ status, price }),
+    });
+    fetchTrades();
+  } catch(e) { showError('Close trade failed: ' + e.message); }
+}
+
+function renderTrades(trades) {
+  const el = document.getElementById('card-calls');
+  if (!el) return;
+  if (!trades || trades.length === 0) {
+    el.innerHTML = '<span class="text-dim" style="font-size:13px">No signals logged yet. '
+      + 'Signals fire when confluence score ≥ 7 and a BOS is confirmed.</span>';
+    return;
+  }
+
+  const total  = trades.length;
+  const open   = trades.filter(t => t.status === 'open').length;
+  const wins   = trades.filter(t => t.status === 'win').length;
+  const losses = trades.filter(t => t.status === 'loss').length;
+  const closed = wins + losses;
+  const wrPct  = closed > 0 ? Math.round(wins / closed * 100) : null;
+  const wrColor= wrPct !== null ? (wrPct >= 50 ? '#3fb950' : '#f85149') : '#8b949e';
+  const wonRois= trades.filter(t => t.status === 'win' && t.roi_pct !== null).map(t => t.roi_pct);
+  const avgRoi = wonRois.length > 0
+    ? (wonRois.reduce((a,b) => a+b, 0) / wonRois.length).toFixed(1) + '%'
+    : '—';
+  const allRois= trades.filter(t => t.roi_pct !== null).map(t => t.roi_pct);
+  const totalRoi = allRois.length > 0
+    ? (allRois.reduce((a,b) => a+b, 0)).toFixed(1) + '%'
+    : '—';
+
+  const statsHtml = `
+    <div class="calls-stats-bar">
+      <span><span class="text-dim">Total:</span> <b>${total}</b></span>
+      <span><span class="text-dim">Open:</span> <b style="color:#d29922">${open}</b></span>
+      <span><span class="text-dim">Won:</span> <b style="color:#3fb950">${wins}</b></span>
+      <span><span class="text-dim">Lost:</span> <b style="color:#f85149">${losses}</b></span>
+      <span><span class="text-dim">Win Rate:</span> <b style="color:${wrColor}">${wrPct !== null ? wrPct + '%' : '—'}</b></span>
+      <span><span class="text-dim">Avg ROI (wins):</span> <b style="color:#3fb950">${avgRoi !== '—' ? '+' + avgRoi : '—'}</b></span>
+      <span><span class="text-dim">Total P&amp;L:</span> <b style="color:${totalRoi !== '—' && parseFloat(totalRoi) >= 0 ? '#3fb950' : '#f85149'}">${totalRoi !== '—' ? (parseFloat(totalRoi) >= 0 ? '+' : '') + totalRoi : '—'}</b></span>
+    </div>`;
+
+  const rows = trades.map(t => {
+    const sym      = t.symbol.replace('USDT','');
+    const isShort  = t.direction === 'SHORT';
+    const dirColor = isShort ? '#f85149' : '#3fb950';
+    const stColor  = {open:'#d29922', win:'#3fb950', loss:'#f85149', cancelled:'#484f58'}[t.status] || '#8b949e';
+    const roiStr   = t.roi_pct !== null ? (t.roi_pct >= 0 ? '+' : '') + t.roi_pct + '%' : '—';
+    const roiColor = t.roi_pct !== null ? (t.roi_pct >= 0 ? '#3fb950' : '#f85149') : '#8b949e';
+    const dt       = t.opened_at ? new Date(t.opened_at) : null;
+    const dtStr    = dt ? dt.toLocaleDateString() + ' '
+      + dt.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '—';
+    const scoreColor = t.score >= 9 ? '#3fb950' : t.score >= 7 ? '#d29922' : '#8b949e';
+
+    const actions = t.status === 'open'
+      ? `<button class="calls-btn win-btn"    onclick="closeTrade('${t.id}','win')">✓ Won</button>`
+        + `<button class="calls-btn loss-btn"   onclick="closeTrade('${t.id}','loss')">✗ Lost</button>`
+        + `<button class="calls-btn cancel-btn" onclick="closeTrade('${t.id}','cancelled')">— Cancel</button>`
+      : `<span style="color:${stColor};font-size:11px;text-transform:uppercase">${t.status}</span>`;
+
+    return `<tr>
+      <td><b>${sym}</b></td>
+      <td style="color:#8b949e">${t.interval.toUpperCase()}</td>
+      <td style="color:${dirColor};font-weight:700">${t.direction}</td>
+      <td>$${fmt(t.entry)}</td>
+      <td style="color:#3fb950">$${fmt(t.tp)}</td>
+      <td style="color:#f85149">$${fmt(t.sl)}</td>
+      <td style="color:${scoreColor}">${t.score}/10</td>
+      <td style="color:#8b949e;font-size:10px">${dtStr}</td>
+      <td style="color:${roiColor};font-weight:700">${roiStr}</td>
+      <td>${actions}</td>
+    </tr>`;
+  }).join('');
+
+  el.innerHTML = statsHtml + `
+    <div style="overflow-x:auto">
+      <table class="calls-table">
+        <thead><tr>
+          <th>Symbol</th><th>TF</th><th>Dir</th><th>Entry</th>
+          <th>TP</th><th>SL</th><th>Score</th><th>Opened</th><th>ROI</th><th>Action</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
 
 // ═══════════════════════════════════════════════════════
 // AUTO REFRESH
