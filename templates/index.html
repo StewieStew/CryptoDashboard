@@ -31,17 +31,17 @@
     .sym-btn.active { background: var(--blue); border-color: var(--blue); color: #fff; }
     .sym-btn.remove { font-size: 10px; padding: 2px 6px; color: var(--red); background: transparent; border: none; }
 
-    /* Hero metrics */
-    .hero { background: var(--bg-card); border-bottom: 1px solid var(--border); padding: 10px 16px; display: flex; gap: 24px; flex-wrap: wrap; align-items: center; }
-    .metric { display: flex; flex-direction: column; }
-    .metric .label { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .06em; }
-    .metric .value { font-size: 18px; font-weight: 700; color: #e6edf3; line-height: 1.2; }
-    .metric .value.sm { font-size: 14px; }
+    /* Hero metrics — compact inline strip */
+    .hero { background: var(--bg-card); border-bottom: 1px solid var(--border); padding: 5px 16px; display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
+    .metric { display: flex; align-items: baseline; gap: 5px; }
+    .metric .label { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .06em; white-space: nowrap; }
+    .metric .value { font-size: 13px; font-weight: 700; color: #e6edf3; white-space: nowrap; }
+    .metric .value.sm { font-size: 13px; }
 
     /* Charts */
     .chart-section { padding: 12px 16px 0; }
     #main-chart, #rsi-chart, #obv-chart { width: 100%; border-radius: 6px; overflow: hidden; }
-    #main-chart { height: 480px; }
+    #main-chart { height: 540px; }
     #rsi-chart  { height: 110px; margin-top: 2px; }
     #obv-chart  { height: 80px;  margin-top: 2px; }
     .chart-legend { font-size: 11px; color: var(--text-dim); padding: 4px 0; display: flex; gap: 16px; }
@@ -293,6 +293,37 @@
     /* Collapsible card */
     .card-hdr-toggle { cursor: pointer; display: flex; align-items: center; justify-content: space-between; }
     .card-hdr-toggle:hover { color: #e6edf3; }
+
+    /* Trade marker popup */
+    #trade-popup {
+      display: none;
+      position: absolute;
+      z-index: 50;
+      background: rgba(13,17,23,0.97);
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 10px 14px;
+      min-width: 230px;
+      max-width: 310px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.7);
+      pointer-events: none;
+      font-size: 12px;
+    }
+
+    /* Analysis panel toggle bar */
+    .analysis-toggle-bar {
+      background: var(--bg-card);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      padding: 8px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      user-select: none;
+      transition: background .12s;
+    }
+    .analysis-toggle-bar:hover { background: var(--bg-card2); }
   </style>
 </head>
 <body>
@@ -320,17 +351,59 @@
   </div>
 </div>
 
-<!-- ═══ HERO METRICS ═══ -->
+<!-- ═══ HERO METRICS (compact strip) ═══ -->
 <div class="hero" id="hero-bar">
   <div class="metric"><span class="label">Symbol</span><span class="value" id="h-symbol">—</span></div>
   <div class="metric"><span class="label">Price</span><span class="value" id="h-price">—</span></div>
   <div class="metric"><span class="label">Regime</span><span class="value sm" id="h-regime">—</span></div>
-  <div class="metric"><span class="label">Confluence</span><span class="value" id="h-score">—</span></div>
-  <div class="metric"><span class="label">RSI (4H)</span><span class="value sm" id="h-rsi">—</span></div>
-  <div class="metric"><span class="label">Struct. Bias</span><span class="value sm" id="h-struct">—</span></div>
+  <div class="metric"><span class="label">Score</span><span class="value" id="h-score">—</span></div>
+  <div class="metric"><span class="label">RSI</span><span class="value sm" id="h-rsi">—</span></div>
+  <div class="metric"><span class="label">BOS</span><span class="value sm" id="h-struct">—</span></div>
   <div class="metric"><span class="label">R:R</span><span class="value sm" id="h-rr">—</span></div>
-  <div class="metric"><span class="label">ATR (4H)</span><span class="value sm" id="h-atr">—</span></div>
-  <div class="metric"><span class="label">200 EMA (Daily)</span><span class="value sm" id="h-ema">—</span></div>
+  <div class="metric"><span class="label">ATR</span><span class="value sm" id="h-atr">—</span></div>
+  <div class="metric"><span class="label">200 EMA</span><span class="value sm" id="h-ema">—</span></div>
+</div>
+
+<!-- ═══ CHART ═══ -->
+<div class="chart-section">
+  <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-1">
+    <div class="chart-legend">
+      <span><span class="legend-dot" style="background:#58a6ff;height:1.5px"></span>EMA 50</span>
+      <span><span class="legend-dot" style="background:#f0883e;height:2px"></span>EMA 200</span>
+      <span><span class="legend-dot" style="background:#3fb950;border-top:1px dashed #3fb950"></span>Support</span>
+      <span><span class="legend-dot" style="background:#f85149;border-top:1px dashed #f85149"></span>Resistance</span>
+      <span><span class="legend-dot" style="background:#d29922;border-top:1px dotted #d29922"></span>Fib</span>
+      <span><span style="color:#3fb950;font-size:12px">▲</span> Signal Long</span>
+      <span><span style="color:#f85149;font-size:12px">▼</span> Signal Short</span>
+      <span><span style="color:#bc8cff;font-size:12px">▲</span> Trade Long</span>
+      <span><span style="color:#f0883e;font-size:12px">▼</span> Trade Short</span>
+    </div>
+    <div class="d-flex align-items-center gap-1">
+      <span style="font-size:10px;color:#484f58;text-transform:uppercase;letter-spacing:.06em">Timeframe</span>
+      <button class="tf-btn" data-tf="15m" onclick="switchTF('15m',this)">15m</button>
+      <button class="tf-btn" data-tf="30m" onclick="switchTF('30m',this)">30m</button>
+      <button class="tf-btn" data-tf="1h"  onclick="switchTF('1h',this)">1H</button>
+      <button class="tf-btn active" data-tf="4h" onclick="switchTF('4h',this)">4H</button>
+      <button class="tf-btn" data-tf="1d"  onclick="switchTF('1d',this)">1D</button>
+      <button class="tf-btn" data-tf="1w"  onclick="switchTF('1w',this)">1W</button>
+      <span id="tf-label">Analysis: 4H</span>
+    </div>
+  </div>
+  <div id="chart-wrap">
+    <div id="main-chart"></div>
+    <!-- Signal overlay — top-left of chart -->
+    <div id="signal-overlay">
+      <div style="font-size:11px;color:#8b949e">Waiting for data...</div>
+    </div>
+    <!-- Chart line tooltip -->
+    <div id="chart-tooltip"></div>
+    <!-- Trade marker popup — click a trade arrow to see details -->
+    <div id="trade-popup"></div>
+  </div>
+  <div style="font-size:10px;color:var(--text-dim);padding:2px 0">RSI (14)</div>
+  <div id="rsi-chart"></div>
+  <div style="font-size:10px;color:var(--text-dim);padding:2px 0 0">OBV — On Balance Volume &nbsp;<span style="color:#484f58">(teal = OBV · dimmed = 20-EMA)</span></div>
+  <div id="obv-chart"></div>
 </div>
 
 <!-- ═══ ALL SIGNALS FEED ═══ -->
@@ -362,157 +435,120 @@
   </div>
 </div>
 
-<!-- ═══ CHART ═══ -->
-<div class="chart-section">
-  <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-1">
-    <div class="chart-legend">
-      <span><span class="legend-dot" style="background:#58a6ff;height:1.5px"></span>EMA 50</span>
-      <span><span class="legend-dot" style="background:#f0883e;height:2px"></span>EMA 200</span>
-      <span><span class="legend-dot" style="background:#3fb950;border-top:1px dashed #3fb950"></span>Support</span>
-      <span><span class="legend-dot" style="background:#f85149;border-top:1px dashed #f85149"></span>Resistance</span>
-      <span><span class="legend-dot" style="background:#d29922;border-top:1px dotted #d29922"></span>Fib</span>
-      <span><span style="color:#3fb950;font-size:12px">▲</span> Long</span>
-      <span><span style="color:#f85149;font-size:12px">▼</span> Short</span>
-      <span><span class="legend-dot" style="background:#26c6da"></span>OBV</span>
-      <span><span class="legend-dot" style="background:#26c6da44"></span>OBV EMA20</span>
-    </div>
-    <div class="d-flex align-items-center gap-1">
-      <span style="font-size:10px;color:#484f58;text-transform:uppercase;letter-spacing:.06em">Timeframe</span>
-      <button class="tf-btn" data-tf="15m" onclick="switchTF('15m',this)">15m</button>
-      <button class="tf-btn" data-tf="30m" onclick="switchTF('30m',this)">30m</button>
-      <button class="tf-btn" data-tf="1h"  onclick="switchTF('1h',this)">1H</button>
-      <button class="tf-btn active" data-tf="4h" onclick="switchTF('4h',this)">4H</button>
-      <button class="tf-btn" data-tf="1d"  onclick="switchTF('1d',this)">1D</button>
-      <button class="tf-btn" data-tf="1w"  onclick="switchTF('1w',this)">1W</button>
-      <span id="tf-label">Analysis: 4H</span>
-    </div>
+<!-- ═══ ANALYSIS PANEL TOGGLE ═══ -->
+<div class="analysis-toggle-bar" onclick="toggleAnalysisPanel()">
+  <div class="d-flex align-items-center gap-2">
+    <span id="analysis-panel-arrow" style="color:#58a6ff;font-size:12px">▶</span>
+    <span style="font-size:12px;font-weight:700;color:#58a6ff;text-transform:uppercase;letter-spacing:.06em">Analysis</span>
+    <span style="font-size:11px;color:#484f58">Regime · Structure · Volume · Fibonacci · Volatility · Confluence · Risk · Prediction · Learning</span>
   </div>
-  <div id="chart-wrap">
-    <div id="main-chart"></div>
-    <!-- Signal overlay — top-left of chart -->
-    <div id="signal-overlay">
-      <div style="font-size:11px;color:#8b949e">Waiting for data...</div>
-    </div>
-    <!-- Chart line tooltip -->
-    <div id="chart-tooltip"></div>
-  </div>
-  <div style="font-size:10px;color:var(--text-dim);padding:2px 0">RSI (14)</div>
-  <div id="rsi-chart"></div>
-  <div style="font-size:10px;color:var(--text-dim);padding:2px 0 0">OBV — On Balance Volume &nbsp;<span style="color:#484f58">(teal = OBV · dimmed = 20-EMA)</span></div>
-  <div id="obv-chart"></div>
+  <span style="font-size:11px;color:#484f58" id="analysis-panel-hint">click to expand</span>
 </div>
 
-<!-- ═══ ANALYSIS CARDS — ROW 1 ═══ -->
-<div class="card-section">
-  <div class="row g-3">
+<!-- ═══ ANALYSIS PANEL (collapsible) ═══ -->
+<div id="analysis-panel" style="display:none">
 
-    <!-- SECTION 1: REGIME -->
-    <div class="col-xl-4 col-md-6">
-      <div class="analysis-card">
-        <div class="card-hdr">Section 1 — Market Regime</div>
-        <div class="card-body-inner" id="card-regime">
-          <div class="text-dim" style="font-size:13px">Loading...</div>
+  <!-- ROW 1: REGIME / STRUCTURE / VOLUME -->
+  <div class="card-section">
+    <div class="row g-3">
+      <div class="col-xl-4 col-md-6">
+        <div class="analysis-card">
+          <div class="card-hdr">Section 1 — Market Regime</div>
+          <div class="card-body-inner" id="card-regime">
+            <div class="text-dim" style="font-size:13px">Loading...</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-xl-4 col-md-6">
+        <div class="analysis-card">
+          <div class="card-hdr">Section 2 — Structure Analysis</div>
+          <div class="card-body-inner" id="card-structure">
+            <div class="text-dim" style="font-size:13px">Loading...</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-xl-4 col-md-12">
+        <div class="analysis-card">
+          <div class="card-hdr">Section 3 — Volume &amp; Momentum</div>
+          <div class="card-body-inner" id="card-volume">
+            <div class="text-dim" style="font-size:13px">Loading...</div>
+          </div>
         </div>
       </div>
     </div>
+  </div>
 
-    <!-- SECTION 2: STRUCTURE -->
-    <div class="col-xl-4 col-md-6">
-      <div class="analysis-card">
-        <div class="card-hdr">Section 2 — Structure Analysis (4H)</div>
-        <div class="card-body-inner" id="card-structure">
-          <div class="text-dim" style="font-size:13px">Loading...</div>
+  <!-- ROW 2: FIBONACCI / VOLATILITY -->
+  <div class="card-section" style="padding-top:0">
+    <div class="row g-3">
+      <div class="col-xl-6 col-md-6">
+        <div class="analysis-card h-100">
+          <div class="card-hdr">Section 4 — Fibonacci Retracement</div>
+          <div class="card-body-inner" id="card-fib">
+            <div class="text-dim" style="font-size:13px">Loading...</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-xl-6 col-md-6">
+        <div class="analysis-card h-100">
+          <div class="card-hdr">Section 5 — Volatility Filter</div>
+          <div class="card-body-inner" id="card-vol2">
+            <div class="text-dim" style="font-size:13px">Loading...</div>
+          </div>
         </div>
       </div>
     </div>
+  </div>
 
-    <!-- SECTION 3: VOLUME & RSI -->
-    <div class="col-xl-4 col-md-12">
-      <div class="analysis-card">
-        <div class="card-hdr">Section 3 — Volume &amp; Momentum</div>
-        <div class="card-body-inner" id="card-volume">
-          <div class="text-dim" style="font-size:13px">Loading...</div>
+  <!-- ROW 3: CONFLUENCE -->
+  <div class="card-section" style="padding-top:0">
+    <div class="analysis-card">
+      <div class="card-hdr">Section 6 — Confluence Score</div>
+      <div class="card-body-inner" id="card-confluence">
+        <div class="text-dim" style="font-size:13px">Loading...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RISK -->
+  <div class="card-section" style="padding-top:0">
+    <div class="analysis-card">
+      <div class="card-hdr">Section 7 — Risk Context</div>
+      <div class="card-body-inner" id="card-risk">
+        <div class="text-dim" style="font-size:13px">Loading...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- PREDICTION -->
+  <div class="card-section" style="padding-top:0">
+    <div class="analysis-card">
+      <div class="card-hdr">Price Prediction — Near-Term &amp; Swing Targets</div>
+      <div class="card-body-inner" id="card-prediction">
+        <div class="text-dim" style="font-size:13px">Loading...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ADAPTIVE LEARNING -->
+  <div class="card-section" style="padding-top:0;padding-bottom:24px">
+    <div class="analysis-card">
+      <div class="card-hdr card-hdr-toggle" onclick="toggleLearningCard()">
+        <span>
+          Adaptive Learning Engine — Factor Weights &amp; Threshold
+          <span style="font-size:10px;color:#484f58;font-weight:400;margin-left:8px">auto-adjusts after each trade</span>
+        </span>
+        <span id="learning-toggle" style="font-size:11px;color:#484f58;font-weight:400">▶ expand</span>
+      </div>
+      <div id="learning-body" style="display:none">
+        <div class="card-body-inner" id="card-learning">
+          <span class="text-dim" style="font-size:13px">Loading...</span>
         </div>
       </div>
     </div>
-
   </div>
-</div>
 
-<!-- ═══ ANALYSIS CARDS — ROW 2: FIB + VOLATILITY ═══ -->
-<div class="card-section" style="padding-top:0">
-  <div class="row g-3">
-
-    <!-- SECTION 4: FIBONACCI -->
-    <div class="col-xl-6 col-md-6">
-      <div class="analysis-card h-100">
-        <div class="card-hdr">Section 4 — Fibonacci Retracement</div>
-        <div class="card-body-inner" id="card-fib">
-          <div class="text-dim" style="font-size:13px">Loading...</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- SECTION 5: VOLATILITY -->
-    <div class="col-xl-6 col-md-6">
-      <div class="analysis-card h-100">
-        <div class="card-hdr">Section 5 — Volatility Filter</div>
-        <div class="card-body-inner" id="card-vol2">
-          <div class="text-dim" style="font-size:13px">Loading...</div>
-        </div>
-      </div>
-    </div>
-
-  </div>
-</div>
-
-<!-- ═══ ANALYSIS CARDS — ROW 3: CONFLUENCE ═══ -->
-<div class="card-section" style="padding-top:0">
-  <div class="analysis-card">
-    <div class="card-hdr">Section 6 — Confluence Score</div>
-    <div class="card-body-inner" id="card-confluence">
-      <div class="text-dim" style="font-size:13px">Loading...</div>
-    </div>
-  </div>
-</div>
-
-<!-- ═══ SECTION 7: RISK ═══ -->
-<div class="card-section" style="padding-top:0;padding-bottom:24px">
-  <div class="analysis-card">
-    <div class="card-hdr">Section 7 — Risk Context</div>
-    <div class="card-body-inner" id="card-risk">
-      <div class="text-dim" style="font-size:13px">Loading...</div>
-    </div>
-  </div>
-</div>
-
-<!-- ═══ PRICE PREDICTION ═══ -->
-<div class="card-section" style="padding-top:0;padding-bottom:24px">
-  <div class="analysis-card">
-    <div class="card-hdr">Price Prediction — Near-Term &amp; Swing Targets</div>
-    <div class="card-body-inner" id="card-prediction">
-      <div class="text-dim" style="font-size:13px">Loading...</div>
-    </div>
-  </div>
-</div>
-
-<!-- ═══ ADAPTIVE LEARNING ═══ -->
-<div class="card-section" style="padding-top:0;padding-bottom:24px">
-  <div class="analysis-card">
-    <div class="card-hdr card-hdr-toggle" onclick="toggleLearningCard()">
-      <span>
-        Adaptive Learning Engine — Factor Weights &amp; Threshold
-        <span style="font-size:10px;color:#484f58;font-weight:400;margin-left:8px">auto-adjusts after each trade</span>
-      </span>
-      <span id="learning-toggle" style="font-size:11px;color:#484f58;font-weight:400">▶ expand</span>
-    </div>
-    <div id="learning-body" style="display:none">
-      <div class="card-body-inner" id="card-learning">
-        <span class="text-dim" style="font-size:13px">Loading...</span>
-      </div>
-    </div>
-  </div>
-</div>
+</div><!-- end #analysis-panel -->
 
 <!-- ═══ ADD SYMBOL MODAL ═══ -->
 <div class="modal fade" id="addModal" tabindex="-1">
@@ -948,6 +984,9 @@ let lineContext      = [];   // [{price, label, why, candle_time, color, type}]
 let permanentMarkers = [];   // always-visible pivot arrows
 let highlightActive  = false;
 let lastHighlightTs  = null;
+let chartCandleTimes = [];   // candle bar times (unix seconds) for nearest-match lookup
+let tradeMarkersData = [];   // [{time, trade, kind, marker}] for click detection
+let analysisExpanded = false;
 
 // All-signals feed state
 let allSignalsData     = [];
@@ -993,7 +1032,7 @@ function initCharts() {
   const mainEl = document.getElementById('main-chart');
   const rsiEl  = document.getElementById('rsi-chart');
 
-  mainChart = LightweightCharts.createChart(mainEl, chartOptions(480));
+  mainChart = LightweightCharts.createChart(mainEl, chartOptions(540));
 
   seriesMap.candles = mainChart.addCandlestickSeries({
     upColor:        '#3fb950', downColor:       '#f85149',
@@ -1096,6 +1135,24 @@ function initCharts() {
   });
   ro.observe(mainEl);
 
+  // Trade marker click detection
+  mainChart.subscribeClick(param => {
+    if (!param.time || tradeMarkersData.length === 0) { hideTradePopup(); return; }
+    const clickedTime = param.time;
+    // Exact match first
+    let match = tradeMarkersData.find(m => m.time === clickedTime);
+    if (!match) {
+      // Nearest within half a candle
+      const half = getCandleSeconds(currentTF) / 2;
+      match = tradeMarkersData.find(m => Math.abs(m.time - clickedTime) <= half);
+    }
+    if (match && param.point) {
+      showTradePopup(match.trade, param.point.x, param.point.y);
+    } else {
+      hideTradePopup();
+    }
+  });
+
   initTooltip();
 }
 
@@ -1117,7 +1174,9 @@ function updateChartData(chart, signal) {
   obvChart.priceScale('right').applyOptions({ autoScale: true });
 
   // ── Set fresh data ──
+  tradeMarkersData = [];  // clear old trade markers; rebuilt after fetchTrades()
   seriesMap.candles.setData(chart.candles);
+  chartCandleTimes = chart.candles.map(c => c.time);
   seriesMap.vol.setData(chart.volume);
   seriesMap.ema50.setData(chart.ema50);
   seriesMap.ema200.setData(chart.ema200);
@@ -1603,20 +1662,8 @@ function buildPivotMarkers(d) {
 }
 
 function setMarkersWithSignal(signal) {
-  let markers = [...permanentMarkers];
-  if (signal) {
-    const isLong = signal.direction === 'LONG';
-    markers.push({
-      time: signal.bar_time,
-      position: isLong ? 'belowBar' : 'aboveBar',
-      color: isLong ? '#3fb950' : '#f85149',
-      shape: isLong ? 'arrowUp' : 'arrowDown',
-      text: `${signal.direction}  ${signal.score}/10`,
-      size: 2,
-    });
-    markers.sort((a, b) => a.time - b.time);
-  }
-  try { seriesMap.candles.setMarkers(markers); } catch(e) {}
+  // lastSignal already set by renderAll() before this call
+  updateAllMarkers();
 }
 
 function showHighlightMarker(lineInfo) {
@@ -1645,7 +1692,7 @@ function showHighlightMarker(lineInfo) {
     text: '',
   }));
 
-  let markers = [...permanentMarkers, ...highlights];
+  let markers = [...permanentMarkers, ...highlights, ...tradeMarkersData.map(m => m.marker)];
   if (lastSignal) {
     const isLong = lastSignal.direction === 'LONG';
     markers.push({
@@ -2192,6 +2239,164 @@ function toggleLearningCard() {
   if (hidden) fetchLearning();
 }
 
+// ═══════════════════════════════════════════════════════
+// TRADE MARKERS ON CHART
+// ═══════════════════════════════════════════════════════
+
+function getCandleSeconds(tf) {
+  const map = {'15m':900,'30m':1800,'1h':3600,'4h':14400,'1d':86400,'1w':604800};
+  return map[tf] || 3600;
+}
+
+// Find candle bar time (unix seconds) closest to an ISO timestamp
+function nearestCandleTime(isoStr) {
+  if (!isoStr || chartCandleTimes.length === 0) return null;
+  const ts = Math.floor(new Date(isoStr).getTime() / 1000);
+  let best = null, bestDiff = Infinity;
+  for (const t of chartCandleTimes) {
+    const d = Math.abs(t - ts);
+    if (d < bestDiff) { bestDiff = d; best = t; }
+  }
+  return best;
+}
+
+// Rebuild trade markers for current symbol + TF
+function buildTradeMarkers() {
+  tradeMarkersData = [];
+  const trades = allSignalsData || [];
+  const sym = currentSymbol;
+  const tf  = currentTF;
+
+  trades.forEach(t => {
+    if (t.symbol !== sym || t.interval !== tf) return;
+
+    // Entry marker — purple=long, orange=short (distinct from signal green/red)
+    const entryTime = nearestCandleTime(t.opened_at);
+    if (entryTime !== null) {
+      const isLong = t.direction === 'LONG';
+      tradeMarkersData.push({
+        time:  entryTime,
+        trade: t,
+        kind:  'entry',
+        marker: {
+          time:     entryTime,
+          position: isLong ? 'belowBar' : 'aboveBar',
+          color:    isLong ? '#bc8cff' : '#f0883e',
+          shape:    isLong ? 'arrowUp' : 'arrowDown',
+          text:     `${t.direction.charAt(0)}${t.score}`,
+          size:     1.5,
+        },
+      });
+    }
+
+    // Exit marker — circle dot colored by outcome
+    if (t.closed_at && t.status !== 'open') {
+      const exitTime = nearestCandleTime(t.closed_at);
+      if (exitTime !== null) {
+        const exitColor = t.status === 'win' ? '#3fb950' : t.status === 'loss' ? '#f85149' : '#484f58';
+        tradeMarkersData.push({
+          time:  exitTime,
+          trade: t,
+          kind:  'exit',
+          marker: {
+            time:     exitTime,
+            position: 'aboveBar',
+            color:    exitColor,
+            shape:    'circle',
+            text:     t.status === 'win' ? 'W' : t.status === 'loss' ? 'L' : '',
+            size:     1,
+          },
+        });
+      }
+    }
+  });
+
+  updateAllMarkers();
+}
+
+// Central marker rebuild — permanent pivots + trade markers + current signal
+function updateAllMarkers() {
+  let markers = [...permanentMarkers, ...tradeMarkersData.map(m => m.marker)];
+  if (lastSignal) {
+    const isLong = lastSignal.direction === 'LONG';
+    markers.push({
+      time:     lastSignal.bar_time,
+      position: isLong ? 'belowBar' : 'aboveBar',
+      color:    isLong ? '#3fb950' : '#f85149',
+      shape:    isLong ? 'arrowUp' : 'arrowDown',
+      text:     `${lastSignal.direction}  ${lastSignal.score}/10`,
+      size:     2,
+    });
+  }
+  markers.sort((a, b) => a.time - b.time);
+  try { seriesMap.candles.setMarkers(markers); } catch(e) {}
+}
+
+// Show trade detail popup near the clicked marker
+function showTradePopup(trade, x, y) {
+  const popup = document.getElementById('trade-popup');
+  if (!popup) return;
+  const isLong   = trade.direction === 'LONG';
+  const dirColor = isLong ? '#3fb950' : '#f85149';
+  const stColor  = {open:'#d29922',win:'#3fb950',loss:'#f85149',cancelled:'#484f58'}[trade.status] || '#8b949e';
+  const rr       = calcRR(trade.entry, trade.tp, trade.sl, trade.direction);
+  const fmtDt    = dt => dt ? new Date(dt).toLocaleDateString([],{month:'short',day:'numeric'}) + ' ' + new Date(dt).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '—';
+  const roiStr   = trade.roi_pct != null ? (trade.roi_pct >= 0 ? '+' : '') + trade.roi_pct + '%' : '—';
+  const roiColor = trade.roi_pct != null ? (trade.roi_pct >= 0 ? '#3fb950' : '#f85149') : '#8b949e';
+  const sym      = trade.symbol.replace('USDT','');
+
+  popup.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;border-bottom:1px solid #30363d;padding-bottom:6px">
+      <div>
+        <span style="font-weight:700;color:#e6edf3;font-size:13px">${sym} · ${trade.interval.toUpperCase()}</span>
+        <span style="color:${dirColor};font-weight:700;margin-left:6px">${isLong ? '▲' : '▼'} ${trade.direction}</span>
+      </div>
+      <span style="color:${stColor};font-size:11px;text-transform:uppercase;font-weight:700">${trade.status}</span>
+    </div>
+    <div style="display:grid;grid-template-columns:max-content 1fr;gap:3px 10px;font-size:11px;margin-bottom:6px">
+      <span style="color:#8b949e">Entry</span><span style="font-weight:600">$${fmt(trade.entry)}</span>
+      <span style="color:#8b949e">Target</span><span style="color:#3fb950;font-weight:600">$${fmt(trade.tp)} <span style="opacity:.7">+${rr.gainPct}%</span></span>
+      <span style="color:#8b949e">Stop</span><span style="color:#f85149;font-weight:600">$${fmt(trade.sl)} <span style="opacity:.7">-${rr.lossPct}%</span></span>
+      <span style="color:#8b949e">R:R</span><span><span class="rr-badge ${rr.rrClass}">${rr.rr}:1</span></span>
+      <span style="color:#8b949e">Score</span><span>${trade.score}/10</span>
+      <span style="color:#8b949e">ROI</span><span style="color:${roiColor};font-weight:700">${roiStr}</span>
+    </div>
+    <div style="font-size:10px;color:#8b949e;border-top:1px solid #21262d;padding-top:5px;line-height:1.6">
+      <div>Opened: <span style="color:#c9d1d9">${fmtDt(trade.opened_at)}</span></div>
+      ${trade.closed_at ? `<div>Closed: <span style="color:#c9d1d9">${fmtDt(trade.closed_at)}</span></div>` : ''}
+      ${trade.reason ? `<div style="margin-top:3px;color:#c9d1d9;font-style:italic">${trade.reason}</div>` : ''}
+    </div>
+    <div style="font-size:9px;color:#484f58;margin-top:5px;text-align:center">click chart to close</div>
+  `;
+
+  // Position near cursor, prevent overflow
+  const wrap = document.getElementById('chart-wrap');
+  const rect = wrap ? wrap.getBoundingClientRect() : {width: 800};
+  let px = x + 14;
+  let py = Math.max(0, y - 20);
+  popup.style.display = 'block';
+  const popW = 310;
+  if (px + popW > rect.width) px = Math.max(4, x - popW - 4);
+  popup.style.left = px + 'px';
+  popup.style.top  = py + 'px';
+}
+
+function hideTradePopup() {
+  const popup = document.getElementById('trade-popup');
+  if (popup) popup.style.display = 'none';
+}
+
+// Analysis panel toggle
+function toggleAnalysisPanel() {
+  analysisExpanded = !analysisExpanded;
+  const panel = document.getElementById('analysis-panel');
+  const arrow  = document.getElementById('analysis-panel-arrow');
+  const hint   = document.getElementById('analysis-panel-hint');
+  if (panel) panel.style.display = analysisExpanded ? '' : 'none';
+  if (arrow) arrow.textContent = analysisExpanded ? '▼' : '▶';
+  if (hint)  hint.textContent  = analysisExpanded ? 'click to collapse' : 'click to expand';
+}
+
 function renderAllSignals() {
   const el = document.getElementById('all-signals-body');
   if (!el) return;
@@ -2394,6 +2599,7 @@ async function fetchTrades() {
     const resp = await fetch('/api/trades');
     allSignalsData = await resp.json();
     renderAllSignals();
+    buildTradeMarkers();  // overlay logged trades onto chart for current symbol+TF
   } catch(e) { /* silent — non-critical */ }
   fetchLearning();
 }
