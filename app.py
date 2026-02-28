@@ -22,11 +22,21 @@ CHART_TTL    = 120   # 2-min chart cache
 VALID_INTERVALS  = ["15m", "30m", "1h", "4h", "1d", "1w"]
 DEFAULT_SYMBOLS  = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "DOGEUSDT"]
 
-# Intervals the background scanner checks automatically
-SCAN_INTERVALS   = ["1h", "4h", "1d"]
+# Every interval scanned automatically — no clicking required
+SCAN_INTERVALS   = ["30m", "1h", "4h", "1d", "1w"]
 
 # Grows as users view additional coins — persists for the life of the server process
 _known_symbols   = set(DEFAULT_SYMBOLS)
+
+# Scanner status — visible in /api/scanner-status
+_scanner_status  = {
+    "running":          False,
+    "scans_completed":  0,
+    "last_scan_at":     None,   # ISO timestamp
+    "last_scan_ago_s":  None,   # seconds since last scan
+    "signals_logged":   0,
+    "trades_closed":    0,
+}
 
 
 # ── Shared signal-logging helper ─────────────────────────────────────────────
@@ -59,12 +69,17 @@ def _log_signal_from_data(data: dict, sym: str, interval: str) -> None:
 def _background_scanner() -> None:
     """
     Runs forever in a daemon thread.
-    Every 5 minutes scans all known symbols × SCAN_INTERVALS for new signals
-    and auto-closes trades — no user interaction required.
+    Every 5 minutes scans ALL known symbols × ALL SCAN_INTERVALS for signals
+    and auto-closes trades — completely automatic, no user interaction needed.
     """
-    time.sleep(30)          # let gunicorn fully start before the first scan
+    _scanner_status["running"] = True
+    time.sleep(10)          # short startup pause, then begin immediately
+
     while True:
         syms = list(_known_symbols)
+        scan_signals = 0
+        scan_closes  = 0
+
         for sym in syms:
             for interval in SCAN_INTERVALS:
                 try:
@@ -73,11 +88,47 @@ def _background_scanner() -> None:
                     data["cache_age"] = 0
                     with _lock:
                         _cache[f"{sym}_{interval}"] = (data, now)
-                    _log_signal_from_data(data, sym, interval)
+
+                    # Log signal if present
+                    sig = data.get("signal")
+                    if sig:
+                        trade_id = f"{sym}_{interval}_{sig['direction']}_{int(time.time())}"
+                        logged = learning.log_trade({
+                            "id":               trade_id,
+                            "symbol":           sym,
+                            "interval":         interval,
+                            "direction":        sig["direction"],
+                            "entry":            sig["entry"],
+                            "tp":               sig["target"],
+                            "sl":               sig["stop"],
+                            "score":            sig["score"],
+                            "effective_score":  sig["score"],
+                            "reason":           sig.get("reason", ""),
+                            "factors_snapshot": sig.get("factors_snapshot", {}),
+                            "target_basis":     sig.get("target_basis", ""),
+                            "opened_at":        datetime.now(timezone.utc).isoformat(),
+                        })
+                        if logged:
+                            scan_signals += 1
+
+                    # Auto-close trades
+                    cur_price = data.get("current_price", 0)
+                    if cur_price:
+                        closed = learning.auto_close(sym, interval, float(cur_price))
+                        scan_closes += len(closed)
+
                 except Exception:
                     pass
-                time.sleep(2)   # small gap — respect Binance rate limits
-        time.sleep(300)         # wait 5 min before the next full sweep
+                time.sleep(2)   # respect Binance public API rate limits
+
+        # Update status after each full sweep
+        now_iso = datetime.now(timezone.utc).isoformat()
+        _scanner_status["scans_completed"] += 1
+        _scanner_status["last_scan_at"]    = now_iso
+        _scanner_status["signals_logged"]  += scan_signals
+        _scanner_status["trades_closed"]   += scan_closes
+
+        time.sleep(300)         # 5 minutes between full sweeps
 
 
 threading.Thread(target=_background_scanner, daemon=True).start()
@@ -189,6 +240,15 @@ def get_learning():
 @app.route("/api/symbols")
 def symbols():
     return jsonify({"symbols": DEFAULT_SYMBOLS})
+
+
+@app.route("/api/scanner-status")
+def scanner_status():
+    st = dict(_scanner_status)
+    if st["last_scan_at"]:
+        last = datetime.fromisoformat(st["last_scan_at"])
+        st["last_scan_ago_s"] = int((datetime.now(timezone.utc) - last).total_seconds())
+    return jsonify(st)
 
 
 @app.route("/api/health")
