@@ -228,9 +228,14 @@ Respond with ONLY this JSON (no markdown):
             system="You are a professional crypto technical analyst. Be direct and concise. Respond ONLY with valid JSON.",
             messages=[{"role": "user", "content": prompt}],
         )
-        return json.loads(msg.content[0].text.strip())
-    except Exception:
-        return {}
+        raw = msg.content[0].text.strip()
+        # Strip markdown fences if Claude wraps the JSON
+        if raw.startswith("```"):
+            raw = raw.split("```")[-2] if "```" in raw[3:] else raw
+            raw = raw.lstrip("json").strip()
+        return json.loads(raw)
+    except Exception as e:
+        return {"_error": str(e)}
 
 
 # ── Performance review ────────────────────────────────────────────────────────

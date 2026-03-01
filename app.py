@@ -357,6 +357,8 @@ def ai_chart(symbol: str, interval: str = "4h"):
         result = ai_analysis.analyze_chart(sym, interval, data)
         if not result:
             return jsonify({"error": "AI unavailable — check ANTHROPIC_API_KEY"}), 503
+        if "_error" in result:
+            return jsonify({"error": result["_error"]}), 500
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
