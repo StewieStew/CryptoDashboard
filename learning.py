@@ -21,7 +21,7 @@ _lock     = threading.Lock()
 # ─────────────────────────────────────────────
 # DEFAULT CONFIGURATION
 # ─────────────────────────────────────────────
-FACTOR_NAMES    = ["regime", "bos", "sweep", "volume", "obv", "rsi", "fib", "adx", "vwap"]
+FACTOR_NAMES    = ["regime", "bos", "sweep", "volume", "obv", "rsi", "adx"]
 DEFAULT_WEIGHTS = {
     "regime": 2.0,   # trending regime aligned (2 pts by default)
     "bos":    2.0,   # confirmed BOS
@@ -29,9 +29,8 @@ DEFAULT_WEIGHTS = {
     "volume": 1.0,   # volume expansion / spike
     "obv":    1.0,   # OBV confirmation / divergence
     "rsi":    1.0,   # RSI confirmation
-    "fib":    1.0,   # MACD confluence (key kept as 'fib' for backward compat)
     "adx":    1.0,   # ADX trend strength
-    "vwap":   1.0,   # VWAP alignment
+    # Max = 10 pts
 }
 DEFAULT_THRESHOLD = 7.0    # minimum score to fire a signal
 DEFAULT_STOP_MULT = 0.5    # ATR multiplier for stop placement

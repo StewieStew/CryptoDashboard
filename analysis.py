@@ -503,11 +503,9 @@ def market_regime(daily_df: pd.DataFrame) -> dict:
 # CONFLUENCE SCORE
 # ─────────────────────────────────────────────
 
-def confluence_score(regime, structure, vol, rsi_data, sweeps, macd_data,
+def confluence_score(regime, structure, vol, rsi_data, sweeps,
                      interval: str = "4h", weights: dict | None = None,
-                     adx_data: dict | None = None,
-                     vwap_val: float | None = None,
-                     current_price: float | None = None) -> dict:
+                     adx_data: dict | None = None) -> dict:
     """
     Score = sum of earned factor weights.
     Weights come from the adaptive learning engine (defaults to original point values).
@@ -622,41 +620,7 @@ def confluence_score(regime, structure, vol, rsi_data, sweeps, macd_data,
         reasons.append({"pts": 0, "earned": False,
                         "text": f"RSI {rsi_data['value']} ({rsi_data['range']}) — no directional confirmation"})
 
-    # 7. MACD direction confirmation (weight key kept as "fib" for learning-engine compat)
-    w = weights.get("fib", 1.0)
-    # Derive bias from structure first (most reliable), then regime as fallback
-    bias = "long"
-    if structure:
-        if structure.get("bearish_bos"):
-            bias = "short"
-        elif structure.get("bullish_bos"):
-            bias = "long"
-        elif structure.get("lh_ll"):
-            bias = "short"
-        elif structure.get("hh_hl"):
-            bias = "long"
-    if not (structure and (structure.get("bullish_bos") or structure.get("bearish_bos"))):
-        # Fall back to regime if structure is ambiguous
-        if not regime.get("above_200", True):
-            bias = "short"
-    macd_ok = macd_data and (
-        (bias == "long"  and macd_data.get("bullish", False)) or
-        (bias == "short" and macd_data.get("bearish", False))
-    )
-    snap["fib"] = bool(macd_ok)
-    if macd_ok:
-        cross = (" · bullish crossover" if macd_data.get("bullish_cross")
-                 else " · bearish crossover" if macd_data.get("bearish_cross")
-                 else "")
-        score += w
-        reasons.append({"pts": round(w, 1), "earned": True,
-                        "text": f"MACD confirms {bias.upper()} — line "
-                                f"{'above' if bias == 'long' else 'below'} signal{cross}"})
-    else:
-        reasons.append({"pts": 0, "earned": False,
-                        "text": f"MACD not confirming {bias.upper()} bias — no momentum alignment"})
-
-    # 8. ADX — trend strength filter (default 1 pt)
+    # 7. ADX — trend strength filter (default 1 pt)
     w       = weights.get("adx", 1.0)
     adx_val = adx_data.get("value", 0) if adx_data else 0
     adx_ok  = bool(adx_data and adx_data.get("trending", False))
@@ -668,23 +632,6 @@ def confluence_score(regime, structure, vol, rsi_data, sweeps, macd_data,
     else:
         reasons.append({"pts": 0, "earned": False,
                         "text": f"ADX {adx_val:.1f} — market ranging (<25), signals carry lower win rate"})
-
-    # 9. VWAP alignment (default 1 pt)
-    w        = weights.get("vwap", 1.0)
-    vwap_ok  = False
-    vwap_txt = "VWAP data unavailable"
-    if vwap_val is not None and current_price is not None:
-        above_vwap = current_price > vwap_val
-        vwap_ok = (bias_up and above_vwap) or (bias_dn and not above_vwap)
-        side     = "above" if above_vwap else "below"
-        vwap_txt = (f"Price {side} VWAP (${vwap_val:,.4f}) — "
-                    + ("confirms bullish intraday bias" if above_vwap else "confirms bearish intraday bias"))
-    snap["vwap"] = vwap_ok
-    if vwap_ok:
-        score += w
-        reasons.append({"pts": round(w, 1), "earned": True, "text": vwap_txt})
-    else:
-        reasons.append({"pts": 0, "earned": False, "text": vwap_txt})
 
     score     = round(score, 1)
     max_score = round(sum(weights.values()), 1)
@@ -1147,11 +1094,9 @@ def full_analysis(symbol: str, interval: str = "4h") -> dict:
 
     # Section 6: Confluence (adaptive weights + ADX + VWAP)
     cur_price  = float(df["close"].iloc[-1])
-    confluence = confluence_score(regime, structure, vol, rsi_data, sweeps, macd_data,
+    confluence = confluence_score(regime, structure, vol, rsi_data, sweeps,
                                   interval, adapt_weights,
-                                  adx_data=adx_data,
-                                  vwap_val=vwap_cur,
-                                  current_price=cur_price)
+                                  adx_data=adx_data)
 
     # Section 7: Risk (uses adaptive stop multiplier)
     risk = risk_context(df, structure, sh, sl, interval, adapt_stop_mult)
