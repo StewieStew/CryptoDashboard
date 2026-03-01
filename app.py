@@ -397,6 +397,26 @@ def test_discord():
     return jsonify({"status": "ok", "message": "Test alert sent to Discord."})
 
 
+@app.route("/api/test-ai")
+def test_ai():
+    """Test ANTHROPIC_API_KEY and surface the real error if any."""
+    import anthropic as _ant
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not key:
+        return jsonify({"status": "error", "message": "ANTHROPIC_API_KEY env var is not set."}), 500
+    try:
+        client = _ant.Anthropic(api_key=key)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=10,
+            messages=[{"role": "user", "content": "ping"}],
+        )
+        return jsonify({"status": "ok", "message": "API key is valid and working.",
+                        "model": "claude-haiku-4-5-20251001"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 @app.route("/api/health")
 def health():
     return jsonify({"status": "ok"})
