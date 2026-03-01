@@ -1220,101 +1220,107 @@ let autoTimer      = null;
 let _liveWs        = null;   // Binance WebSocket for real-time kline updates
 let _lastClose     = null;   // last known close price for color comparison
 
-// ── Live price — WebSocket with REST polling fallback ─────────────────────────
+// ── Live price — aggTrade WebSocket (instant) + kline OHLC + REST fallback ────
 let _pollTimer   = null;
 let _wsConnected = false;
-let _candleOpen  = null;   // open price of current candle (for TradingView-style color)
+let _candleOpen  = null;
+let _candleTime  = null;
+let _candleHigh  = null;
+let _candleLow   = null;
+let _candleVol   = null;
 
-function _applyLiveTick(price, open, high, low, vol, time) {
-  // Only update if something actually changed
-  if (price === _lastClose && _candleOpen === open) return;
-
-  if (seriesMap.candles) {
-    try { seriesMap.candles.update({ time, open, high, low, close: price }); } catch(e) {}
+function _updatePrice(price, open) {
+  const el = document.getElementById('h-price');
+  if (el) {
+    el.textContent = '$' + fmt(price);
+    el.style.color = price >= open ? '#3fb950' : '#f85149';
   }
-  if (seriesMap.vol) {
-    try { seriesMap.vol.update({ time, value: vol, color: price >= open ? '#26a69a' : '#ef5350' }); } catch(e) {}
-  }
-
-  // TradingView color: green if price >= candle open, red if below candle open
-  const priceEl = document.getElementById('h-price');
-  if (priceEl) {
-    priceEl.textContent = '$' + fmt(price);
-    priceEl.style.color = price >= open ? '#3fb950' : '#f85149';
-  }
-  _lastClose  = price;
-  _candleOpen = open;
+  _lastClose = price;
 }
 
-async function _pollPrice(symbol, interval) {
-  try {
-    const r = await fetch(`https://api.binance.us/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=1`);
-    const d = await r.json();
-    if (!Array.isArray(d) || !d[0]) return;
-    const k = d[0];
-    _applyLiveTick(
-      parseFloat(k[4]), parseFloat(k[1]), parseFloat(k[2]),
-      parseFloat(k[3]), parseFloat(k[5]), Math.floor(k[0] / 1000)
-    );
-  } catch(e) {}
+function _updateCandle(time, open, high, low, close, vol) {
+  if (seriesMap.candles) try { seriesMap.candles.update({time, open, high, low, close}); } catch(e){}
+  if (seriesMap.vol && vol != null) {
+    try { seriesMap.vol.update({time, value: vol, color: close >= open ? '#26a69a' : '#ef5350'}); } catch(e){}
+  }
 }
 
 function _startPoll(symbol, interval) {
   if (_pollTimer) return;
-  // Poll immediately then every 2 s
-  _pollPrice(symbol, interval);
-  _pollTimer = setInterval(() => _pollPrice(symbol, interval), 2000);
+  const go = async () => {
+    try {
+      const r = await fetch(`https://api.binance.us/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=1`);
+      const d = await r.json();
+      if (!Array.isArray(d) || !d[0]) return;
+      const k = d[0];
+      const o = parseFloat(k[1]), h = parseFloat(k[2]), l = parseFloat(k[3]),
+            c = parseFloat(k[4]), v = parseFloat(k[5]), t = Math.floor(k[0]/1000);
+      _candleOpen = o; _candleHigh = h; _candleLow = l; _candleTime = t; _candleVol = v;
+      _updateCandle(t, o, h, l, c, v);
+      _updatePrice(c, o);
+    } catch(e) {}
+  };
+  go();
+  _pollTimer = setInterval(go, 1000);
 }
 
 function startLiveWs(symbol, interval) {
-  if (_liveWs)    { try { _liveWs.close(); } catch(e) {} _liveWs = null; }
+  if (_liveWs)    { try { _liveWs.close(); } catch(e){} _liveWs = null; }
   if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
   _wsConnected = false;
-  _candleOpen  = null;
+  _candleOpen = _candleTime = _candleHigh = _candleLow = _candleVol = null;
 
-  const stream = `${symbol.toLowerCase()}@kline_${interval}`;
-
-  // Try both Binance.US and international WebSocket URLs
-  const wsUrls = [
-    `wss://stream.binance.us/ws/${stream}`,
-    `wss://stream.binance.com/ws/${stream}`,
-  ];
-  let urlIdx = 0;
-
-  function tryConnect() {
-    if (urlIdx >= wsUrls.length) {
-      _startPoll(symbol, interval);   // all WS attempts failed — use REST
-      return;
-    }
-    try {
-      const ws = new WebSocket(wsUrls[urlIdx++]);
-
-      // If no message in 5 s, try next URL or fall back to polling
-      const timeout = setTimeout(() => {
-        if (!_wsConnected) { try { ws.close(); } catch(e) {} tryConnect(); }
-      }, 5000);
-
-      ws.onmessage = e => {
-        if (!_wsConnected) { _wsConnected = true; clearTimeout(timeout); }
-        try {
-          const k = JSON.parse(e.data).k;
-          if (k) _applyLiveTick(
-            parseFloat(k.c), parseFloat(k.o), parseFloat(k.h),
-            parseFloat(k.l), parseFloat(k.v), Math.floor(k.t / 1000)
-          );
-        } catch(err) {}
-      };
-      ws.onerror = () => { clearTimeout(timeout); tryConnect(); };
-      ws.onclose = () => {
-        _liveWs = null;
-        // If WS drops after being connected, restart poll as backup
-        if (_wsConnected && !_pollTimer) _startPoll(symbol, interval);
-      };
-      _liveWs = ws;
-    } catch(e) { tryConnect(); }
+  // Seed initial candle state from already-loaded chart data
+  if (lastData && lastData.chart && lastData.chart.candles.length) {
+    const last = lastData.chart.candles[lastData.chart.candles.length - 1];
+    _candleTime = last.time; _candleOpen = last.open;
+    _candleHigh = last.high; _candleLow  = last.low; _candleVol = null;
   }
 
-  tryConnect();
+  const sym = symbol.toLowerCase();
+  // Combined stream: aggTrade (instant ticks) + kline (OHLC sync)
+  const url = `wss://stream.binance.com/stream?streams=${sym}@aggTrade/${sym}@kline_${interval}`;
+
+  try {
+    const ws = new WebSocket(url);
+    const giveUp = setTimeout(() => {
+      if (!_wsConnected) { try { ws.close(); } catch(e){} _startPoll(symbol, interval); }
+    }, 5000);
+
+    ws.onmessage = e => {
+      if (!_wsConnected) { _wsConnected = true; clearTimeout(giveUp); }
+      try {
+        const msg  = JSON.parse(e.data);
+        const name = msg.stream || '';
+        const data = msg.data  || msg;
+
+        if (name.includes('aggTrade')) {
+          // Every individual trade — instant price update
+          const price = parseFloat(data.p);
+          if (_candleOpen === null) return;
+          _candleHigh = Math.max(_candleHigh ?? price, price);
+          _candleLow  = Math.min(_candleLow  ?? price, price);
+          _updateCandle(_candleTime, _candleOpen, _candleHigh, _candleLow, price, _candleVol);
+          _updatePrice(price, _candleOpen);
+
+        } else if (data.k) {
+          // Kline stream — authoritative OHLC sync
+          const k = data.k;
+          _candleTime = Math.floor(k.t / 1000);
+          _candleOpen = parseFloat(k.o);
+          _candleHigh = parseFloat(k.h);
+          _candleLow  = parseFloat(k.l);
+          _candleVol  = parseFloat(k.v);
+          const close = parseFloat(k.c);
+          _updateCandle(_candleTime, _candleOpen, _candleHigh, _candleLow, close, _candleVol);
+          _updatePrice(close, _candleOpen);
+        }
+      } catch(err) {}
+    };
+    ws.onerror = () => { clearTimeout(giveUp); _startPoll(symbol, interval); };
+    ws.onclose = () => { _liveWs = null; if (!_pollTimer) _startPoll(symbol, interval); };
+    _liveWs = ws;
+  } catch(e) { _startPoll(symbol, interval); }
 }
 let mainChart      = null;
 let rsiChart       = null;
@@ -2492,7 +2498,7 @@ function switchSymbol(sym) {
   currentSymbol = sym;
   currentTF = '4h';
   _lastClose  = null;
-  _candleOpen = null;
+  _candleOpen = _candleTime = _candleHigh = _candleLow = _candleVol = null;
   if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
   const priceEl = document.getElementById('h-price');
   if (priceEl) priceEl.style.color = '#e6edf3';
