@@ -271,7 +271,16 @@ def auto_close(symbol: str, interval: str, current_price: float) -> list:
                         UPDATE trades SET status=?, closed_at=?, close_price=?, roi_pct=?,
                         post_trade_analysis=? WHERE id=?
                     """, (hit, now, round(current_price, 8), roi, json.dumps(analysis), t["id"]))
-                    closed.append(t["id"])
+                    closed.append({
+                        "id":          t["id"],
+                        "symbol":      t["symbol"],
+                        "interval":    t["interval"],
+                        "direction":   t["direction"],
+                        "entry":       t["entry"],
+                        "close_price": round(current_price, 8),
+                        "roi_pct":     roi,
+                        "status":      hit,
+                    })
             if closed:
                 _adapt(db)
             db.commit()

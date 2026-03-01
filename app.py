@@ -9,6 +9,7 @@ import time
 import threading
 import os
 import learning
+import notifications
 
 app          = Flask(__name__)
 _cache       = {}
@@ -141,11 +142,26 @@ def _background_scanner() -> None:
                             })
                             if logged:
                                 scan_signals += 1
+                                notifications.send_signal_alert({
+                                    "symbol":       sym,
+                                    "interval":     interval,
+                                    "direction":    sig["direction"],
+                                    "entry":        sig["entry"],
+                                    "tp":           sig["target"],
+                                    "sl":           sig["stop"],
+                                    "score":        sig["score"],
+                                    "reason":       sig.get("reason", ""),
+                                    "target_basis": sig.get("target_basis", ""),
+                                })
 
                     # Auto-close trades
                     cur_price = data.get("current_price", 0)
                     if cur_price:
                         closed = learning.auto_close(sym, interval, float(cur_price))
+                        for c in closed:
+                            notifications.send_close_alert(
+                                c, c["status"], c["close_price"], c["roi_pct"]
+                            )
                         scan_closes += len(closed)
 
                 except Exception:
@@ -258,6 +274,9 @@ def close_trade(trade_id):
         result   = learning.close_trade(trade_id, close_px, status)
         if result is None:
             return jsonify({"error": "trade not found or already closed"}), 404
+        notifications.send_close_alert(
+            result, status, result.get("close_price", close_px), result.get("roi_pct", 0.0)
+        )
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500

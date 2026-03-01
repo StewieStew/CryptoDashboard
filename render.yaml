@@ -7,6 +7,8 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.0
+      - key: DISCORD_WEBHOOK_URL
+        sync: false
     disk:
       name: trade-data
       mountPath: /data
