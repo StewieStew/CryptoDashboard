@@ -1935,6 +1935,10 @@ function renderAnalysisChart(data) {
     }
   }
 
+  // ── Historical trade markers ─────────────────────────
+  // Green triangle up = entry, Green/Red circle = TP hit / SL hit
+  addTradeMarkersToChart(candles, data.symbol, data.interval);
+
   chart.timeScale().fitContent();
 
   // Resize with container
@@ -1942,6 +1946,56 @@ function renderAnalysisChart(data) {
     if (_sigChart) _sigChart.applyOptions({ width: container.clientWidth });
   });
   _sigRo.observe(container);
+}
+
+function addTradeMarkersToChart(series, symbol, interval) {
+  // allSignalsData is the global trades array already loaded by fetchTrades()
+  if (!allSignalsData || !allSignalsData.length) return;
+  const trades = allSignalsData.filter(t =>
+    t.symbol === symbol && t.interval === interval &&
+    t.status !== 'open' && t.opened_at
+  );
+  if (!trades.length) return;
+
+  const markers = [];
+  trades.forEach(t => {
+    // Entry marker — green (long) or red (short) arrow on open candle
+    try {
+      const openTs = new Date(t.opened_at).getTime() / 1000;
+      if (openTs > 0) {
+        const isLong = t.direction === 'LONG';
+        markers.push({
+          time:     openTs,
+          position: isLong ? 'belowBar' : 'aboveBar',
+          color:    isLong ? '#3fb950' : '#f85149',
+          shape:    isLong ? 'arrowUp'  : 'arrowDown',
+          text:     `${t.direction} ${t.score}/10`,
+        });
+      }
+    } catch(e) {}
+
+    // Close marker — green circle = win, red circle = loss
+    if (t.closed_at) {
+      try {
+        const closeTs = new Date(t.closed_at).getTime() / 1000;
+        if (closeTs > 0) {
+          const won = t.status === 'win';
+          markers.push({
+            time:     closeTs,
+            position: won ? 'aboveBar' : 'belowBar',
+            color:    won ? '#3fb950'  : '#f85149',
+            shape:    'circle',
+            text:     won ? `+${(t.roi_pct||0).toFixed(1)}%` : `${(t.roi_pct||0).toFixed(1)}%`,
+          });
+        }
+      } catch(e) {}
+    }
+  });
+
+  if (!markers.length) return;
+  // Merge with any existing swing markers already set
+  markers.sort((a, b) => a.time - b.time);
+  series.setMarkers(markers);
 }
 
 // ═══════════════════════════════════════════════════════
@@ -2507,6 +2561,10 @@ async function fetchTrades() {
     allSignalsData = await resp.json();
     renderAllSignals();
     renderTradeLevels(allSignalsData);
+    // Refresh trade markers on the analysis chart with newly loaded trades
+    if (_sigSeries && lastData) {
+      addTradeMarkersToChart(_sigSeries, lastData.symbol, lastData.interval);
+    }
   } catch(e) { /* silent — non-critical */ }
   fetchLearning();
 }
