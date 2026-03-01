@@ -1223,20 +1223,27 @@ let _lastClose     = null;   // last known close price for color comparison
 // ── Live price — WebSocket with REST polling fallback ─────────────────────────
 let _pollTimer   = null;
 let _wsConnected = false;
+let _candleOpen  = null;   // open price of current candle (for TradingView-style color)
 
 function _applyLiveTick(price, open, high, low, vol, time) {
+  // Only update if something actually changed
+  if (price === _lastClose && _candleOpen === open) return;
+
   if (seriesMap.candles) {
     try { seriesMap.candles.update({ time, open, high, low, close: price }); } catch(e) {}
   }
   if (seriesMap.vol) {
     try { seriesMap.vol.update({ time, value: vol, color: price >= open ? '#26a69a' : '#ef5350' }); } catch(e) {}
   }
+
+  // TradingView color: green if price >= candle open, red if below candle open
   const priceEl = document.getElementById('h-price');
   if (priceEl) {
     priceEl.textContent = '$' + fmt(price);
-    priceEl.style.color = (_lastClose === null || price >= _lastClose) ? '#3fb950' : '#f85149';
+    priceEl.style.color = price >= open ? '#3fb950' : '#f85149';
   }
-  _lastClose = price;
+  _lastClose  = price;
+  _candleOpen = open;
 }
 
 async function _pollPrice(symbol, interval) {
@@ -1246,63 +1253,68 @@ async function _pollPrice(symbol, interval) {
     if (!Array.isArray(d) || !d[0]) return;
     const k = d[0];
     _applyLiveTick(
-      parseFloat(k[4]),  // close
-      parseFloat(k[1]),  // open
-      parseFloat(k[2]),  // high
-      parseFloat(k[3]),  // low
-      parseFloat(k[5]),  // volume
-      Math.floor(k[0] / 1000)  // open time
+      parseFloat(k[4]), parseFloat(k[1]), parseFloat(k[2]),
+      parseFloat(k[3]), parseFloat(k[5]), Math.floor(k[0] / 1000)
     );
   } catch(e) {}
 }
 
+function _startPoll(symbol, interval) {
+  if (_pollTimer) return;
+  // Poll immediately then every 2 s
+  _pollPrice(symbol, interval);
+  _pollTimer = setInterval(() => _pollPrice(symbol, interval), 2000);
+}
+
 function startLiveWs(symbol, interval) {
-  // Clear any existing connection / poll timer
   if (_liveWs)    { try { _liveWs.close(); } catch(e) {} _liveWs = null; }
   if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
   _wsConnected = false;
+  _candleOpen  = null;
 
-  // Try WebSocket on standard port 443
   const stream = `${symbol.toLowerCase()}@kline_${interval}`;
-  try {
-    const ws = new WebSocket(`wss://stream.binance.com/ws/${stream}`);
 
-    const wsTimeout = setTimeout(() => {
-      // If no message within 4 s, fall back to REST polling
-      if (!_wsConnected) {
-        try { ws.close(); } catch(e) {}
-        _pollTimer = setInterval(() => _pollPrice(symbol, interval), 3000);
-      }
-    }, 4000);
+  // Try both Binance.US and international WebSocket URLs
+  const wsUrls = [
+    `wss://stream.binance.us/ws/${stream}`,
+    `wss://stream.binance.com/ws/${stream}`,
+  ];
+  let urlIdx = 0;
 
-    ws.onopen = () => {};
-    ws.onmessage = e => {
-      _wsConnected = true;
-      clearTimeout(wsTimeout);
-      try {
-        const k = JSON.parse(e.data).k;
-        if (!k) return;
-        _applyLiveTick(
-          parseFloat(k.c), parseFloat(k.o), parseFloat(k.h),
-          parseFloat(k.l), parseFloat(k.v), Math.floor(k.t / 1000)
-        );
-      } catch(err) {}
-    };
-    ws.onerror = () => {
-      _wsConnected = false;
-      if (!_pollTimer) _pollTimer = setInterval(() => _pollPrice(symbol, interval), 3000);
-    };
-    ws.onclose = () => {
-      _liveWs = null;
-      if (!_pollTimer && _wsConnected) {
-        _pollTimer = setInterval(() => _pollPrice(symbol, interval), 3000);
-      }
-    };
-    _liveWs = ws;
-  } catch(e) {
-    // WebSocket not available — go straight to polling
-    _pollTimer = setInterval(() => _pollPrice(symbol, interval), 3000);
+  function tryConnect() {
+    if (urlIdx >= wsUrls.length) {
+      _startPoll(symbol, interval);   // all WS attempts failed — use REST
+      return;
+    }
+    try {
+      const ws = new WebSocket(wsUrls[urlIdx++]);
+
+      // If no message in 5 s, try next URL or fall back to polling
+      const timeout = setTimeout(() => {
+        if (!_wsConnected) { try { ws.close(); } catch(e) {} tryConnect(); }
+      }, 5000);
+
+      ws.onmessage = e => {
+        if (!_wsConnected) { _wsConnected = true; clearTimeout(timeout); }
+        try {
+          const k = JSON.parse(e.data).k;
+          if (k) _applyLiveTick(
+            parseFloat(k.c), parseFloat(k.o), parseFloat(k.h),
+            parseFloat(k.l), parseFloat(k.v), Math.floor(k.t / 1000)
+          );
+        } catch(err) {}
+      };
+      ws.onerror = () => { clearTimeout(timeout); tryConnect(); };
+      ws.onclose = () => {
+        _liveWs = null;
+        // If WS drops after being connected, restart poll as backup
+        if (_wsConnected && !_pollTimer) _startPoll(symbol, interval);
+      };
+      _liveWs = ws;
+    } catch(e) { tryConnect(); }
   }
+
+  tryConnect();
 }
 let mainChart      = null;
 let rsiChart       = null;
@@ -2479,7 +2491,8 @@ function renderSymbolBar() {
 function switchSymbol(sym) {
   currentSymbol = sym;
   currentTF = '4h';
-  _lastClose = null;
+  _lastClose  = null;
+  _candleOpen = null;
   if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
   const priceEl = document.getElementById('h-price');
   if (priceEl) priceEl.style.color = '#e6edf3';
