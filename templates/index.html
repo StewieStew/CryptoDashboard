@@ -167,16 +167,23 @@
     }
     .tl-item { display:flex; align-items:center; gap:5px; font-size:11px; }
     .tl-badge { font-size:9px; font-weight:700; padding:1px 5px; border-radius:3px; text-transform:uppercase; }
-    /* Signal setup chart (LightweightCharts) */
+    /* Analysis chart (LightweightCharts — always visible) */
     #signal-chart-wrap {
       background: var(--bg-card); border: 1px solid var(--border);
-      border-top: none; display: none;
+      border-top: none;
     }
     #signal-chart-header {
-      padding: 5px 14px 0; font-size: 10px; color: var(--text-dim);
+      padding: 6px 14px 2px;
+      display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px;
+    }
+    #signal-chart-header .sc-title {
+      font-size: 10px; color: var(--text-dim);
       text-transform: uppercase; letter-spacing: .06em;
     }
-    #signal-chart { width: 100%; height: 200px; }
+    #signal-chart-header .sc-legend {
+      display: flex; gap: 10px; font-size: 10px;
+    }
+    #signal-chart { width: 100%; height: 320px; }
     /* TV chart loading shimmer */
     #tv-loading {
       display:none; position:absolute; inset:0;
@@ -393,9 +400,18 @@
   </div>
   <!-- Trade levels — open trades for current symbol+TF -->
   <div id="trade-levels"></div>
-  <!-- Signal setup chart — LightweightCharts mini view with entry/TP/SL lines -->
+  <!-- Analysis chart — LightweightCharts with EMA, S/R, VWAP, swing levels, signal lines -->
   <div id="signal-chart-wrap">
-    <div id="signal-chart-header">Signal Setup — Entry / TP / SL</div>
+    <div id="signal-chart-header">
+      <span class="sc-title">Technical Analysis Chart</span>
+      <span class="sc-legend">
+        <span style="color:#58a6ff">— EMA 50</span>
+        <span style="color:#f0883e">— EMA 200</span>
+        <span style="color:#3fb950">-- Support</span>
+        <span style="color:#f85149">-- Resistance</span>
+        <span style="color:#bc8cff">-- VWAP</span>
+      </span>
+    </div>
     <div id="signal-chart"></div>
   </div>
 </div>
@@ -1371,7 +1387,7 @@ function initTVChart(symbol, interval) {
     details: false,
     hotlist: false,
     calendar: false,
-    studies: ['RSI@tv-basicstudies', 'MACD@tv-basicstudies'],
+    studies: ['RSI@tv-basicstudies'],
     overrides: {
       'mainSeriesProperties.candleStyle.upColor':       '#26a69a',
       'mainSeriesProperties.candleStyle.downColor':      '#ef5350',
@@ -1441,8 +1457,8 @@ function renderAll(d) {
   renderPrediction(d.prediction);
   setTimestamp(d.fetched_at, d.cache_age);
   fetchTrades();
-  // Signal setup chart — shows entry/TP/SL on mini LW chart
-  renderSignalChart(currentSymbol, currentTF, d.signal);
+  // Analysis chart — always visible, shows EMA/S&R/VWAP/swings/signal
+  renderAnalysisChart(d);
   // Auto-trigger Claude AI analysis when symbol or TF changes
   if (_aiChartSym !== currentSymbol || _aiChartTf !== currentTF) {
     fetchAiChart();
@@ -1814,75 +1830,118 @@ function renderTradeLevels(trades) {
 
 
 // ═══════════════════════════════════════════════════════
-// SIGNAL SETUP CHART (LightweightCharts mini view)
-// Shows last 60 candles + Entry/TP/SL price lines
+// ANALYSIS CHART (LightweightCharts — always visible)
+// Shows candles + EMA50/200 + S/R + VWAP + swing markers
+// + signal Entry/TP/SL when a signal is active
+// Uses data already loaded in lastData (no extra API call)
 // ═══════════════════════════════════════════════════════
 let _sigChart = null;
 let _sigSeries = null;
+let _sigRo = null;  // ResizeObserver
 
-async function renderSignalChart(symbol, interval, signal) {
+function renderAnalysisChart(data) {
   const wrap = document.getElementById('signal-chart-wrap');
   const container = document.getElementById('signal-chart');
-  if (!wrap || !container) return;
+  if (!wrap || !container || !data) return;
 
-  // No signal — hide the chart
-  if (!signal) {
-    wrap.style.display = 'none';
-    if (_sigChart) { _sigChart.remove(); _sigChart = null; _sigSeries = null; }
-    return;
-  }
-
+  // Always show the chart
   wrap.style.display = 'block';
 
-  // Recreate chart (new symbol, new TF, or first time)
+  // Destroy previous instance
   if (_sigChart) { _sigChart.remove(); _sigChart = null; _sigSeries = null; }
+  if (_sigRo) { _sigRo.disconnect(); _sigRo = null; }
 
   if (typeof LightweightCharts === 'undefined') return;
 
-  _sigChart = LightweightCharts.createChart(container, {
-    width:  container.clientWidth || container.offsetWidth || 800,
-    height: 200,
-    layout: { background: { color: '#161b22' }, textColor: '#8b949e' },
-    grid:   { vertLines: { color: '#21262d' }, horzLines: { color: '#21262d' } },
-    rightPriceScale: { borderColor: '#30363d' },
-    timeScale: { borderColor: '#30363d', timeVisible: true, secondsVisible: false },
-    crosshair: { mode: 1 },
+  const chart = LightweightCharts.createChart(container, {
+    width:  container.clientWidth || 800,
+    height: 320,
+    layout:         { background: { color: '#161b22' }, textColor: '#8b949e' },
+    grid:           { vertLines: { color: '#21262d' }, horzLines: { color: '#21262d' } },
+    rightPriceScale:{ borderColor: '#30363d' },
+    timeScale:      { borderColor: '#30363d', timeVisible: true, secondsVisible: false },
+    crosshair:      { mode: 1 },
     handleScroll: true, handleScale: true,
   });
+  _sigChart = chart;
 
-  _sigSeries = _sigChart.addCandlestickSeries({
-    upColor:         '#26a69a', downColor:      '#ef5350',
-    borderUpColor:   '#26a69a', borderDownColor:'#ef5350',
-    wickUpColor:     '#26a69a', wickDownColor:  '#ef5350',
+  // ── Candles ──────────────────────────────────────────
+  const candles = chart.addCandlestickSeries({
+    upColor: '#26a69a', downColor: '#ef5350',
+    borderUpColor: '#26a69a', borderDownColor: '#ef5350',
+    wickUpColor: '#26a69a', wickDownColor: '#ef5350',
+    priceLineVisible: false,
   });
+  _sigSeries = candles;
+  const cd = data.chart && data.chart.candles;
+  if (cd && cd.length) candles.setData(cd);
 
-  // Fetch last 60 candles from Binance
-  try {
-    const r = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=60`);
-    const raw = await r.json();
-    const candles = raw.map(k => ({
-      time:  k[0] / 1000,
-      open:  parseFloat(k[1]),
-      high:  parseFloat(k[2]),
-      low:   parseFloat(k[3]),
-      close: parseFloat(k[4]),
-    }));
-    _sigSeries.setData(candles);
-  } catch(e) { /* network error — chart will just be empty candles */ }
+  // ── EMA 50 (blue) ────────────────────────────────────
+  const e50d = data.chart && data.chart.ema50;
+  if (e50d && e50d.length) {
+    const e50 = chart.addLineSeries({ color: '#58a6ff', lineWidth: 1, priceLineVisible: false, lastValueVisible: true, title: 'EMA50' });
+    e50.setData(e50d);
+  }
 
-  // Draw Entry / TP / SL price lines
+  // ── EMA 200 (orange) ─────────────────────────────────
+  const e200d = data.chart && data.chart.ema200;
+  if (e200d && e200d.length) {
+    const e200 = chart.addLineSeries({ color: '#f0883e', lineWidth: 1, priceLineVisible: false, lastValueVisible: true, title: 'EMA200' });
+    e200.setData(e200d);
+  }
+
   const Dashed = LightweightCharts.LineStyle.Dashed;
-  _sigSeries.createPriceLine({ price: signal.entry,  color: '#f0883e', lineWidth: 1, lineStyle: Dashed, axisLabelVisible: true, title: 'Entry' });
-  _sigSeries.createPriceLine({ price: signal.target, color: '#3fb950', lineWidth: 1, lineStyle: Dashed, axisLabelVisible: true, title: 'TP' });
-  _sigSeries.createPriceLine({ price: signal.stop,   color: '#f85149', lineWidth: 1, lineStyle: Dashed, axisLabelVisible: true, title: 'SL' });
 
-  _sigChart.timeScale().fitContent();
+  // ── Key Support (green dashed) ───────────────────────
+  if (data.key_support) {
+    data.key_support.forEach(p => {
+      candles.createPriceLine({ price: p, color: '#3fb95088', lineWidth: 1, lineStyle: Dashed, axisLabelVisible: true, title: 'S' });
+    });
+  }
 
-  // Re-fit on window resize
-  const ro = new ResizeObserver(() => {
+  // ── Key Resistance (red dashed) ──────────────────────
+  if (data.key_resistance) {
+    data.key_resistance.forEach(p => {
+      candles.createPriceLine({ price: p, color: '#f8514988', lineWidth: 1, lineStyle: Dashed, axisLabelVisible: true, title: 'R' });
+    });
+  }
+
+  // ── VWAP (purple dashed) ─────────────────────────────
+  if (data.vwap) {
+    candles.createPriceLine({ price: data.vwap, color: '#bc8cff', lineWidth: 1, lineStyle: Dashed, axisLabelVisible: true, title: 'VWAP' });
+  }
+
+  // ── Signal Entry / TP / SL ───────────────────────────
+  if (data.signal) {
+    const sig = data.signal;
+    const Solid = LightweightCharts.LineStyle.Solid;
+    candles.createPriceLine({ price: sig.entry,  color: '#f0883e', lineWidth: 2, lineStyle: Solid,  axisLabelVisible: true, title: '▶ Entry' });
+    candles.createPriceLine({ price: sig.target, color: '#3fb950', lineWidth: 1, lineStyle: Dashed, axisLabelVisible: true, title: '✓ TP' });
+    candles.createPriceLine({ price: sig.stop,   color: '#f85149', lineWidth: 1, lineStyle: Dashed, axisLabelVisible: true, title: '✕ SL' });
+  }
+
+  // ── Swing high / low markers ─────────────────────────
+  const markers = [];
+  if (data.swings) {
+    (data.swings.highs || []).forEach(([ts]) => {
+      try { const t = new Date(ts).getTime() / 1000; if (t > 0) markers.push({ time: t, position: 'aboveBar', color: '#f85149', shape: 'arrowDown', text: '' }); } catch(e) {}
+    });
+    (data.swings.lows || []).forEach(([ts]) => {
+      try { const t = new Date(ts).getTime() / 1000; if (t > 0) markers.push({ time: t, position: 'belowBar', color: '#3fb950', shape: 'arrowUp', text: '' }); } catch(e) {}
+    });
+    if (markers.length) {
+      markers.sort((a, b) => a.time - b.time);
+      candles.setMarkers(markers);
+    }
+  }
+
+  chart.timeScale().fitContent();
+
+  // Resize with container
+  _sigRo = new ResizeObserver(() => {
     if (_sigChart) _sigChart.applyOptions({ width: container.clientWidth });
   });
-  ro.observe(container);
+  _sigRo.observe(container);
 }
 
 // ═══════════════════════════════════════════════════════
