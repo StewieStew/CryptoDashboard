@@ -655,7 +655,7 @@ def confluence_score(regime, structure, vol, rsi_data, sweeps,
 # ─────────────────────────────────────────────
 
 def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
-                 interval: str = "4h", stop_multiplier: float = 0.5,
+                 interval: str = "4h", stop_multiplier: float = 0.1,
                  fvgs: list | None = None) -> dict:
     cur        = float(df["close"].iloc[-1])
     atr_val    = float(atr(df).iloc[-1])
@@ -664,117 +664,136 @@ def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
     tf         = interval.upper()
 
     if structure and structure["bullish_bos"]:
-        # ── Stop: just below the broken resistance (now acting as support)
-        #    stop_multiplier×ATR buffer absorbs noise/wicks — tighter than last swing low
         last_sh = structure["last_swing_high"] or cur
-        inval   = round(last_sh - stop_multiplier * atr_val, 6)
+        last_sl = structure["last_swing_low"]
 
-        # ── Target: next meaningful resistance ABOVE current price
-        #    Priority: prior swing high → bearish FVG fill → EMA200 → EMA50 → 2.5×ATR
+        # ── Entry: retest of broken resistance (now structural support)
+        #    Buy the level, not the breakout candle
+        entry_price = round(last_sh, 6)
+
+        # ── Stop: below the most recent swing LOW — the structural pivot that
+        #    set up the rally. A close below this level invalidates the thesis.
+        #    stop_multiplier×ATR is a tiny wick buffer only (default 0.1).
+        if last_sl:
+            inval = round(last_sl - stop_multiplier * atr_val, 6)
+        else:
+            inval = round(last_sh - atr_val, 6)   # fallback if no swing low
+
+        # ── Target: next meaningful resistance ABOVE entry
+        #    Priority: prior swing high → bearish FVG fill → EMA200 → EMA50 → 3×ATR
         prev_sh = structure.get("prev_swing_high")
-        # Nearest bearish FVG midpoint above cur (price gapped down from there — tends to fill on up-move)
         fvg_long = None
         if fvgs:
             candidates = [f["midpoint"] for f in fvgs
-                          if f["type"] == "bearish" and f["midpoint"] > cur]
+                          if f["type"] == "bearish" and f["midpoint"] > entry_price]
             if candidates:
                 fvg_long = min(candidates)
 
-        if prev_sh and prev_sh > cur:
+        if prev_sh and prev_sh > entry_price:
             target       = prev_sh
             target_basis = "Prior swing high"
         elif fvg_long:
             target       = round(fvg_long, 6)
             target_basis = "Bearish FVG fill zone"
-        elif ema200_val > cur:
+        elif ema200_val > entry_price:
             target       = round(ema200_val, 6)
             target_basis = "EMA200 dynamic resistance"
-        elif ema50_val > cur:
+        elif ema50_val > entry_price:
             target       = round(ema50_val, 6)
             target_basis = "EMA50 dynamic resistance"
         else:
-            target       = round(cur + 2.5 * atr_val, 6)
-            target_basis = "2.5×ATR projection"
+            target       = round(entry_price + 3.0 * atr_val, 6)
+            target_basis = "3×ATR projection"
         bias       = "Long"
-        inval_note = (f"{tf} close below ${inval:,.4f} — reclaiming below broken resistance "
+        inval_note = (f"{tf} close below ${inval:,.4f} — structural swing low violated, "
                       f"invalidates the bullish BOS")
 
     elif structure and structure["bearish_bos"]:
-        # ── Stop: just above the broken support (now acting as resistance)
-        #    stop_multiplier×ATR buffer absorbs noise/wicks
         last_sl = structure["last_swing_low"] or cur
-        inval   = round(last_sl + stop_multiplier * atr_val, 6)
+        last_sh = structure["last_swing_high"]
 
-        # ── Target: next meaningful support BELOW current price
-        #    Priority: prior swing low → bullish FVG fill → EMA200 → EMA50 → 2.5×ATR
+        # ── Entry: retest of broken support (now structural resistance)
+        #    Sell the level, not the breakdown candle
+        entry_price = round(last_sl, 6)
+
+        # ── Stop: above the most recent swing HIGH — the structural pivot that
+        #    set up the drop. A close above this level invalidates the thesis.
+        if last_sh:
+            inval = round(last_sh + stop_multiplier * atr_val, 6)
+        else:
+            inval = round(last_sl + atr_val, 6)   # fallback if no swing high
+
+        # ── Target: next meaningful support BELOW entry
+        #    Priority: prior swing low → bullish FVG fill → EMA200 → EMA50 → 3×ATR
         prev_sl = structure.get("prev_swing_low")
-        # Nearest bullish FVG midpoint below cur (price gapped up from there — tends to fill on down-move)
         fvg_short = None
         if fvgs:
             candidates = [f["midpoint"] for f in fvgs
-                          if f["type"] == "bullish" and f["midpoint"] < cur]
+                          if f["type"] == "bullish" and f["midpoint"] < entry_price]
             if candidates:
                 fvg_short = max(candidates)
 
-        if prev_sl and prev_sl < cur:
+        if prev_sl and prev_sl < entry_price:
             target       = prev_sl
             target_basis = "Prior swing low"
         elif fvg_short:
             target       = round(fvg_short, 6)
             target_basis = "Bullish FVG fill zone"
-        elif ema200_val < cur:
+        elif ema200_val < entry_price:
             target       = round(ema200_val, 6)
             target_basis = "EMA200 dynamic support"
-        elif ema50_val < cur:
+        elif ema50_val < entry_price:
             target       = round(ema50_val, 6)
             target_basis = "EMA50 dynamic support"
         else:
-            target       = round(cur - 2.5 * atr_val, 6)
-            target_basis = "2.5×ATR projection"
+            target       = round(entry_price - 3.0 * atr_val, 6)
+            target_basis = "3×ATR projection"
         bias       = "Short"
-        inval_note = (f"{tf} close above ${inval:,.4f} — reclaiming above broken support "
+        inval_note = (f"{tf} close above ${inval:,.4f} — structural swing high violated, "
                       f"invalidates the bearish BOS")
 
     else:
+        entry_price  = round(cur, 6)
         inval        = swing_lows[-1][1]  if swing_lows  else cur * 0.95
         target       = swing_highs[-1][1] if swing_highs else cur * 1.05
         bias         = "Neutral"
         target_basis = "Nearest swing high"
         inval_note   = f"Last swing low ${inval:,.4f} structural floor"
 
-    risk_d   = abs(cur - inval)
-    reward_d = abs(target - cur)
+    risk_d   = abs(entry_price - inval)
+    reward_d = abs(target - entry_price)
 
     # ── Cap stop loss at 25% of entry price ──────────────────────────────────
     MAX_RISK_PCT = 0.25
-    if risk_d > 0 and (risk_d / cur) > MAX_RISK_PCT and bias != "Neutral":
-        risk_d = cur * MAX_RISK_PCT
+    if risk_d > 0 and (risk_d / entry_price) > MAX_RISK_PCT and bias != "Neutral":
+        risk_d = entry_price * MAX_RISK_PCT
         if bias == "Long":
-            inval = round(cur - risk_d, 6)
+            inval = round(entry_price - risk_d, 6)
             inval_note = (f"Stop tightened to 25% max risk at ${inval:,.4f} — "
-                          f"structural stop exceeded maximum allowed risk")
+                          f"structural stop too wide, capped for risk management")
         else:
-            inval = round(cur + risk_d, 6)
+            inval = round(entry_price + risk_d, 6)
             inval_note = (f"Stop tightened to 25% max risk at ${inval:,.4f} — "
-                          f"structural stop exceeded maximum allowed risk")
-        reward_d = abs(target - cur)
+                          f"structural stop too wide, capped for risk management")
+        reward_d = abs(target - entry_price)
 
     rr = round(reward_d / risk_d, 2) if risk_d > 0 else 0
 
-    # ── Enforce minimum R:R: Day trades (15m/30m) = 2:1, Swing/Hourly = 3:1 ───
+    # ── Enforce minimum R:R: 3:1 minimum ─────────────────────────────────────
     min_rr = 3.0
     if risk_d > 0 and rr < min_rr and bias != "Neutral":
         if bias == "Long":
-            target = round(cur + min_rr * risk_d, 6)
+            target = round(entry_price + min_rr * risk_d, 6)
         else:
-            target = round(cur - min_rr * risk_d, 6)
+            target = round(entry_price - min_rr * risk_d, 6)
         target_basis = f"{min_rr:.0f}:1 R:R projection (structural target too close)"
-        reward_d = abs(target - cur)
+        reward_d = abs(target - entry_price)
         rr = round(reward_d / risk_d, 2)
 
     return dict(
         bias=bias,
         current=round(cur, 6),
+        entry=round(entry_price, 6),
         invalidation=round(inval, 6),
         target=round(target, 6),
         target_basis=target_basis,
@@ -840,23 +859,43 @@ def chart_for_timeframe(symbol: str, interval: str) -> dict:
 def generate_signal(confluence: dict, structure, risk: dict, h4_df,
                     signal_threshold: float | None = None,
                     interval: str = "4h") -> dict | None:
-    """Returns a signal dict if effective score >= adaptive threshold, BOS confirmed, and tier R:R met."""
+    """
+    Returns a signal dict only when ALL hard gates pass and score >= threshold.
+
+    Hard gates (all must be True):
+      - Score >= adaptive threshold (default 8.0)
+      - BOS confirmed
+      - ADX > 25 (trending market — ranging markets produce false BOS)
+      - Volume expanding (low-volume breakouts are almost always fake)
+      - R:R >= 3:1
+    """
     threshold = signal_threshold if signal_threshold is not None else get_threshold()
     if confluence["score"] < threshold:
         return None
     if not structure:
         return None
-    # Hard R:R gate — Day (15m/30m): 2:1 min. Swing/Hourly: 3:1 min.
+
+    snap = confluence.get("factors_snapshot", {})
+
+    # Hard gate: ADX must confirm a trending market
+    if not snap.get("adx"):
+        return None  # Ranging/choppy market — BOS signals fail here
+
+    # Hard gate: Volume must be expanding on the BOS candle
+    if not snap.get("volume"):
+        return None  # Low-volume breakout — high false-break probability
+
+    # Hard R:R gate
     min_rr = 3.0
     if risk.get("rr", 0) < min_rr:
         return None
 
     if structure["bullish_bos"]:
         direction = "LONG"
-        reason    = "Bullish BOS — price closed above last swing high"
+        reason    = "Bullish BOS — retest entry at broken resistance (now support)"
     elif structure["bearish_bos"]:
         direction = "SHORT"
-        reason    = "Bearish BOS — price closed below last swing low"
+        reason    = "Bearish BOS — retest entry at broken support (now resistance)"
     else:
         return None
 
@@ -866,7 +905,8 @@ def generate_signal(confluence: dict, structure, risk: dict, h4_df,
         direction=direction,
         score=confluence["score"],
         max_score=confluence["max"],
-        entry=risk["current"],
+        entry=risk.get("entry", risk["current"]),   # structural retest level
+        current_price=risk["current"],               # where price actually is now
         target=risk["target"],
         target_basis=risk.get("target_basis", ""),
         stop=risk["invalidation"],
@@ -875,7 +915,7 @@ def generate_signal(confluence: dict, structure, risk: dict, h4_df,
         reason=reason,
         top_reasons=top_reasons,
         bar_time=int(h4_df.index[-1].timestamp()),
-        factors_snapshot=confluence.get("factors_snapshot", {}),
+        factors_snapshot=snap,
     )
 
 

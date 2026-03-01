@@ -39,40 +39,50 @@ def _fmt(v) -> str:
 
 def analyze_signal(signal: dict, trade_history: list,
                    market_context: dict,
-                   ai_accuracy: dict | None = None) -> dict:
+                   ai_accuracy: dict | None = None,
+                   ohlcv_candles: list | None = None,
+                   htf_context: dict | None = None) -> dict:
     """
     Ask Claude Haiku to evaluate a trade signal before it's logged.
 
+    Now receives:
+      - ohlcv_candles: last 20 candles [{time, open, high, low, close, volume}]
+      - htf_context: higher-timeframe analysis dict (regime, structure, adx, rsi)
+
     Returns:
-        {confidence, recommendation, reasoning, risks, positives}
+        {confidence, recommendation, reasoning, risks, positives,
+         entry_assessment, bos_quality}
         or {} if API key not set or call fails.
 
     `recommendation` is one of: "strong_take" | "take" | "skip"
+    `bos_quality`   is one of: "genuine" | "suspect" | "false_break"
     """
     client = _get_client()
     if not client:
         return {}
 
-    sym       = signal.get("symbol", "")
-    direction = signal.get("direction", "")
-    interval  = signal.get("interval", "")
-    entry     = float(signal.get("entry") or 0)
-    tp        = float(signal.get("tp") or signal.get("target") or 0)
-    sl        = float(signal.get("sl") or signal.get("stop") or 0)
-    score     = signal.get("score", 0)
-    reason    = signal.get("reason", "")
-    factors   = signal.get("factors_snapshot", {})
-    adx       = signal.get("adx_value", 0)
-    vwap_side = signal.get("vwap_side", "")   # "above" | "below" | ""
+    sym          = signal.get("symbol", "")
+    direction    = signal.get("direction", "")
+    interval     = signal.get("interval", "")
+    entry        = float(signal.get("entry") or 0)
+    current_px   = float(signal.get("current_price") or entry)
+    tp           = float(signal.get("tp") or signal.get("target") or 0)
+    sl           = float(signal.get("sl") or signal.get("stop") or 0)
+    score        = signal.get("score", 0)
+    reason       = signal.get("reason", "")
+    factors      = signal.get("factors_snapshot", {})
+    adx          = signal.get("adx_value", 0)
+    vwap_side    = signal.get("vwap_side", "")
 
-    tp_pct = abs((tp - entry) / entry * 100) if entry else 0
-    sl_pct = abs((sl - entry) / entry * 100) if entry else 0
-    rr     = round(tp_pct / sl_pct, 2) if sl_pct else 0
+    tp_pct  = abs((tp - entry) / entry * 100) if entry else 0
+    sl_pct  = abs((sl - entry) / entry * 100) if entry else 0
+    rr      = round(tp_pct / sl_pct, 2) if sl_pct else 0
+    gap_pct = abs((current_px - entry) / entry * 100) if entry else 0
 
     # Recent symbol performance
     sym_closed = [t for t in trade_history
                   if t.get("symbol") == sym and t.get("status") in ("win", "loss")][-10:]
-    sym_wins  = sum(1 for t in sym_closed if t.get("status") == "win")
+    sym_wins   = sum(1 for t in sym_closed if t.get("status") == "win")
 
     # Overall system
     all_closed = [t for t in trade_history if t.get("status") in ("win", "loss")]
@@ -92,75 +102,145 @@ def analyze_signal(signal: dict, trade_history: list,
     if btc_dom:
         ctx_parts.append(f"BTC Dominance: {btc_dom:.1f}%")
     if funding:
-        direction_note = "longs paying shorts (overheated)" if funding > 0.05 else \
-                         "shorts paying longs (squeeze risk)" if funding < -0.05 else "neutral"
-        ctx_parts.append(f"Funding Rate: {funding:+.4f}% ({direction_note})")
+        fn = ("longs paying shorts (overheated)" if funding > 0.05 else
+              "shorts paying longs (squeeze risk)" if funding < -0.05 else "neutral")
+        ctx_parts.append(f"Funding Rate: {funding:+.4f}% ({fn})")
     if oi:
         ctx_parts.append(f"Open Interest: {oi:,.0f} contracts")
     if adx:
-        ctx_parts.append(f"ADX: {adx:.1f} ({'trending' if adx > 25 else 'ranging'})")
+        ctx_parts.append(f"Signal TF ADX: {adx:.1f} ({'trending' if adx > 25 else 'ranging'})")
     if vwap_side:
         ctx_parts.append(f"Price vs VWAP: {vwap_side}")
-
     ctx_str = "\n".join(ctx_parts) if ctx_parts else "No extended market context available."
 
-    # ── Build Claude's own accuracy block ─────────────────────────────────────
+    # ── Higher-timeframe context ───────────────────────────────────────────────
+    htf_parts = []
+    if htf_context:
+        htf_regime    = htf_context.get("regime", {})
+        htf_structure = htf_context.get("structure", {})
+        htf_adx       = htf_context.get("adx", {})
+        htf_rsi       = htf_context.get("rsi", {})
+        htf_tf        = "1H" if interval == "15m" else "1D"
+        htf_parts.append(f"  {htf_tf} Regime: {htf_regime.get('regime','?')} "
+                         f"({'above' if htf_regime.get('above_200') else 'below'} 200 EMA)")
+        if htf_structure:
+            bos_type = ("Bullish BOS" if htf_structure.get("bullish_bos") else
+                        "Bearish BOS" if htf_structure.get("bearish_bos") else
+                        "HH/HL" if htf_structure.get("hh_hl") else
+                        "LH/LL" if htf_structure.get("lh_ll") else "No clear structure")
+            htf_parts.append(f"  {htf_tf} Structure: {bos_type}")
+        if htf_adx:
+            htf_parts.append(f"  {htf_tf} ADX: {htf_adx.get('value',0):.1f} "
+                             f"({'trending' if htf_adx.get('trending') else 'ranging'})")
+        if htf_rsi:
+            htf_parts.append(f"  {htf_tf} RSI: {htf_rsi.get('value',0):.1f} ({htf_rsi.get('range','?')})")
+    htf_str = "\n".join(htf_parts) if htf_parts else "  Higher-TF data not available."
+
+    # ── Recent OHLCV candle summary ────────────────────────────────────────────
+    candle_str = "Not available."
+    if ohlcv_candles and len(ohlcv_candles) >= 5:
+        recent = ohlcv_candles[-15:]
+        lines  = []
+        for c in recent:
+            body_pct = abs(c["close"] - c["open"]) / c["open"] * 100 if c["open"] else 0
+            wick_top = (c["high"] - max(c["open"], c["close"])) / c["open"] * 100 if c["open"] else 0
+            wick_bot = (min(c["open"], c["close"]) - c["low"]) / c["open"] * 100 if c["open"] else 0
+            color    = "bull" if c["close"] >= c["open"] else "bear"
+            lines.append(
+                f"  {color} O:{_fmt(c['open'])} H:{_fmt(c['high'])} "
+                f"L:{_fmt(c['low'])} C:{_fmt(c['close'])} "
+                f"body:{body_pct:.2f}% topWick:{wick_top:.2f}% botWick:{wick_bot:.2f}%"
+            )
+        candle_str = "\n".join(lines)
+
+    # ── Claude's own accuracy ─────────────────────────────────────────────────
     acc_parts = []
     if ai_accuracy:
         for rec in ("strong_take", "take"):
             s = ai_accuracy.get(rec)
             if s and s["total"] >= 1:
                 acc_parts.append(
-                    f"  {rec}: {s['total']} trades logged → "
+                    f"  {rec}: {s['total']} trades → "
                     f"{s['wins']}W / {s['losses']}L "
-                    f"({s['win_rate_pct']:.0f}% win rate, avg ROI {s['avg_roi_pct']:+.2f}%)"
+                    f"({s['win_rate_pct']:.0f}% WR, avg ROI {s['avg_roi_pct']:+.2f}%)"
                 )
     acc_str = (
-        "\n".join(acc_parts)
-        if acc_parts
-        else "  No closed trades yet — calibrate conservatively until track record builds."
+        "\n".join(acc_parts) if acc_parts
+        else "  No closed AI-evaluated trades yet — be very conservative."
     )
 
     system_prompt = (
-        "You are a professional crypto quant trader evaluating algorithmic signals. "
-        "Be direct and concise. Respond ONLY with valid JSON — no markdown, no explanation outside the JSON."
+        "You are a professional crypto quant trader and price action analyst. "
+        "Your job is to PROTECT the trading system from bad entries. "
+        "Default to SKIP unless the setup is clearly high quality. "
+        "Respond ONLY with valid JSON — no markdown, no text outside the JSON."
     )
 
-    user_prompt = f"""Evaluate this trade signal:
+    user_prompt = f"""Evaluate this PENDING RETEST trade signal. Price has broken structure and we are waiting
+for a pullback to the broken level before entering. Your job: assess if this is a quality setup worth waiting for.
 
-SIGNAL:
+SIGNAL DETAILS:
 - Symbol: {sym} | Direction: {direction} | Timeframe: {interval} ({_tier(interval)} trade)
-- Entry: ${_fmt(entry)} | Target: ${_fmt(tp)} (+{tp_pct:.1f}%) | Stop: ${_fmt(sl)} (-{sl_pct:.1f}%)
+- BOS candle closed at: ${_fmt(current_px)} (this is where the break happened)
+- Pending entry (retest level): ${_fmt(entry)} ({gap_pct:.1f}% away from current price)
+- Stop loss (structural swing {'low' if direction == 'LONG' else 'high'}): ${_fmt(sl)} (-{sl_pct:.1f}% from entry)
+- Take profit (structural resistance/support): ${_fmt(tp)} (+{tp_pct:.1f}% from entry)
 - Technical Score: {score}/10 | R:R: {rr}:1
-- Factors: {reason}
-- Factor snapshot: {json.dumps(factors)}
+- Signal reason: {reason}
+- Active factors: {json.dumps({k: v for k, v in factors.items() if v})}
+
+HIGHER TIMEFRAME CONTEXT (critical — HTF must align):
+{htf_str}
 
 MARKET CONTEXT:
 {ctx_str}
+
+LAST 15 CANDLES (most recent last — assess BOS quality and momentum):
+{candle_str}
 
 SYSTEM TRACK RECORD:
 - Win rate: {win_rate:.0f}% over {total} closed trades | Avg ROI: {avg_roi:.2f}%
 - {sym} recent: {sym_wins}/{len(sym_closed)} wins
 
-YOUR OWN PREDICTION ACCURACY (use this to self-calibrate):
+YOUR PAST ACCURACY:
 {acc_str}
-- If your strong_take win rate is below 55%, be more selective — raise the bar for strong_take.
-- If your take win rate is below 45%, tighten your criteria — skip more borderline setups.
-- If both are performing well (>65%), you can trust your conviction signals more.
 
-Respond with this exact JSON:
-{{"confidence": <0-100>, "recommendation": "<strong_take|take|skip>", "reasoning": "<2 sentences max>", "risks": ["<specific risk>"], "positives": ["<specific positive>"]}}
+ANALYSIS TASKS:
+1. BOS quality: Is this a genuine structural break or a stop-hunt/false break?
+   - Check: Is the BOS candle a strong momentum candle or a small/wick-heavy bar?
+   - Check: Is volume confirming the break? (already gated by system — double-check candle quality)
+   - Check: Does price action BEFORE the BOS show a proper swing structure or just noise?
 
-Rules: skip if R:R < 2 or score < 7. strong_take only if 3+ major factors confirm AND market context aligns. Be critical — false signals hurt the system."""
+2. HTF alignment: Does the higher timeframe agree with this direction?
+   - A LONG in a {interval} downtrend on the HTF is very high risk.
+
+3. Entry quality: Is the retest level (${_fmt(entry)}) a meaningful support/resistance?
+   - This level must be a clear structural pivot, not a random price.
+
+4. Risk/reward reality: Does the {rr}:1 R:R hold given the current market context?
+
+CONSERVATIVE RULES (override everything else):
+- SKIP if HTF is opposed to the signal direction
+- SKIP if BOS candle is a doji, spinning top, or has wick > 2× body size
+- SKIP if the last 5 candles show heavy rejection in signal direction
+- SKIP if score < 8 or R:R < 3
+- SKIP if system has < 10 closed trades AND this is a marginal setup
+- strong_take only if: HTF aligned + genuine momentum BOS candle + 4+ factors active + clean structure
+
+Respond with ONLY this JSON:
+{{"confidence": <0-100>, "recommendation": "<strong_take|take|skip>", "bos_quality": "<genuine|suspect|false_break>", "entry_assessment": "<1 sentence on whether the retest level is meaningful>", "reasoning": "<2 sentences max>", "risks": ["<specific risk>"], "positives": ["<specific positive>"]}}"""
 
     try:
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=350,
+            max_tokens=450,
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
         )
-        return json.loads(msg.content[0].text.strip())
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1].lstrip("json").strip()
+        return json.loads(raw)
     except Exception:
         return {}
 

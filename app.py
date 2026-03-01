@@ -140,13 +140,16 @@ def _background_scanner() -> None:
                         session_ok = (not is_day) or _in_active_session()
 
                         if _bias_agrees(sig["direction"], htf_d) and session_ok:
-                            trade_id   = f"{sym}_{interval}_{sig['direction']}_{int(time.time())}"
+                            trade_id  = f"{sym}_{interval}_{sig['direction']}_{int(time.time())}"
+                            cur_px    = sig.get("current_price", sig["entry"])
+                            vwap_val  = data.get("vwap") or 0
                             trade_data = {
                                 "id":               trade_id,
                                 "symbol":           sym,
                                 "interval":         interval,
                                 "direction":        sig["direction"],
-                                "entry":            sig["entry"],
+                                "entry":            sig["entry"],      # structural retest level
+                                "current_price":    cur_px,            # where BOS happened
                                 "tp":               sig["target"],
                                 "sl":               sig["stop"],
                                 "score":            sig["score"],
@@ -155,25 +158,33 @@ def _background_scanner() -> None:
                                 "factors_snapshot": sig.get("factors_snapshot", {}),
                                 "target_basis":     sig.get("target_basis", ""),
                                 "opened_at":        datetime.now(timezone.utc).isoformat(),
-                                # Pass ADX/VWAP context for AI evaluation
+                                "status":           "pending",  # activated when retest level hit
                                 "adx_value":        data.get("adx", {}).get("value", 0),
-                                "vwap_side":        ("above" if data.get("vwap") and
-                                                     sig["entry"] > data.get("vwap", 0) else "below"),
+                                "vwap_side":        ("above" if vwap_val and cur_px > vwap_val
+                                                     else "below"),
                             }
-                            # ── Claude AI evaluates BEFORE logging ───────
-                            # If Claude says skip → signal is vetoed entirely.
-                            # If API is down (empty result) → fall back to log.
+                            # ── Claude AI REQUIRED before logging ─────────
+                            # Every trade must pass Claude review.
+                            # If API key is set but Claude fails → hold signal (no unreviewed trades).
+                            has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY", ""))
+                            ohlcv = data.get("candles", [])[-20:] if data.get("candles") else []
                             try:
                                 ctx       = market_data.get_market_context(sym)
                                 history   = learning.get_trades()
                                 ai_acc    = learning.get_ai_accuracy()
                                 ai_result = ai_analysis.analyze_signal(
-                                    trade_data, history, ctx, ai_accuracy=ai_acc)
+                                    trade_data, history, ctx,
+                                    ai_accuracy=ai_acc,
+                                    ohlcv_candles=ohlcv,
+                                    htf_context=htf_d,
+                                )
                             except Exception:
                                 ai_result = {}
 
-                            if ai_result.get("recommendation") == "skip":
-                                pass  # Claude vetoed — don't log, don't notify
+                            if has_api_key and not ai_result:
+                                pass  # Claude unavailable — skip this scan cycle
+                            elif ai_result.get("recommendation") == "skip":
+                                pass  # Claude vetoed
                             else:
                                 logged = learning.log_trade(trade_data)
                                 if logged:
@@ -182,16 +193,18 @@ def _background_scanner() -> None:
                                         learning.update_trade_ai(trade_id, ai_result)
                                         trade_data["ai_analysis"] = ai_result
                                     notifications.send_signal_alert({
-                                        "symbol":       sym,
-                                        "interval":     interval,
-                                        "direction":    sig["direction"],
-                                        "entry":        sig["entry"],
-                                        "tp":           sig["target"],
-                                        "sl":           sig["stop"],
-                                        "score":        sig["score"],
-                                        "reason":       sig.get("reason", ""),
-                                        "target_basis": sig.get("target_basis", ""),
-                                        "ai_analysis":  trade_data.get("ai_analysis", {}),
+                                        "symbol":        sym,
+                                        "interval":      interval,
+                                        "direction":     sig["direction"],
+                                        "entry":         sig["entry"],
+                                        "tp":            sig["target"],
+                                        "sl":            sig["stop"],
+                                        "score":         sig["score"],
+                                        "reason":        sig.get("reason", ""),
+                                        "target_basis":  sig.get("target_basis", ""),
+                                        "ai_analysis":   trade_data.get("ai_analysis", {}),
+                                        "pending":       True,
+                                        "current_price": cur_px,
                                     })
 
                     # Auto-close trades

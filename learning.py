@@ -32,8 +32,8 @@ DEFAULT_WEIGHTS = {
     "adx":    1.0,   # ADX trend strength
     # Max = 10 pts
 }
-DEFAULT_THRESHOLD = 7.0    # minimum score to fire a signal
-DEFAULT_STOP_MULT = 0.5    # ATR multiplier for stop placement
+DEFAULT_THRESHOLD = 8.0    # minimum score to fire a signal (raised from 7.0)
+DEFAULT_STOP_MULT = 0.1    # ATR wick buffer on structural stop (was 0.5 main stop)
 ADAPT_WINDOW      = 8      # trades to look back per-factor
 MIN_SAMPLES       = 2      # minimum trades before adapting a factor
 WEIGHT_FLOOR      = 0.30   # minimum factor weight (as fraction of default)
@@ -90,6 +90,13 @@ def _init_db():
         }
         for k, v in defaults.items():
             db.execute("INSERT OR IGNORE INTO config (key, value) VALUES (?, ?)", (k, v))
+        db.commit()
+
+        # ── Config migrations: upgrade threshold/stop_mult to new defaults ──
+        db.execute("UPDATE config SET value=? WHERE key='signal_threshold' AND CAST(value AS REAL) < 8.0",
+                   (str(DEFAULT_THRESHOLD),))
+        db.execute("UPDATE config SET value=? WHERE key='stop_multiplier' AND CAST(value AS REAL) >= 0.4",
+                   (str(DEFAULT_STOP_MULT),))
         db.commit()
 
         # ── Schema migrations: add new columns to existing tables ──────────
@@ -195,13 +202,13 @@ def log_trade(trade: dict) -> bool:
         try:
             existing = db.execute(
                 f"SELECT id, direction FROM trades "
-                f"WHERE symbol=? AND interval IN ({placeholders}) AND status='open'",
+                f"WHERE symbol=? AND interval IN ({placeholders}) AND status IN ('open','pending')",
                 (sym, *tier_intervals)
             ).fetchall()
 
             for ex in existing:
                 if ex["direction"] == dirn:
-                    return False   # already in this direction on this tier
+                    return False   # already in this direction on this tier (open or pending)
                 else:
                     # Opposing signal — exit the current position before opening new one
                     _close_internal(db, ex["id"], trade["entry"], "cancelled")
@@ -213,11 +220,15 @@ def log_trade(trade: dict) -> bool:
             partial_tp = (round(entry_f + 1.5 * risk_dist, 8) if dirn == "LONG"
                           else round(entry_f - 1.5 * risk_dist, 8))
 
+            # Trades with a retest entry price lower/higher than current price
+            # start as 'pending' — activated when price reaches the entry level.
+            initial_status = trade.get("status", "pending")
+
             db.execute("""
                 INSERT INTO trades
                 (id, symbol, interval, direction, entry, tp, sl, score, effective_score,
-                 reason, factors_snapshot, target_basis, opened_at, partial_tp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 reason, factors_snapshot, target_basis, opened_at, partial_tp, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 trade["id"], sym, intv, dirn,
                 trade["entry"], trade["tp"], trade["sl"],
@@ -227,6 +238,7 @@ def log_trade(trade: dict) -> bool:
                 trade.get("target_basis", ""),
                 trade["opened_at"],
                 partial_tp,
+                initial_status,
             ))
             db.commit()
             return True
@@ -286,10 +298,51 @@ def auto_close(symbol: str, interval: str, current_price: float) -> tuple:
     partials = []
     tier      = "day" if interval in ("15m", "30m", "1h") else "swing"
     max_hours = _DAY_MAX_HOURS if tier == "day" else _SWING_MAX_HOURS
+    # Pending trades expire faster — if no retest within this window, miss the trade
+    _PENDING_MAX_HOURS = {"day": 6, "swing": 48}
+    pending_max = _PENDING_MAX_HOURS.get(tier, 24)
 
     with _lock:
         db = _conn()
         try:
+            # ── Activate or expire pending (retest-entry) trades ──────────────
+            pending_rows = db.execute(
+                "SELECT * FROM trades WHERE symbol=? AND interval=? AND status='pending'",
+                (symbol, interval)
+            ).fetchall()
+            for row in pending_rows:
+                t = dict(row)
+                entry_px  = float(t["entry"])
+                direction = t["direction"]
+                # Check if retest level has been reached
+                activated = (
+                    (direction == "LONG"  and current_price <= entry_px) or
+                    (direction == "SHORT" and current_price >= entry_px)
+                )
+                if activated:
+                    db.execute("UPDATE trades SET status='open' WHERE id=?", (t["id"],))
+                    continue
+                # Check pending timeout — price never pulled back, miss the trade
+                try:
+                    opened = datetime.fromisoformat(t["opened_at"].replace("Z", "+00:00"))
+                    age_h  = (datetime.now(timezone.utc) - opened).total_seconds() / 3600
+                    if age_h > pending_max:
+                        now_ts = datetime.now(timezone.utc).isoformat()
+                        db.execute(
+                            "UPDATE trades SET status='cancelled', closed_at=?, "
+                            "close_price=?, roi_pct=0 WHERE id=?",
+                            (now_ts, entry_px, t["id"])
+                        )
+                        closed.append({
+                            "id": t["id"], "symbol": t["symbol"],
+                            "interval": t["interval"], "direction": t["direction"],
+                            "entry": entry_px, "close_price": entry_px,
+                            "roi_pct": 0.0, "status": "cancelled",
+                        })
+                except Exception:
+                    pass
+            db.commit()
+
             rows = db.execute(
                 "SELECT * FROM trades WHERE symbol=? AND interval=? AND status='open'",
                 (symbol, interval)

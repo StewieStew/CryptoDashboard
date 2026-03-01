@@ -117,8 +117,15 @@ def send_signal_alert(trade: dict) -> None:
         risks          = ai.get("risks", [])
         positives      = ai.get("positives", [])
 
-        rec_emoji = {"strong_take": "🔥", "take": "✅", "skip": "⛔"}.get(recommendation, "🤖")
-        ai_lines  = [f"{rec_emoji} **{recommendation.replace('_',' ').title()}** — Confidence: {confidence}/100"]
+        rec_emoji  = {"strong_take": "🔥", "take": "✅", "skip": "⛔"}.get(recommendation, "🤖")
+        bos_q      = ai.get("bos_quality", "")
+        entry_ass  = ai.get("entry_assessment", "")
+        bos_emoji  = {"genuine": "✅", "suspect": "⚠️", "false_break": "❌"}.get(bos_q, "")
+        ai_lines   = [f"{rec_emoji} **{recommendation.replace('_',' ').title()}** — Confidence: {confidence}/100"]
+        if bos_q:
+            ai_lines.append(f"BOS: {bos_emoji} {bos_q.replace('_',' ').title()}")
+        if entry_ass:
+            ai_lines.append(f"Entry: {entry_ass}")
         if reasoning:
             ai_lines.append(reasoning)
         if positives:
@@ -129,9 +136,20 @@ def send_signal_alert(trade: dict) -> None:
         fields.append({"name": "🤖 Claude AI Assessment",
                         "value": "\n".join(ai_lines)[:512], "inline": False})
 
+    # ── Pending entry note ────────────────────────────────────────────────────
+    if trade.get("pending"):
+        cur_px   = float(trade.get("current_price") or entry)
+        gap_pct  = abs((cur_px - entry) / entry * 100) if entry else 0
+        fields.append({
+            "name": "Entry Status",
+            "value": (f"**PENDING RETEST** — waiting for price to pull back "
+                      f"to `${_fmt(entry)}` ({gap_pct:.1f}% away from current `${_fmt(cur_px)}`)"),
+            "inline": False,
+        })
+
     embed = {
         "color": _signal_color(direction, interval),
-        "title": f"{emoji} {direction} — {sym}  ({tier} · {interval})",
+        "title": f"{'PENDING ' if trade.get('pending') else ''}{emoji} {direction} — {sym}  ({tier} · {interval})",
         "fields": fields,
         "footer": {"text": "Crypto Dashboard · Paper Trade"},
     }
