@@ -609,383 +609,598 @@
     <div class="modal-content">
       <div class="modal-header">
         <div>
-          <div style="font-size:16px;font-weight:700;color:#e6edf3">How It Works — Analysis Methodology</div>
-          <div style="font-size:12px;color:#8b949e">Every calculation explained — from raw price data to confluence score</div>
+          <div style="font-size:16px;font-weight:700;color:#e6edf3">How It Works — Complete System Guide</div>
+          <div style="font-size:12px;color:#8b949e">Every signal, filter, and decision explained from raw data to trade management</div>
         </div>
         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body d-flex p-0" style="overflow:hidden;height:100%">
 
         <!-- Left nav -->
-        <div style="width:210px;flex-shrink:0;background:#0d1117;border-right:1px solid #30363d;overflow-y:auto">
+        <div style="width:220px;flex-shrink:0;background:#0d1117;border-right:1px solid #30363d;overflow-y:auto">
           <nav class="method-nav" id="method-nav">
             <div style="font-size:10px;color:#484f58;text-transform:uppercase;letter-spacing:.08em;padding:12px 16px 4px">Sections</div>
-            <a href="#m1" onclick="methodNav(this)">1. Market Regime</a>
-            <a href="#m2" onclick="methodNav(this)">2. Structure (4H)</a>
-            <a href="#m3" onclick="methodNav(this)">3. Volume &amp; OBV</a>
-            <a href="#m4" onclick="methodNav(this)">4. RSI</a>
-            <a href="#m5" onclick="methodNav(this)">5. Fibonacci</a>
-            <a href="#m6" onclick="methodNav(this)">6. Volatility</a>
-            <a href="#m7" onclick="methodNav(this)">7. Confluence Score</a>
-            <a href="#m8" onclick="methodNav(this)">8. Signal Generation</a>
-            <a href="#m9" onclick="methodNav(this)">9. Chart Elements</a>
+            <a href="#m1" onclick="methodNav(this)">1. System Overview</a>
+            <a href="#m2" onclick="methodNav(this)">2. The 9 Signal Factors</a>
+            <a href="#m3" onclick="methodNav(this)">3. Confluence Score</a>
+            <a href="#m4" onclick="methodNav(this)">4. Signal Gating (6 Filters)</a>
+            <a href="#m5" onclick="methodNav(this)">5. Two-Tier Trade System</a>
+            <a href="#m6" onclick="methodNav(this)">6. Trade Management</a>
+            <a href="#m7" onclick="methodNav(this)">7. Claude AI</a>
+            <a href="#m8" onclick="methodNav(this)">8. Adaptive Learning</a>
+            <a href="#m9" onclick="methodNav(this)">9. Chart Reference</a>
           </nav>
         </div>
 
         <!-- Right content -->
         <div id="method-content" style="flex:1;overflow-y:auto;padding:28px 36px;background:#0d1117">
 
-          <!-- §1 MARKET REGIME -->
+          <!-- §1 SYSTEM OVERVIEW -->
           <section class="method-section" id="m1">
-            <div class="method-title">1. Market Regime</div>
-            <p class="method-lead">The daily regime is a top-down filter. Before looking at any 4H entry, the code first classifies what the daily chart is doing. Trading against the daily trend fails more often than it succeeds — the regime tells you which direction has institutional money behind it.</p>
+            <div class="method-title">1. System Overview — How Everything Works Together</div>
+            <p class="method-lead">This is a fully automated crypto analysis and paper-trading system. Every 5 minutes, a background scanner checks 13 coins across two timeframes, runs 9 independent technical checks, applies 6 layers of filtering, consults Claude AI, and decides whether to log a trade. Here is the exact sequence from market data to open position.</p>
 
             <div class="method-block">
-              <div class="method-block-title">200-Period EMA (Daily)</div>
-              <div class="method-formula">k = 2 / (200 + 1) = 0.00995
-EMA(today) = Close(today) × k + EMA(yesterday) × (1 − k)</div>
-              <p class="method-p">The EMA weights recent candles more heavily than older ones. A 200-bar EMA on the daily chart represents roughly 40 weeks of price memory. Price <strong style="color:#3fb950">above</strong> the 200 EMA = macro bullish context. Price <strong style="color:#f85149">below</strong> = macro bearish. This single level is watched by more institutional desks than almost any other indicator.</p>
+              <div class="method-block-title">End-to-End Signal Flow</div>
+              <div class="method-formula">1. DATA FETCH
+   Binance public API → raw OHLCV candles for each symbol + timeframe
+
+2. TECHNICAL ANALYSIS (9 factors)
+   Regime · BOS · Sweep · Volume · OBV · RSI · MACD · ADX · VWAP
+   → Confluence Score (0 – ~12 pts, adaptive weights)
+
+3. SIGNAL CHECK
+   Score ≥ adaptive threshold (default 7.0) AND BOS confirmed?
+   → Yes: candidate signal with entry / target / stop
+   → No: no trade, continue to next symbol
+
+4. RISK/REWARD GATE
+   Day tier (15m): R:R must be ≥ 2:1
+   Swing tier (4h): R:R must be ≥ 3:1
+   → Fails: signal discarded
+
+5. HIGHER-TIMEFRAME BIAS FILTER
+   15m LONG requires 1H to be bullish (above 200 EMA or bullish BOS)
+   4H  LONG requires 1D to be bullish
+   → Disagrees: signal discarded
+
+6. SESSION FILTER (Day tier only)
+   15m signals only fire 07:00–22:00 UTC (EU + US session overlap)
+
+7. CLAUDE AI PRE-TRADE VETO
+   Haiku evaluates: score, R:R, market context, Fear & Greed, ADX, VWAP,
+   funding rate, BTC dominance, and Claude's own past accuracy
+   → recommendation == "skip": trade vetoed, never logged
+   → "take" or "strong_take": proceed to step 8
+
+8. TRADE LOGGED
+   ID, entry, target, stop, score, factors, AI analysis saved to SQLite
+   Discord notification sent with full trade details + AI assessment
+
+9. TRADE MANAGEMENT (ongoing, every 5-min scan)
+   • Partial TP at 1.5R → 50% booked, SL → breakeven, Discord alert
+   • Full TP hit → WIN, blended ROI recorded
+   • SL hit (or breakeven) → LOSS (or small WIN if partial already hit)
+   • Max age: Day = 72h, Swing = 14 days → cancelled if expired
+
+10. ADAPTATION
+    After each closed trade → adaptive engine reviews last 8 trades,
+    adjusts factor weights, signal threshold, stop multiplier</div>
             </div>
 
             <div class="method-block">
-              <div class="method-block-title">ATR — Average True Range (14)</div>
-              <div class="method-formula">True Range = max( High − Low,  |High − Prev.Close|,  |Low − Prev.Close| )
-ATR = 14-period EMA of True Range</div>
-              <p class="method-p">ATR captures the full range of price movement including gaps. If price gaps up, the true range from the previous close is larger than just the day's high-low. A rising ATR means increasing volatility — trend conditions. A falling ATR means the market is compressing. ATR is used in two places: the regime (daily ATR) and the volatility filter (4H ATR).</p>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Higher Highs / Higher Lows Detection</div>
-              <div class="method-formula">Swing High: High[i] = max( High[i−5], ..., High[i+5] )  → 11-bar window
-Swing Low:  Low[i]  = min( Low[i−5],  ..., Low[i+5]  )  → 11-bar window
-HH/HL = ( SwingHigh₂ > SwingHigh₁ ) AND ( SwingLow₂ > SwingLow₁ )</div>
-              <p class="method-p">For every candle, the code checks if its high is the highest point in the surrounding 11-bar window (5 before, 5 after). If yes, it's a swing high. The last two swing highs are compared — if each new swing high is higher than the previous, and each new swing low is higher than the previous, price is making Higher Highs and Higher Lows. That's the textbook definition of an uptrend.</p>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Classification Logic</div>
+              <div class="method-block-title">What the Dashboard Shows</div>
               <table class="method-table">
-                <tr><td><span class="method-tag" style="background:#3fb95022;color:#3fb950">Strong Uptrend</span></td><td>Above 200 EMA + HH/HL structure + ATR expanding</td></tr>
-                <tr><td><span class="method-tag" style="background:#2ea04322;color:#2ea043">Weak Uptrend</span></td><td>Above 200 EMA + HH/HL structure + ATR contracting</td></tr>
-                <tr><td><span class="method-tag" style="background:#f8514922;color:#f85149">Strong Downtrend</span></td><td>Below 200 EMA + LH/LL structure + ATR expanding</td></tr>
-                <tr><td><span class="method-tag" style="background:#da363322;color:#da3633">Weak Downtrend</span></td><td>Below 200 EMA + LH/LL structure + ATR contracting</td></tr>
-                <tr><td><span class="method-tag" style="background:#d2922222;color:#d29222">Range / Compression</span></td><td>None of the above conditions are satisfied</td></tr>
+                <tr><td><span class="method-tag" style="background:#58a6ff22;color:#58a6ff">Analysis Cards</span></td><td>Live read of all 9 factors for the selected symbol + timeframe. Refreshes every 5 minutes from scanner cache.</td></tr>
+                <tr><td><span class="method-tag" style="background:#3fb95022;color:#3fb950">Signal Overlay</span></td><td>If a signal is currently active for this symbol/TF, shows entry, target, stop, and R:R on the chart.</td></tr>
+                <tr><td><span class="method-tag" style="background:#bc8cff22;color:#bc8cff">Claude AI Card</span></td><td>On-demand chart analysis: Claude reads all 9 indicators and gives a directional bias, confidence, and key levels.</td></tr>
+                <tr><td><span class="method-tag" style="background:#d2922222;color:#d29222">Trade History</span></td><td>Every logged trade with entry, exit, ROI%, AI recommendation badge, and post-trade analysis.</td></tr>
+                <tr><td><span class="method-tag" style="background:#3fb95022;color:#3fb950">Past Trade Lines</span></td><td>Green/red lines on the chart connecting each trade's entry to its exit. Lets you see where setups played out.</td></tr>
               </table>
             </div>
           </section>
 
           <hr class="method-divider">
 
-          <!-- §2 STRUCTURE -->
+          <!-- §2 THE 9 SIGNAL FACTORS -->
           <section class="method-section" id="m2">
-            <div class="method-title">2. Structure Analysis (4H)</div>
-            <p class="method-lead">Structure is the map of where price has been accepted and rejected. Swing highs are where sellers won. Swing lows are where buyers won. A Break of Structure means one side has decisively taken control. Liquidity sweeps are stop hunts — the market briefly fakes a direction, triggers stops, then reverses.</p>
+            <div class="method-title">2. The 9 Signal Factors</div>
+            <p class="method-lead">Nine independent checks are run on every scan. Three are structural (2 pts each, maximum weight). Six are confirmation (1 pt each). Adaptive learning adjusts the weight of each factor over time based on its real win rate — a factor that keeps appearing on losing trades gets reduced; one that appears on winners gets boosted.</p>
 
             <div class="method-block">
-              <div class="method-block-title">Swing Detection Algorithm</div>
-              <div class="method-formula">For each candle at index i (with n=5 lookback):
-  Is Swing High? → High[i] == max( High[i−5 : i+5] )
-  Is Swing Low?  → Low[i]  == min( Low[i−5  : i+5] )
-
-The last 5 bars cannot be swing points (no future bars to compare yet)</div>
-              <p class="method-p">This is a structural pivot detection — not a smoothed indicator. The code scans 200 four-hour candles and marks every local maximum as a swing high and every local minimum as a swing low. The result is the raw price structure with no lag.</p>
+              <div class="method-block-title">Factor 1 — Market Regime (default 2 pts)</div>
+              <div class="method-formula">HTF used:  15m → 1H regime  |  4H → 1D regime
+Bullish:   HTF price ABOVE 200-period EMA (institutional long bias)
+Bearish:   HTF price BELOW 200-period EMA (institutional short bias)
+Also checks: HH/HL (uptrend) vs LH/LL (downtrend) structure on HTF</div>
+              <p class="method-p">The regime is always evaluated on the <em>higher</em> timeframe — never the chart you're trading. A 15m long signal only has regime support if the 1H is above its 200 EMA. This is the most important filter: trading against the macro trend is the #1 cause of BOS failures. When regime aligns, institutional money is flowing in the same direction as your trade.</p>
             </div>
 
             <div class="method-block">
-              <div class="method-block-title">Break of Structure (BOS)</div>
-              <div class="method-formula">Bullish BOS: Current Close > Last Swing High
-Bearish BOS: Current Close < Last Swing Low</div>
-              <p class="method-p">A BOS is the most important structural event. When price closes beyond the last swing high, it proves buyers have enough force to push through the previous supply zone. This is directional conviction. Without a BOS, any move is just noise inside the existing range. BOS confirmation earns 2 points in the confluence score.</p>
+              <div class="method-block-title">Factor 2 — Break of Structure / BOS (default 2 pts)</div>
+              <div class="method-formula">Swing detection window:  15m→3 bars, 4H→5 bars each side of pivot
+
+Bullish BOS: Current Close > Last confirmed Swing High
+  → Buyers overpowered the last supply zone. Structural shift.
+
+Bearish BOS: Current Close < Last confirmed Swing Low
+  → Sellers overpowered the last demand zone. Structural shift.
+
+BOS is REQUIRED for a signal — score alone cannot fire a trade</div>
+              <p class="method-p">The BOS is the directional verdict. Without it, any move is just noise inside the existing range. The BOS confirms that one side of the market has taken decisive control, not just briefly pierced a level. Note: the system only accepts BOS via <em>close</em>, not a wick — a candle that briefly prints above the swing high then closes back below is NOT a BOS. This eliminates a major class of false breakout signals.</p>
             </div>
 
             <div class="method-block">
-              <div class="method-block-title">Liquidity Sweep Detection</div>
-              <div class="method-formula">Bullish Sweep: Low[i] < Swing Low AND Close[i] > Swing Low
-  → wick pierced below, then rejected upward (stops taken, bulls step in)
+              <div class="method-block-title">Factor 3 — Liquidity Sweep (default 2 pts)</div>
+              <div class="method-formula">Bullish Sweep: Low[i] &lt; Swing Low AND Close[i] &gt; Swing Low
+  → Wick pierced below, candle closed above (stops taken, bulls absorbed)
 
-Bearish Sweep: High[i] > Swing High AND Close[i] < Swing High
-  → wick pierced above, then rejected downward (stops taken, bears step in)
+Bearish Sweep: High[i] &gt; Swing High AND Close[i] &lt; Swing High
+  → Wick pierced above, candle closed below (stops taken, bears absorbed)
 
-Checked against last 4 swing points within the last 12 bars</div>
-              <p class="method-p">Retail stops cluster below swing lows and above swing highs. Market makers know this. A sweep is when price briefly wicks through those levels — triggering the stops — then reverses hard. The sweep itself creates trapped traders whose forced exits fuel the next move. A sweep before a BOS is the highest-quality setup in this framework.</p>
+Checked against last 4 swing pivots within the last 12 bars</div>
+              <p class="method-p">Stop-loss orders cluster below swing lows (retail longs) and above swing highs (retail shorts). A sweep is when institutional players briefly push price through those clusters — triggering all the stops, buying their liquidity — then reverse hard. The trapped traders' forced exits (margin calls, stop-outs) then fuel the new move. A sweep + BOS in sequence is the highest-probability setup in the system.</p>
             </div>
 
             <div class="method-block">
-              <div class="method-block-title">Key Levels</div>
-              <p class="method-p"><strong style="color:#3fb950">Support zones</strong> = the last 2 swing lows on 4H. These are where buyers have demonstrated willingness to absorb selling. <strong style="color:#f85149">Resistance zones</strong> = the last 2 swing highs. These are supply areas where sellers stepped in. Both are shown as dashed lines on the chart.</p>
+              <div class="method-block-title">Factor 4 — Volume Expansion (default 1 pt)</div>
+              <div class="method-formula">Expanding = Avg(Volume last 5 bars) &gt; Avg(Volume bars −20 to −5)
+Spike     = Any bar in last 10 has Volume &gt; 2× Avg(last 20 bars)
+→ Either condition earns the point</div>
+              <p class="method-p">Volume confirms institutional participation. A breakout on low volume is a warning — the move may reverse when volume returns. A BOS on expanding volume or a volume spike means real money is behind the move. Without volume confirmation, the signal still fires if other factors align, but the post-trade AI gives it lower confidence.</p>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">Factor 5 — OBV Direction (default 1 pt)</div>
+              <div class="method-formula">OBV = running sum: +Volume on up-close bars, −Volume on down-close bars
+
+Bullish OBV: OBV trending up (20-bar EMA of OBV rising)
+Bearish OBV: OBV trending down
+
+Bullish Divergence: Price down 20 bars but OBV flat/up → hidden accumulation
+Bearish Divergence: Price up 20 bars but OBV flat/down → hidden distribution
+→ Any aligned condition earns the point</div>
+              <p class="method-p">OBV reveals smart-money flow that's invisible on price alone. A slow, quiet accumulation shows up in OBV before price breaks out. The OBV chart panel (below the main chart) lets you visually confirm whether volume flow is leading or lagging price. Divergence between OBV and price is an early warning that the current trend is running on empty.</p>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">Factor 6 — RSI Confirmation (default 1 pt)</div>
+              <div class="method-formula">RSI = 14-period exponential RSI on closing prices
+
+Bullish conditions (any one earns the point):
+  • RSI &gt; 60 in an uptrend regime (momentum aligned)
+  • RSI was ≤30 in last 8 bars AND now &gt; 30 (reset from oversold)
+
+Bearish conditions (any one earns the point):
+  • RSI &lt; 40 in a downtrend regime (momentum aligned)
+  • RSI was ≥70 in last 8 bars AND now &lt; 70 (reset from overbought)</div>
+              <p class="method-p">RSI in the 60–100 "bullish range" during an uptrend means momentum is healthy and continuous — not a fade. A reset from oversold (30→31) is more actionable than RSI just sitting at 30, because it shows the selling wave is exhausting and buyers are stepping in. Strong trends often hold RSI above 50 for weeks without touching 30.</p>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">Factor 7 — MACD Confirmation (default 1 pt)</div>
+              <div class="method-formula">MACD Line   = EMA(12) − EMA(26)   of closing prices
+Signal Line = EMA(9) of MACD Line
+Histogram   = MACD Line − Signal Line
+
+Bullish: MACD Line &gt; Signal Line AND Histogram &gt; 0
+Bearish: MACD Line &lt; Signal Line AND Histogram &lt; 0
+Bonus:   Bullish/bearish crossover in last 3 bars = stronger confirmation</div>
+              <p class="method-p">MACD measures momentum by comparing fast and slow exponential moving averages. When the MACD line crosses above the signal line, short-term momentum has turned bullish. The histogram shows the acceleration: growing bars = momentum building, shrinking bars = momentum fading. MACD aligns with BOS direction to confirm the breakout has momentum, not just price displacement.</p>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">Factor 8 — ADX Trend Strength (default 1 pt)</div>
+              <div class="method-formula">ADX = 14-period Average Directional Index (measures trend strength, not direction)
+DI+ = Directional Indicator Plus  (buying pressure)
+DI− = Directional Indicator Minus (selling pressure)
+
+ADX &gt; 25 → trending market, signals are reliable     → earns the point
+ADX &lt; 25 → ranging/choppy, signal carry lower win rate → no point
+ADX &gt; 50 → strong trend, highest reliability</div>
+              <p class="method-p">ADX is the only factor that measures trend <em>strength</em> without a direction. A BOS in a ranging market (ADX &lt; 25) is much more likely to be a false break than a BOS where ADX is 35+. When ADX is below 25, the system still fires if score is met — but the AI flags lower confidence and the Discord alert notes "ranging market." Over time, if ranging-market signals keep losing, the adaptive engine reduces this factor's weight.</p>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">Factor 9 — VWAP Alignment (default 1 pt)</div>
+              <div class="method-formula">VWAP = Σ(Price × Volume) / Σ(Volume)   — rolling from session open
+
+Long signal: Current price &gt; VWAP → price above fair value baseline
+Short signal: Current price &lt; VWAP → price below fair value baseline</div>
+              <p class="method-p">VWAP (Volume-Weighted Average Price) is the true average price paid by all participants weighted by volume. It's the benchmark institutional desks and algorithms use as a "fair value" anchor. Price trading above VWAP means buyers are in control intraday and willing to pay above average. For a long signal, being above VWAP confirms the directional bias has institutional flow behind it. For swing trades on 4H, VWAP acts as a multi-day trend anchor.</p>
             </div>
           </section>
 
           <hr class="method-divider">
 
-          <!-- §3 VOLUME & OBV -->
+          <!-- §3 CONFLUENCE SCORE -->
           <section class="method-section" id="m3">
-            <div class="method-title">3. Volume &amp; OBV</div>
-            <p class="method-lead">Price can be manipulated in low-volume conditions. Volume confirms that real money is participating in a move. OBV (On Balance Volume) is a running total of volume flow that reveals whether smart money is accumulating or distributing while price appears stable.</p>
+            <div class="method-title">3. Confluence Score</div>
+            <p class="method-lead">All 9 factors are weighted and summed into a single score. The maximum varies as the adaptive engine adjusts individual weights, but starts at ~12 pts. A signal requires a minimum score (default 7.0, adaptive) AND a confirmed BOS. The weights are not fixed — they change automatically based on each factor's real win-rate performance.</p>
 
             <div class="method-block">
-              <div class="method-block-title">On Balance Volume (OBV)</div>
-              <div class="method-formula">If Close > Prev.Close:  OBV = OBV + Volume   (buyers in control, add volume)
-If Close < Prev.Close:  OBV = OBV − Volume   (sellers in control, subtract)
-If Close = Prev.Close:  OBV = OBV             (unchanged)
-
-OBV is a running cumulative sum from bar 1</div>
-              <p class="method-p">OBV was developed by Joseph Granville in 1963. The idea: volume precedes price. If OBV is rising while price is flat, large buyers are quietly accumulating. If OBV is falling while price holds steady, distribution is happening. When price eventually moves, OBV already told you which direction.</p>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">OBV Divergence</div>
-              <div class="method-formula">Bearish Divergence: Price[last] > Price[20 bars ago] AND OBV[last] ≤ OBV[20 bars ago]
-  → Price making new highs but volume flow is not confirming → hidden selling
-
-Bullish Divergence: Price[last] < Price[20 bars ago] AND OBV[last] ≥ OBV[20 bars ago]
-  → Price making new lows but volume flow is not confirming → hidden buying</div>
-              <p class="method-p">Divergence is the most powerful signal OBV generates. If price prints a new high but OBV doesn't, it means the up-move happened on lower and lower volume — sellers are absorbing the buying pressure. The trend is running out of fuel.</p>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Volume Expansion</div>
-              <div class="method-formula">Expanding = Average(Volume[last 5 bars]) > Average(Volume[bars −20 to −5])
-Spike     = Any bar in last 10 has Volume > 2× Average(last 20 bars)</div>
-              <p class="method-p">Volume expansion on a directional move means real participation. A spike (2× average) often marks capitulation (at lows) or breakout (at highs). Volume contracting on a move is a warning — the move may not sustain.</p>
-            </div>
-          </section>
-
-          <hr class="method-divider">
-
-          <!-- §4 RSI -->
-          <section class="method-section" id="m4">
-            <div class="method-title">4. RSI — Relative Strength Index</div>
-            <p class="method-lead">RSI measures the speed and magnitude of price changes. It answers: is this asset overbought (run up too fast) or oversold (sold off too hard)? More importantly, when RSI diverges from price, it signals that momentum is fading before price confirms it.</p>
-
-            <div class="method-block">
-              <div class="method-block-title">RSI Formula (14-period)</div>
-              <div class="method-formula">Average Gain = 14-period EMA of gains (bars where Close > Prev.Close)
-Average Loss = 14-period EMA of losses (bars where Close < Prev.Close)
-
-RS  = Average Gain / Average Loss
-RSI = 100 − ( 100 / (1 + RS) )</div>
-              <p class="method-p">RSI output is always 0–100. The EMA smoothing means recent bars weight more than older ones. A reading of 70+ is conventionally overbought — price has risen quickly. 30 or below is oversold. But in strong trends, RSI can stay above 60 or below 40 for extended periods — this is the "bullish range" and "bearish range" concept.</p>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Range Classification</div>
+              <div class="method-block-title">Default Weights &amp; Maximum Score</div>
               <table class="method-table">
-                <tr><td><span class="method-tag" style="background:#3fb95022;color:#3fb950">Bullish Range</span></td><td>RSI &gt; 60 — momentum aligned with upward bias, trend continuation more likely</td></tr>
-                <tr><td><span class="method-tag" style="background:#8b949e22;color:#8b949e">Neutral</span></td><td>RSI 40–60 — no directional momentum conviction, range or transitioning</td></tr>
-                <tr><td><span class="method-tag" style="background:#f8514922;color:#f85149">Bearish Range</span></td><td>RSI &lt; 40 — momentum aligned with downward bias, trend continuation more likely</td></tr>
-              </table>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">RSI Divergence (14-bar lookback)</div>
-              <div class="method-formula">Bearish: Close[last] > max(Close[−14:−1]) AND RSI[last] ≤ max(RSI[−14:−1])
-  → Price new high, RSI lower high = momentum fading on up-move
-
-Bullish: Close[last] < min(Close[−14:−1]) AND RSI[last] ≥ min(RSI[−14:−1])
-  → Price new low, RSI higher low = momentum fading on down-move</div>
-              <p class="method-p">Divergence means price and momentum disagree. In a healthy uptrend, each new price high should come with an RSI high. When they diverge — price new high but RSI lower high — it reveals that each rally takes more effort to achieve and less is accomplished. Trend exhaustion signal.</p>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Reset from Extreme</div>
-              <div class="method-formula">Reset from Overbought: RSI was ≥70 in last 8 bars AND RSI now &lt; 70
-Reset from Oversold:  RSI was ≤30 in last 8 bars AND RSI now &gt; 30</div>
-              <p class="method-p">A reset from an extreme is often a better entry signal than the extreme itself. RSI touching 30 and bouncing back above 30 is more actionable than just RSI being at 30 — it shows the selling pressure is actually exhausting and buyers are stepping in.</p>
-            </div>
-          </section>
-
-          <hr class="method-divider">
-
-          <!-- §5 FIBONACCI -->
-          <section class="method-section" id="m5">
-            <div class="method-title">5. Fibonacci Retracement</div>
-            <p class="method-lead">Fibonacci levels are only applied when the daily regime is trending. In choppy or ranging conditions, there is no clear swing to measure and the levels become noise. In a trend, price rarely goes straight — it pulls back, finds support at predictable mathematical levels, then continues.</p>
-
-            <div class="method-block">
-              <div class="method-block-title">How Levels Are Calculated</div>
-              <div class="method-formula">Measure from: Last Swing Low → Last Swing High (for uptrend)
-Range = Swing High − Swing Low
-
-0.236 level = Swing High − (0.236 × Range)
-0.382 level = Swing High − (0.382 × Range)
-0.500 level = Swing High − (0.500 × Range)   ← midpoint
-0.618 level = Swing High − (0.618 × Range)   ← golden ratio
-0.786 level = Swing High − (0.786 × Range)</div>
-              <p class="method-p">These ratios derive from the Fibonacci sequence (0, 1, 1, 2, 3, 5, 8, 13...) where each number divided by the next approaches 0.618. The golden ratio appears throughout nature, architecture, and financial markets — not because of mysticism but because enough participants use these levels to create self-fulfilling reactions.</p>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Which Levels Matter Most</div>
-              <table class="method-table">
-                <tr><td><span class="method-tag" style="background:#ffd70022;color:#ffd700">0.382</span></td><td>Shallow retracement — strong trend, momentum intact. Bulls buying early.</td></tr>
-                <tr><td><span class="method-tag" style="background:#ffc04022;color:#ffc040">0.500</span></td><td>50% retrace — psychological midpoint. Even split between bulls and bears.</td></tr>
-                <tr><td><span class="method-tag" style="background:#ffaa0022;color:#ffaa00">0.618</span></td><td>Golden ratio — most significant level. Deepest pullback in a healthy trend. Highest confluence for long entries.</td></tr>
-              </table>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Confluence Check</div>
-              <div class="method-formula">Price is "at a fib level" if: |Current Price − Fib Level| / Current Price &lt; 1.5%</div>
-              <p class="method-p">A fib level alone is weak. A fib level that aligns with a 4H structure support zone — where the swing low also sits near 0.618 — that's confluence. The more independent factors pointing to the same price area, the higher the probability of a reaction there. This combination earns 1 point in the confluence score.</p>
-            </div>
-          </section>
-
-          <hr class="method-divider">
-
-          <!-- §6 VOLATILITY -->
-          <section class="method-section" id="m6">
-            <div class="method-title">6. Volatility Filter</div>
-            <p class="method-lead">ATR on the 4H chart tells you whether the market is moving enough to trade. Entering during compression (low ATR) is dangerous — the eventual expansion often triggers stops before the real move starts. Entering during expansion means you're joining momentum, not fighting accumulation.</p>
-
-            <div class="method-block">
-              <div class="method-block-title">ATR Ratio</div>
-              <div class="method-formula">ATR Ratio = Current ATR(14) / Average of ATR over last 20 bars
-
-Expanding:   Ratio &gt; 1.0  → volatility increasing, breakout conditions
-Normal:      Ratio 0.7–1.0 → average conditions
-Compressing: Ratio &lt; 0.7  → market coiling, fakeout risk elevated</div>
-              <p class="method-p">Compression phases (ATR ratio below 0.7) often precede large directional moves, but the direction is unknown until the move starts. Trading breakouts from compression has a high fakeout rate — the market tests both sides before committing. The filter flags this risk explicitly.</p>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Practical Implication</div>
-              <p class="method-p">If ATR is expanding and you have confluence, the setup is live — you're entering into an active market. If ATR is compressing but confluence is high, the setup is valid but consider waiting for ATR expansion before entering. A tight stop in a compressing market is likely to get hit before the move.</p>
-            </div>
-          </section>
-
-          <hr class="method-divider">
-
-          <!-- §7 CONFLUENCE SCORE -->
-          <section class="method-section" id="m7">
-            <div class="method-title">7. Confluence Score (0–10)</div>
-            <p class="method-lead">The score combines seven independent signals. Each signal is checked separately — no single indicator drives the whole score. The logic: if five different systems from different methodologies (trend, structure, volume, momentum, price levels) all agree, the probability of a sustained move is materially higher than if only one signal fires.</p>
-
-            <div class="method-block">
-              <div class="method-block-title">Scoring Criteria</div>
-              <table class="method-table">
-                <tr>
-                  <td><span class="method-tag" style="background:#58a6ff22;color:#58a6ff">+2 pts</span> Daily Trend Aligned</td>
-                  <td>Regime is any Uptrend or Downtrend (not Range). Directional bias exists at the macro level.</td>
-                </tr>
-                <tr>
-                  <td><span class="method-tag" style="background:#58a6ff22;color:#58a6ff">+2 pts</span> Break of Structure</td>
-                  <td>4H close above last swing high (bullish) or below last swing low (bearish). Structural proof of direction.</td>
-                </tr>
-                <tr>
-                  <td><span class="method-tag" style="background:#58a6ff22;color:#58a6ff">+2 pts</span> Liquidity Sweep</td>
-                  <td>A sweep of swing high/low in last 12 bars. Stop hunt completed — trapped traders fuel the next move.</td>
-                </tr>
-                <tr>
-                  <td><span class="method-tag" style="background:#3fb95022;color:#3fb950">+1 pt</span> Volume Expanding</td>
-                  <td>5-bar avg volume exceeds the prior 15-bar avg. Real participation behind the move.</td>
-                </tr>
-                <tr>
-                  <td><span class="method-tag" style="background:#3fb95022;color:#3fb950">+1 pt</span> OBV Divergence</td>
-                  <td>Price and OBV disagree over the last 20 bars. Hidden accumulation or distribution detected.</td>
-                </tr>
-                <tr>
-                  <td><span class="method-tag" style="background:#3fb95022;color:#3fb950">+1 pt</span> RSI Confirmation</td>
-                  <td>RSI in bullish range (>60) with uptrend, bearish range (<40) with downtrend, or reset from extreme.</td>
-                </tr>
-                <tr>
-                  <td><span class="method-tag" style="background:#3fb95022;color:#3fb950">+1 pt</span> Fib + Structure</td>
-                  <td>Price within 1.5% of a key fib level (0.382, 0.5, 0.618). Only scored in trending regimes.</td>
-                </tr>
+                <tr><td><span class="method-tag" style="background:#58a6ff22;color:#58a6ff">Regime</span></td><td>2.0 pts — HTF trend aligned with signal direction</td></tr>
+                <tr><td><span class="method-tag" style="background:#58a6ff22;color:#58a6ff">BOS</span></td><td>2.0 pts — Break of Structure confirmed (also required gate)</td></tr>
+                <tr><td><span class="method-tag" style="background:#58a6ff22;color:#58a6ff">Sweep</span></td><td>2.0 pts — Liquidity sweep preceded the BOS</td></tr>
+                <tr><td><span class="method-tag" style="background:#3fb95022;color:#3fb950">Volume</span></td><td>1.0 pt — Volume expansion or spike at signal bar</td></tr>
+                <tr><td><span class="method-tag" style="background:#3fb95022;color:#3fb950">OBV</span></td><td>1.0 pt — OBV confirms direction or shows divergence</td></tr>
+                <tr><td><span class="method-tag" style="background:#3fb95022;color:#3fb950">RSI</span></td><td>1.0 pt — RSI in aligned range or reset from extreme</td></tr>
+                <tr><td><span class="method-tag" style="background:#3fb95022;color:#3fb950">MACD</span></td><td>1.0 pt — MACD line and histogram confirm direction</td></tr>
+                <tr><td><span class="method-tag" style="background:#3fb95022;color:#3fb950">ADX</span></td><td>1.0 pt — ADX &gt; 25 (trending, not ranging)</td></tr>
+                <tr><td><span class="method-tag" style="background:#3fb95022;color:#3fb950">VWAP</span></td><td>1.0 pt — Price on correct side of VWAP</td></tr>
+                <tr><td colspan="2" style="color:#484f58;padding-top:8px">Maximum: 12.0 pts (all factors present at default weight)</td></tr>
               </table>
             </div>
 
             <div class="method-block">
               <div class="method-block-title">Score Thresholds</div>
               <table class="method-table">
-                <tr><td><span class="method-tag" style="background:#3fb95022;color:#3fb950">7–10 High Probability</span></td><td>Multiple independent systems agree. Structurally sound setup. Execute with proper risk management.</td></tr>
-                <tr><td><span class="method-tag" style="background:#d2922222;color:#d29222">5–6 Moderate</span></td><td>Partial agreement. Some factors missing. Size down or wait for additional confirmation.</td></tr>
-                <tr><td><span class="method-tag" style="background:#f8514922;color:#f85149">0–4 Avoid</span></td><td>Conflicting or insufficient signals. No trade. Wait for a cleaner setup.</td></tr>
+                <tr><td><span class="method-tag" style="background:#3fb95022;color:#3fb950">≥ 9.5 — High Probability</span></td><td>≥ 78% of max score. All major factors align. Strong trade candidate — AI likely rates "strong_take".</td></tr>
+                <tr><td><span class="method-tag" style="background:#d2922222;color:#d29222">7.0–9.4 — Moderate Setup</span></td><td>≥ 56% of max. Structural factors present + confirmation. Standard signal zone — requires AI approval.</td></tr>
+                <tr><td><span class="method-tag" style="background:#f8514922;color:#f85149">&lt; 7.0 — No Signal</span></td><td>Below threshold. No trade logged. Dashboard shows analysis only — wait for conditions to improve.</td></tr>
               </table>
             </div>
 
             <div class="method-block">
-              <div class="method-block-title">Why These Specific Criteria?</div>
-              <p class="method-p">The 3 two-point criteria (trend, BOS, sweep) are the structural foundation — without at least 2 of these, there's no tradeable thesis. The 4 one-point criteria are confirmation layers. A score of 7 requires at minimum the structural foundation (4–6 pts from the big three) plus confirmation signals. This filters out low-quality setups where one indicator fires but everything else disagrees.</p>
+              <div class="method-block-title">Adaptive Weights — How They Change</div>
+              <p class="method-p">After every 8 closed trades, the adaptive engine reviews each factor's win rate (among trades where that factor was present). If a factor is present on &gt;70% wins → its weight increases up to 1.5× default. If it's present on &lt;40% wins → weight decreases to as low as 0.3× default. This means the score maximum can range roughly from 8 to 18 depending on which factors the market is rewarding. The /api/learning endpoint shows all current weights live.</p>
             </div>
           </section>
 
           <hr class="method-divider">
 
-          <!-- §8 SIGNAL -->
-          <section class="method-section" id="m8">
-            <div class="method-title">8. Signal Generation</div>
-            <p class="method-lead">A signal is only generated when two conditions are simultaneously met: confluence score ≥ 7 AND a confirmed Break of Structure. Score alone is not enough — there must be structural proof of direction. BOS alone is not enough — there must be multi-factor confluence.</p>
+          <!-- §4 SIGNAL GATING -->
+          <section class="method-section" id="m4">
+            <div class="method-title">4. Signal Gating — 6 Layers Before a Trade Is Logged</div>
+            <p class="method-lead">A high confluence score is necessary but not sufficient. Every candidate signal passes through six independent filters in sequence. If any filter fails, the signal is discarded completely — no partial logging, no "watch" state. This multi-layer approach is why the system only logs high-quality setups.</p>
 
             <div class="method-block">
-              <div class="method-block-title">Signal Trigger Conditions</div>
-              <div class="method-formula">Signal fires when ALL of these are true:
-  1. Confluence Score ≥ 7
-  2. Bullish BOS (for LONG) OR Bearish BOS (for SHORT)
+              <div class="method-block-title">Gate 1 — Adaptive Score Threshold</div>
+              <div class="method-formula">Signal fires only if: Confluence Score ≥ Signal Threshold
+Default threshold: 7.0 (adaptive — engine adjusts this over time)
 
-Direction:
-  LONG  → Bullish BOS confirmed (price closed above last swing high)
-  SHORT → Bearish BOS confirmed (price closed below last swing low)</div>
+Threshold raises: when overall win rate &lt; 40% in last 8 trades (+0.5)
+                  when 3+ consecutive losses in a row (+0.5, streak protection)
+Threshold lowers: when overall win rate &gt; 70% in last 8 trades (−0.25)
+Range: 6.5 minimum to 9.5 maximum</div>
+              <p class="method-p">The threshold is the system's confidence dial. After a losing streak it automatically becomes more selective — requiring stronger setups. After consistent winning it relaxes slightly to capture more opportunities. This means the system learns which market conditions deserve caution and which allow more aggressive scanning.</p>
             </div>
 
             <div class="method-block">
-              <div class="method-block-title">Entry, Target, Stop Calculation</div>
-              <div class="method-formula">Entry  = Current price at the time the signal fires
+              <div class="method-block-title">Gate 2 — BOS Confirmation (Hard Gate)</div>
+              <div class="method-formula">REQUIRED: Bullish BOS for LONG signals
+           Bearish BOS for SHORT signals
+No BOS = no signal, regardless of score</div>
+              <p class="method-p">No amount of indicator confluence can substitute for a structural break. A high score without BOS means many factors are aligned but price hasn't actually committed to a direction yet. The system waits until price proves it — the BOS is the trigger, not the setup.</p>
+            </div>
 
-LONG signal:
-  Target       = Last Swing High (nearest resistance to clear)
-  Stop (Inval) = Last Swing Low  (structure is broken if price goes here)
-
-SHORT signal:
-  Target       = Last Swing Low  (nearest support to tag)
-  Stop (Inval) = Last Swing High (structure is broken if price goes here)
+            <div class="method-block">
+              <div class="method-block-title">Gate 3 — Tier-Based R:R Minimum</div>
+              <div class="method-formula">Day tier  (15m, 30m): R:R must be ≥ 2:1
+Swing tier (1h, 4h, 1d, 1w): R:R must be ≥ 3:1
 
 R:R = |Target − Entry| / |Entry − Stop|
-Signal marked "favorable" if R:R ≥ 2.0</div>
-              <p class="method-p">The target and stop are structure-based, not arbitrary. The stop is placed where the structural thesis is definitively wrong. If you're long because of a bullish BOS, the thesis breaks if price closes back below the last swing low — that means the BOS failed and bears are back in control.</p>
+
+If structural target is too close:
+  → Target is projected to exactly the minimum R:R from entry
+  → target_basis shows "3:1 R:R projection (structural target too close)"</div>
+              <p class="method-p">At 3:1 R:R, the system only needs a 25% win rate to break even (each win is worth 3 losses). This means you can be wrong on 3 of every 4 swing trades and still not lose money. The system enforces this mathematically — if the nearest structural target only offers 2:1, the target is extended to 3:1. When the dashboard shows a 3:1 target, it may be a projected level rather than a named structural zone.</p>
             </div>
 
             <div class="method-block">
-              <div class="method-block-title">What No Signal Means</div>
-              <p class="method-p">When the overlay box shows "No high-confluence setup," it does not mean the market is about to crash or rally in the other direction. It means: the current conditions don't meet the threshold for a structured entry. Most of the time, markets are in between setups. Waiting is a position.</p>
+              <div class="method-block-title">Gate 4 — Higher-Timeframe Bias Filter</div>
+              <div class="method-formula">15m LONG  → passes only if 1H is BULLISH  (above 200 EMA OR bullish BOS on 1H)
+15m SHORT → passes only if 1H is BEARISH (below 200 EMA OR bearish BOS on 1H)
+4H  LONG  → passes only if 1D is BULLISH
+4H  SHORT → passes only if 1D is BEARISH</div>
+              <p class="method-p">Even if the 15m looks perfect, a LONG signal into a 1H downtrend is fighting the dominant order flow. This filter eliminates counter-trend trades at the structural level — not just at the EMA level. "Bullish" on the higher TF means either price is above its 200 EMA, or a bullish BOS was recently confirmed on that TF.</p>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">Gate 5 — Session Filter (Day Tier Only)</div>
+              <div class="method-formula">15m signals: only logged between 07:00 and 22:00 UTC
+  → Covers European open (07:00) through US close (22:00)
+  → Avoids Asia-only sessions where volume is thin and fakeouts are high
+
+4H signals: fire any time — 24 hours, 7 days</div>
+              <p class="method-p">Crypto doesn't close but it has session personalities. The highest quality intraday moves happen when European and US markets overlap (12:00–17:00 UTC is peak liquidity). Signals fired during Asian-only hours on the 15m tend to be low-volume, easily manipulated moves that reverse on the European open. The session filter keeps Day trades in high-liquidity windows.</p>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">Gate 6 — Claude AI Pre-Trade Veto</div>
+              <div class="method-formula">Input to Claude Haiku: signal score, R:R, entry/target/stop, direction,
+  ADX, VWAP side, funding rate, BTC dominance, Fear &amp; Greed index,
+  system win rate, per-symbol win rate, Claude's own past accuracy
+
+Output: { confidence: 0-100, recommendation: "strong_take"|"take"|"skip" }
+
+→ "skip":        trade is VETOED — not logged, no Discord alert
+→ "take":        trade logged, AI badge shown as ✅
+→ "strong_take": trade logged, AI badge shown as 🔥
+→ API unavailable: fallback — trade logged without AI annotation</div>
+              <p class="method-p">Claude evaluates the full context picture: is the Fear &amp; Greed index showing extreme greed while taking a long? Are funding rates overheated? Is BTC making a major opposing move? These contextual factors aren't in any indicator — Claude synthesizes them with the technical picture and makes a go/no-go call. Critically, Claude also sees its own past accuracy (e.g. "my strong_take signals have a 68% win rate") and self-calibrates whether to be more or less aggressive.</p>
             </div>
           </section>
 
           <hr class="method-divider">
 
-          <!-- §9 CHART ELEMENTS -->
-          <section class="method-section" id="m9">
-            <div class="method-title">9. Chart Elements Key</div>
-            <p class="method-lead">Every line on the chart has a specific meaning. Nothing is decorative.</p>
+          <!-- §5 TWO-TIER SYSTEM -->
+          <section class="method-section" id="m5">
+            <div class="method-title">5. Two-Tier Trade System</div>
+            <p class="method-lead">The scanner runs two completely separate tiers simultaneously. Each tier has different timeframes, session rules, R:R requirements, and maximum trade duration. The tier separation prevents the same signal from being double-counted — you can have one Day trade and one Swing trade open on the same symbol at the same time.</p>
 
             <div class="method-block">
-              <div class="method-block-title">Lines on Price Chart</div>
+              <div class="method-block-title">Day Tier vs Swing Tier</div>
               <table class="method-table">
-                <tr><td><span style="color:#58a6ff">━ EMA 50 (blue)</span></td><td>50-period EMA on the currently selected timeframe. Short-term dynamic support/resistance.</td></tr>
-                <tr><td><span style="color:#f0883e">━ EMA 200 (orange)</span></td><td>200-period EMA on the currently selected timeframe. Long-term trend baseline.</td></tr>
-                <tr><td><span style="color:#3fb950">- - S (green dashed)</span></td><td>Last 2 major swing lows on 4H. Key support zones — where buyers previously stepped in.</td></tr>
-                <tr><td><span style="color:#f85149">- - R (red dashed)</span></td><td>Last 2 major swing highs on 4H. Key resistance zones — where sellers previously stepped in.</td></tr>
-                <tr><td><span style="color:#ffd700">··· F0.618 (gold dotted)</span></td><td>Fibonacci retracement levels (0.382, 0.5, 0.618). Only shown in trending regimes.</td></tr>
-                <tr><td><span style="color:#ff4444">━ ✖ Inval (solid red)</span></td><td>Invalidation level. If price closes beyond this, the current thesis is structurally broken.</td></tr>
-                <tr><td><span style="color:#44ff88">━ ⊕ Target (solid green)</span></td><td>Next target — the level price reaches if the bias plays out correctly.</td></tr>
-                <tr><td><span style="color:#3fb950">▲ (green arrow)</span></td><td>Long signal marker on the bar where score ≥ 7 + Bullish BOS was confirmed.</td></tr>
-                <tr><td><span style="color:#f85149">▼ (red arrow)</span></td><td>Short signal marker on the bar where score ≥ 7 + Bearish BOS was confirmed.</td></tr>
+                <tr style="color:#e6edf3">
+                  <td style="color:#e6edf3;font-weight:700"></td>
+                  <td style="color:#bc8cff;font-weight:700">Day Tier</td>
+                  <td style="color:#58a6ff;font-weight:700">Swing Tier</td>
+                </tr>
+                <tr><td>Scan timeframe</td><td>15 minutes</td><td>4 hours</td></tr>
+                <tr><td>Higher-TF bias check</td><td>1H chart</td><td>1D chart</td></tr>
+                <tr><td>Session restriction</td><td>07:00–22:00 UTC only</td><td>24/7, any time</td></tr>
+                <tr><td>Minimum R:R</td><td>2:1</td><td>3:1</td></tr>
+                <tr><td>Max trade age</td><td>72 hours</td><td>14 days</td></tr>
+                <tr><td>Discord color</td><td style="color:#bc8cff">Purple (LONG) / Orange (SHORT)</td><td style="color:#58a6ff">Blue (LONG) / Red (SHORT)</td></tr>
+                <tr><td>Max concurrent</td><td>1 per symbol</td><td>1 per symbol</td></tr>
               </table>
             </div>
 
             <div class="method-block">
-              <div class="method-block-title">RSI Chart (below main chart)</div>
+              <div class="method-block-title">Opposing Signal Rule</div>
+              <div class="method-formula">If a LONG is open on 4H BTCUSDT and a new SHORT signal fires on 4H BTCUSDT:
+  → The existing LONG is closed at entry price (cancelled, 0% ROI)
+  → The new SHORT is opened
+
+This only triggers within the same tier. A 15m SHORT does not close a 4H LONG.</div>
+              <p class="method-p">When the system fires a signal in the opposite direction of an existing trade on the same tier, it means the technical picture has completely reversed. Rather than holding a trade that the system no longer believes in, the old position is cancelled and the new thesis is opened. The entry price is used as the cancel price to avoid manufacturing a loss on what may have been a valid trade that simply reversed.</p>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">The 13 Tracked Symbols</div>
+              <p class="method-p">BTC · ETH · XRP · DOGE · SOL · BNB · ADA · AVAX · LINK · LTC · DOT · NEAR · ATOM. Additional symbols are added automatically when you search for them — they persist for the life of the server session and are picked up by the scanner on the next sweep. The scanner fetches bias data (1H + 1D) for every symbol before evaluating their 15m and 4H signals.</p>
+            </div>
+          </section>
+
+          <hr class="method-divider">
+
+          <!-- §6 TRADE MANAGEMENT -->
+          <section class="method-section" id="m6">
+            <div class="method-title">6. Trade Management</div>
+            <p class="method-lead">Once a trade is logged, the system manages it automatically on every 5-minute scanner sweep. Three mechanisms protect open positions: a partial profit lock at 1.5R, a breakeven trailing stop at 1R, and a maximum age expiry. No manual intervention is required.</p>
+
+            <div class="method-block">
+              <div class="method-block-title">Partial TP System — 1.5R Profit Lock</div>
+              <div class="method-formula">Partial TP level (for LONG) = Entry + 1.5 × (Entry − Stop)
+Partial TP level (for SHORT) = Entry − 1.5 × (Entry − Stop)
+
+When price hits the Partial TP:
+  1. 50% of position is considered booked at Partial TP price
+  2. Stop Loss → Entry (breakeven activated)
+  3. Discord "🔒 Partial TP Hit" alert sent
+
+When trade fully closes (after partial was hit):
+  Case A — Full TP reached:  ROI = 0.5 × partial_roi + 0.5 × full_tp_roi
+  Case B — Breakeven hit:    ROI = 0.5 × partial_roi + 0 = half the partial gain
+                              Status = WIN (still net profitable)
+  Case C — SL somehow hit:   ROI = 0.5 × partial_roi + 0.5 × stop_roi</div>
+              <p class="method-p">The partial TP transforms many "break-even cancels" into small wins. Example: BTC trade, Entry $95,000, Stop $93,500 (risk = $1,500), Partial TP $97,250 (1.5R), Full TP $99,500 (3R). If price hits $97,250 then reverses to entry: you still made +$1,250 per BTC on the half position — a win. Without the partial, this would have been a 0% cancelled trade. Over many trades, this materially improves the win rate and average ROI.</p>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">Breakeven Trailing Stop — 1R Activation</div>
+              <div class="method-formula">Breakeven activates when price moves 1× risk distance in favour:
+  LONG:  current_price ≥ Entry + (Entry − Stop)
+  SHORT: current_price ≤ Entry − (Entry − Stop)
+
+After activation: effective SL = Entry price
+  → If price returns to entry → trade closes at 0% ROI (cancelled)
+  → Guaranteed no loss once 1R is reached</div>
+              <p class="method-p">The breakeven stop is a built-in loss prevention mechanism. Once the trade is 1R in profit, the stop permanently moves to entry. This creates a "free trade" scenario — the worst case from that point is breaking even. Note: the partial TP fires at 1.5R, which is after the breakeven would normally activate at 1R. Both happen automatically on the same scan cycle if price jumps past both levels in one move.</p>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">Target and Stop Levels</div>
+              <div class="method-formula">LONG target priority:
+  1. Prior swing high above current price
+  2. 200 EMA above current price (dynamic resistance)
+  3. 50 EMA above current price
+  4. Current price + 2.5×ATR (fallback projection)
+  → If structural target gives &lt; min R:R → projected to exactly min R:R
+
+LONG stop:
+  Last confirmed swing high − (stop_multiplier × ATR)
+  → ATR buffer absorbs noise/wicks, stop placed just below broken resistance
+  → Max stop: 25% of entry price (hard cap)</div>
+              <p class="method-p">Stops are placed at structurally meaningful levels, not arbitrary percentages. The stop belongs just below the level that, if reclaimed by sellers, would prove the bullish BOS was a false breakout. The adaptive stop multiplier (default 0.5×ATR) widens automatically if the system detects that stops are being hit by normal candle noise — a pattern that indicates the stop buffer is too tight for current volatility.</p>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">Maximum Age Expiry</div>
+              <div class="method-formula">Day trades (15m): expire after 72 hours if TP/SL not hit
+Swing trades (4h): expire after 14 days if TP/SL not hit
+→ Closed at entry price → 0% ROI, status: cancelled</div>
+              <p class="method-p">A trade that hasn't resolved after 72 hours (Day) or 14 days (Swing) has failed to follow through. Rather than holding it indefinitely, the system cancels it at entry — no loss, but the capital is freed. This prevents the trade log from filling with zombie positions that the original BOS has long since invalidated by market action.</p>
+            </div>
+          </section>
+
+          <hr class="method-divider">
+
+          <!-- §7 CLAUDE AI -->
+          <section class="method-section" id="m7">
+            <div class="method-title">7. Claude AI</div>
+            <p class="method-lead">Claude Haiku (fast, low-latency) evaluates every signal before it's logged. Claude Sonnet (deep analysis) reviews full trade history on demand. Both models receive the complete technical picture plus market context — not just indicator values, but interpretation of what those values mean together. Claude also tracks its own prediction accuracy and adjusts its criteria over time.</p>
+
+            <div class="method-block">
+              <div class="method-block-title">Pre-Trade Signal Evaluation (Haiku)</div>
+              <div class="method-formula">Inputs:
+  Technical: score, R:R, entry/target/stop, ADX, VWAP side
+  Market context: Fear &amp; Greed index, BTC dominance, funding rate,
+                  open interest, session conditions
+  Track record: system win rate, per-symbol recent wins, Claude's own
+                historical accuracy by recommendation type
+
+Output JSON:
+  confidence:      0–100 (Claude's conviction level)
+  recommendation:  "strong_take" | "take" | "skip"
+  reasoning:       2-sentence explanation
+  risks:           [ list of specific risks ]
+  positives:       [ list of specific positives ]
+
+"skip" → trade vetoed completely, never logged</div>
+              <p class="method-p">Claude doesn't just check boxes — it synthesizes. A score of 8 with extreme greed (F&amp;G = 90) and overheated funding rates gets treated differently than a score of 8 in neutral market conditions. A technically clean setup in a symbol that has a poor recent win record gets flagged. This contextual layer is what makes the AI veto meaningful rather than just another indicator.</p>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">Self-Calibration — Claude Learns Its Own Accuracy</div>
+              <div class="method-formula">Before each evaluation, Claude receives:
+  "strong_take: 12 trades → 9W/3L (75% win rate, avg ROI +3.2%)"
+  "take: 8 trades → 4W/4L (50% win rate, avg ROI +0.1%)"
+
+Built-in calibration rules:
+  strong_take win rate &lt; 55% → raise the bar for strong_take
+  take win rate &lt; 45%        → tighten criteria, skip more borderline setups
+  Both &gt; 65%                 → trust conviction signals more</div>
+              <p class="method-p">This is the self-improvement loop. Claude doesn't just evaluate trades in isolation — it knows whether its past "strong_take" calls actually won. If its conviction calls have been right 75% of the time, it's more confident in future strong signals. If its "take" calls have only won 40%, it starts being more critical before recommending "take." No human adjustment needed — the feedback loop is automatic.</p>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">On-Demand Chart Analysis (Haiku)</div>
+              <div class="method-formula">Triggered: "Ask Claude ↻" button in the AI card
+Input:  all 9 indicator values for current symbol + timeframe
+Output: { bias: LONG|SHORT|NEUTRAL, confidence: 0-100,
+          summary: "2-sentence TA read",
+          watch_for: "key trigger to confirm or invalidate",
+          key_levels: ["price: what it means"],
+          risks: ["specific risks"] }</div>
+              <p class="method-p">This is separate from the trade signal evaluation. You can ask Claude for a chart read at any time, even when no signal is active. Claude gives its directional bias and confidence based purely on the current technical state — useful for understanding whether to watch a coin for a developing setup or to stay away from it entirely.</p>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">Performance Review (Sonnet)</div>
+              <div class="method-formula">Triggered: /api/ai-insights endpoint (requires ≥10 closed trades)
+Input:  full closed trade history with factors_snapshot per trade,
+        per-symbol breakdown, factor win rates, Claude's own accuracy
+
+Output: { overall_assessment, patterns, recommendations, watch_out }</div>
+              <p class="method-p">Sonnet (the more capable model) does the deep work here. It identifies patterns across the trade history: which symbols have been working, which factors have been most predictive, whether the system is performing better on Day vs Swing trades, whether certain market regimes should be avoided. These insights can inform manual adjustments to the adaptive weights if the automated engine hasn't caught a pattern yet.</p>
+            </div>
+          </section>
+
+          <hr class="method-divider">
+
+          <!-- §8 ADAPTIVE LEARNING -->
+          <section class="method-section" id="m8">
+            <div class="method-title">8. Adaptive Learning Engine</div>
+            <p class="method-lead">After every closed trade, the system automatically reviews the last 8 closed trades and adjusts three parameters: factor weights, signal threshold, and stop multiplier. No manual tuning is required — the engine finds what works in current market conditions and reinforces it, then backs off what is not working.</p>
+
+            <div class="method-block">
+              <div class="method-block-title">Factor Weight Adaptation</div>
+              <div class="method-formula">For each of the 9 factors, look at last 8 trades where that factor was present:
+  Win rate &gt; 70% → weight × 1.10 (capped at 1.5× default)
+  Win rate &lt; 40% → weight × 0.75 (floored at 0.30× default)
+  Win rate 40–70% AND weight was reduced → weight × 1.05 (recovery)
+
+Example: if ADX &gt;25 has been present in 7/8 wins →
+  ADX weight: 1.0 → 1.1 → 1.21 → ... up to 1.5
+  Higher ADX weight means trending-market signals score higher → more fires
+
+Example: if VWAP has been present in 7/8 losses →
+  VWAP weight: 1.0 → 0.75 → 0.56 → ... down to 0.30
+  Lower VWAP weight means VWAP alignment matters less in scoring</div>
+              <p class="method-p">The weights represent the system's current empirical view of what matters. If the current market is range-bound and VWAP keeps being present on losing trades, the engine concludes that VWAP alignment is a false signal in this environment. When the market shifts back to trending, VWAP signals start winning again and the weight recovers. The system adapts to market regimes without being told they changed.</p>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">Signal Threshold Adaptation</div>
+              <div class="method-formula">Review: last 8 closed trades (wins + losses)
+
+Overall win rate &lt; 40%:  threshold += 0.5  (requires stronger setups)
+Overall win rate &gt; 70%:  threshold −= 0.25 (allows slightly lower bar)
+3+ consecutive losses:    threshold += 0.5  (streak protection, immediate)
+
+Range: 6.5 minimum (never too permissive) to 9.5 maximum (never impossible)</div>
+              <p class="method-p">The threshold controls signal frequency. In a good run (70%+ win rate) it lowers slightly to catch more opportunities. In a losing streak it raises to force the system to be more selective — only the highest-conviction setups get through. The consecutive loss protection fires faster than the win-rate check: 3 losses in a row immediately tightens the bar, rather than waiting for the full 8-trade window.</p>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">Stop Multiplier Adaptation</div>
+              <div class="method-formula">Check last 5 losses:
+  If 3+ of them had Stop within 0.5% of Entry:
+    stop_multiplier += 0.1 (widens ATR buffer on new trades)
+    Range: 0.3× ATR minimum → 1.0× ATR maximum
+
+Default: 0.5×ATR buffer below/above the structural stop level</div>
+              <p class="method-p">If recent losses are being stopped out within 0.5% of entry, the market is printing wicks that just barely clip the stop before reversing in the original direction — a sign the stop buffer is too tight for current volatility. The system detects this and widens the buffer on future trades. As stops get wider, the R:R enforcement means targets are projected further too — the whole setup scales proportionally.</p>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">Viewing the Learning State</div>
+              <p class="method-p">The /api/learning endpoint (and the Learning card on the dashboard) shows all current values: each factor's weight vs default, current signal threshold, stop multiplier, win rate, and the last 15 adaptation changes with timestamps. The adaptation log entries explain exactly what changed and why — e.g. "⬆ 'adx' weight 1.00→1.10 (present in 6/8 wins, win rate 75%)".</p>
+            </div>
+          </section>
+
+          <hr class="method-divider">
+
+          <!-- §9 CHART REFERENCE -->
+          <section class="method-section" id="m9">
+            <div class="method-title">9. Chart Reference</div>
+            <p class="method-lead">Every element on the chart is calculated from real market data. Nothing is decorative. The four chart panels (price, RSI, OBV, MACD) are synchronized — moving the crosshair on the main chart moves it on all sub-charts simultaneously. All times are displayed in UTC.</p>
+
+            <div class="method-block">
+              <div class="method-block-title">Price Chart Lines &amp; Overlays</div>
               <table class="method-table">
-                <tr><td><span style="color:#bc8cff">━ RSI line (purple)</span></td><td>14-period RSI calculated on the selected timeframe's closing prices.</td></tr>
-                <tr><td><span style="color:#f85149">··· 70 (red dotted)</span></td><td>Overbought threshold. RSI above = price has risen quickly, potential exhaustion.</td></tr>
-                <tr><td><span style="color:#484f58">··· 50 (gray dotted)</span></td><td>Midline. Bullish regime: RSI holds above 50. Bearish regime: RSI holds below 50.</td></tr>
-                <tr><td><span style="color:#3fb950">··· 30 (green dotted)</span></td><td>Oversold threshold. RSI below = price has fallen quickly, potential exhaustion.</td></tr>
+                <tr><td><span style="color:#58a6ff">━ EMA 50 (blue)</span></td><td>50-period EMA on the currently viewed timeframe. Short-term dynamic support/resistance.</td></tr>
+                <tr><td><span style="color:#f0883e">━ EMA 200 (orange)</span></td><td>200-period EMA on the currently viewed timeframe. Long-term macro trend anchor.</td></tr>
+                <tr><td><span style="color:#3fb950">- - S (green dashed)</span></td><td>Last 2 confirmed swing lows — structural support zones where buyers previously defended.</td></tr>
+                <tr><td><span style="color:#f85149">- - R (red dashed)</span></td><td>Last 2 confirmed swing highs — structural resistance zones where sellers previously stepped in.</td></tr>
+                <tr><td><span style="color:#26a69a">━ VWAP (teal)</span></td><td>Volume-Weighted Average Price from session open. Institutional fair value anchor.</td></tr>
+                <tr><td><span style="color:#ffd700">▭ FVG (gold shade)</span></td><td>Fair Value Gap — a candle gap (imbalance) that price tends to revisit and fill.</td></tr>
+                <tr><td><span style="color:#ff8c00">▭ OB (orange shade)</span></td><td>Order Block — the last bearish (for bullish OB) or bullish (for bearish OB) candle before a major move. Institutional supply/demand zones.</td></tr>
+                <tr><td><span style="color:#f85149">━ ✖ Invalidation</span></td><td>Current signal stop level. If price closes beyond this, the structural thesis is broken.</td></tr>
+                <tr><td><span style="color:#3fb950">━ ⊕ Target</span></td><td>Current signal target. Structural level (or projected R:R level) price aims for.</td></tr>
+              </table>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">Trade History Markers</div>
+              <table class="method-table">
+                <tr><td><span style="color:#3fb950">▲ Entry (green up)</span></td><td>LONG trade entry. Position where signal was logged and the trade opened.</td></tr>
+                <tr><td><span style="color:#f85149">▼ Entry (red down)</span></td><td>SHORT trade entry. Position where signal was logged and the trade opened.</td></tr>
+                <tr><td><span style="color:#3fb950">+X.X% (green exit)</span></td><td>Winning exit — trade closed at TP. ROI shown is blended if partial TP was hit first.</td></tr>
+                <tr><td><span style="color:#f85149">−X.X% (red exit)</span></td><td>Losing exit — trade closed at SL or expired.</td></tr>
+                <tr><td><span style="color:#3fb950">━ (green line)</span></td><td>Entry-to-exit connecting line for winning trades.</td></tr>
+                <tr><td><span style="color:#f85149">━ (red line)</span></td><td>Entry-to-exit connecting line for losing trades.</td></tr>
+              </table>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">Sub-Chart Panels</div>
+              <table class="method-table">
+                <tr><td><span style="color:#bc8cff">RSI panel</span></td><td>14-period RSI. Lines at 70 (overbought), 50 (midline), 30 (oversold). Bullish regime = RSI holds above 50.</td></tr>
+                <tr><td><span style="color:#58a6ff">OBV panel</span></td><td>On Balance Volume with 20-EMA overlay (orange). OBV rising = volume flow bullish. Divergence from price = hidden accumulation/distribution.</td></tr>
+                <tr><td><span style="color:#3fb950">MACD panel</span></td><td>MACD line (blue) vs Signal line (orange). Histogram bars: green = bullish momentum, red = bearish. Crossovers are the directional events.</td></tr>
               </table>
             </div>
 
             <div class="method-block">
               <div class="method-block-title">Timeframe Switcher</div>
-              <p class="method-p">The TF buttons (15m / 1H / 4H / 1D / 1W) change the <em>chart view only</em>. The analysis cards, confluence score, and signal are always calculated on 4H (primary) with Daily (trend filter). Switching to 15m lets you see 4H structure levels on a granular chart — useful for timing entries after a confluence signal fires.</p>
+              <p class="method-p">The TF buttons (15m / 1H / 4H / 1D / 1W) switch the chart view and re-run analysis for that timeframe. The scanner actively monitors 15m and 4H. The 1H, 1D, and 1W views are display-only — no trades are logged from them — but they show the higher-timeframe context used by the bias filter. Switching to 1H shows you exactly what the 15m bias filter is checking.</p>
+            </div>
+
+            <div class="method-block">
+              <div class="method-block-title">Discord Notification Color Legend</div>
+              <table class="method-table">
+                <tr><td><span class="method-tag" style="background:#bc8cff22;color:#bc8cff">Purple</span></td><td>Day LONG signal (15m)</td></tr>
+                <tr><td><span class="method-tag" style="background:#58a6ff22;color:#58a6ff">Blue</span></td><td>Swing LONG signal (4H)</td></tr>
+                <tr><td><span class="method-tag" style="background:#ff8c0022;color:#ff8c00">Orange</span></td><td>Day SHORT signal (15m)</td></tr>
+                <tr><td><span class="method-tag" style="background:#f8514922;color:#f85149">Red</span></td><td>Swing SHORT signal (4H) / Trade closed at stop loss</td></tr>
+                <tr><td><span class="method-tag" style="background:#3fb95022;color:#3fb950">Green</span></td><td>Trade closed at take profit (WIN) / Partial TP hit (🔒)</td></tr>
+                <tr><td><span class="method-tag" style="background:#48505822;color:#8b949e">Gray</span></td><td>Trade cancelled (breakeven stop, expired, or opposing signal)</td></tr>
+              </table>
             </div>
           </section>
 
