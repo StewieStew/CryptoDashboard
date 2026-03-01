@@ -540,9 +540,9 @@
           Adaptive Learning Engine — Factor Weights &amp; Threshold
           <span style="font-size:10px;color:#484f58;font-weight:400;margin-left:8px">auto-adjusts after each trade</span>
         </span>
-        <span id="learning-toggle" style="font-size:11px;color:#484f58;font-weight:400">▶ expand</span>
+        <span id="learning-toggle" style="font-size:11px;color:#484f58;font-weight:400">▼ collapse</span>
       </div>
-      <div id="learning-body" style="display:none">
+      <div id="learning-body" style="display:block">
         <div class="card-body-inner" id="card-learning">
           <span class="text-dim" style="font-size:13px">Loading...</span>
         </div>
@@ -2872,6 +2872,15 @@ function setTimestamp(iso, age) {
   const ageStr = age < 60 ? 'just fetched' : `cached ${Math.floor(age/60)}m ago`;
   document.getElementById('timestamp').textContent =
     `Last: ${d.toLocaleTimeString()} UTC — ${ageStr}`;
+}
+
+function toggleLearningCard() {
+  const body   = document.getElementById('learning-body');
+  const toggle = document.getElementById('learning-toggle');
+  if (!body) return;
+  const isOpen = body.style.display !== 'none';
+  body.style.display   = isOpen ? 'none' : 'block';
+  toggle.textContent   = isOpen ? '▶ expand' : '▼ collapse';
 }
 
 function showLoading(msg) {
