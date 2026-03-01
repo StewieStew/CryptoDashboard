@@ -1227,6 +1227,19 @@ function updateChartData(chart, signal) {
   obvPriceLines.forEach(pl => { try { seriesMap.obv.removePriceLine(pl); } catch(e){} });
   obvPriceLines = [];
 
+  // ── Dynamic price format (auto-detect decimal precision from current price) ──
+  const lastClose = chart.candles.length ? chart.candles[chart.candles.length - 1].close : 1;
+  const pf = lastClose >= 10000 ? { precision: 1, minMove: 0.1 }
+           : lastClose >= 1000  ? { precision: 2, minMove: 0.01 }
+           : lastClose >= 100   ? { precision: 2, minMove: 0.01 }
+           : lastClose >= 10    ? { precision: 3, minMove: 0.001 }
+           : lastClose >= 1     ? { precision: 4, minMove: 0.0001 }
+           : lastClose >= 0.1   ? { precision: 5, minMove: 0.00001 }
+           :                      { precision: 6, minMove: 0.000001 };
+  seriesMap.candles.applyOptions({ priceFormat: { type: 'price', ...pf } });
+  seriesMap.ema50.applyOptions({ priceFormat: { type: 'price', ...pf } });
+  seriesMap.ema200.applyOptions({ priceFormat: { type: 'price', ...pf } });
+
   // ── Set fresh data ──
   tradeMarkersData = [];  // clear old trade markers; rebuilt after fetchTrades()
   seriesMap.candles.setData(chart.candles);
@@ -1269,10 +1282,14 @@ function updateChartData(chart, signal) {
   if (seriesMap.macd_line)   seriesMap.macd_line.setData(chart.macd || []);
   if (seriesMap.macd_signal) seriesMap.macd_signal.setData(chart.macd_signal || []);
 
-  // ── Channel trendlines ──
-  if (chart.channels && chart.channels.upper_line) {
+  // ── Channel trendlines — only on 4h+ (on 15m/1h they span too much and create visual noise) ──
+  const showChannel = ['4h','1d','1w'].includes(currentTF);
+  if (showChannel && chart.channels && chart.channels.upper_line) {
     if (seriesMap.channelUpper) seriesMap.channelUpper.setData(chart.channels.upper_line);
     if (seriesMap.channelLower) seriesMap.channelLower.setData(chart.channels.lower_line || []);
+  } else {
+    if (seriesMap.channelUpper) seriesMap.channelUpper.setData([]);
+    if (seriesMap.channelLower) seriesMap.channelLower.setData([]);
   }
 
   const lvl = chart.levels;
@@ -1308,11 +1325,11 @@ function updateChartData(chart, signal) {
     }));
   }
 
-  // ── Set visible range to last N candles so bars are legible ──
-  const targetCount = {'15m':100,'30m':100,'1h':120,'4h':150,'1d':180,'1w':200}[currentTF] || 150;
+  // ── Set visible range — fewer bars on lower TFs so candles are wider ──
+  const targetCount = {'15m':60,'30m':75,'1h':90,'4h':120,'1d':150,'1w':150}[currentTF] || 100;
   const len = chart.candles.length;
   if (len > 0) {
-    mainChart.timeScale().setVisibleLogicalRange({ from: Math.max(0, len - targetCount), to: len - 1 });
+    mainChart.timeScale().setVisibleLogicalRange({ from: Math.max(0, len - targetCount), to: len + 2 });
   }
 }
 
