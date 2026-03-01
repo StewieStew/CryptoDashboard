@@ -364,7 +364,8 @@
   </div>
   <!-- Signal bar — below chart, full width -->
   <div id="signal-bar">
-    <span style="font-size:12px;color:#484f58;font-style:italic">Loading signal...</span>
+    <span style="font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:.06em;margin-right:4px">Signal</span>
+    <span style="font-size:12px;color:#8b949e;font-style:italic">Loading...</span>
   </div>
   <!-- Trade levels — open trades for current symbol+TF -->
   <div id="trade-levels"></div>
@@ -1283,7 +1284,11 @@ document.addEventListener('DOMContentLoaded', () => {
 let _tvWidget = null;
 const TV_INTERVAL_MAP = {'15m':'15','30m':'30','1h':'60','4h':'240','1d':'D','1w':'W'};
 
+let _tvSym = null, _tvTf = null;
 function initTVChart(symbol, interval) {
+  // Only recreate the widget when symbol or interval actually changes
+  if (_tvSym === symbol && _tvTf === interval && _tvWidget) return;
+  _tvSym = symbol; _tvTf = interval;
   const container = document.getElementById('tv-chart-container');
   if (!container) return;
   container.innerHTML = '';  // clear previous widget
@@ -1679,7 +1684,9 @@ function renderSignal(sig) {
   if (!el) return;
   if (!sig) {
     el.style.borderColor = 'var(--border)';
-    el.innerHTML = `<span style="font-size:12px;color:#484f58;font-style:italic">No high-confluence setup — score below threshold</span>`;
+    el.innerHTML = `
+      <span style="font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:.06em;margin-right:4px">Signal</span>
+      <span style="font-size:12px;color:#8b949e;font-style:italic">No high-confluence setup on this timeframe</span>`;
     return;
   }
 
@@ -1691,6 +1698,8 @@ function renderSignal(sig) {
 
   el.style.borderColor = color + '55';
   el.innerHTML = `
+    <span style="font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:.06em">Signal</span>
+    <span style="color:#30363d">│</span>
     <span class="sig-dir" style="color:${color}">${arrow} ${sig.direction}</span>
     <span style="background:${color}22;color:${color};border:1px solid ${color}44;border-radius:4px;padding:1px 8px;font-size:11px;font-weight:700">${sig.score}/10</span>
     <span style="color:#30363d">│</span>
