@@ -10,16 +10,14 @@ import os
 import json
 import anthropic
 
-_client: anthropic.Anthropic | None = None
-
-
 def _get_client() -> anthropic.Anthropic | None:
-    global _client
-    if _client is None:
-        key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if key:
-            _client = anthropic.Anthropic(api_key=key)
-    return _client
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not key:
+        return None
+    try:
+        return anthropic.Anthropic(api_key=key)
+    except Exception:
+        return None
 
 
 def _tier(interval: str) -> str:
