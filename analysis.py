@@ -655,7 +655,8 @@ def confluence_score(regime, structure, vol, rsi_data, sweeps,
 # ─────────────────────────────────────────────
 
 def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
-                 interval: str = "4h", stop_multiplier: float = 0.5) -> dict:
+                 interval: str = "4h", stop_multiplier: float = 0.5,
+                 fvgs: list | None = None) -> dict:
     cur        = float(df["close"].iloc[-1])
     atr_val    = float(atr(df).iloc[-1])
     ema50_val  = float(ema(df["close"], 50).iloc[-1])
@@ -669,11 +670,22 @@ def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
         inval   = round(last_sh - stop_multiplier * atr_val, 6)
 
         # ── Target: next meaningful resistance ABOVE current price
-        #    Priority: prior swing high → EMA200 → EMA50 → 2.5×ATR
+        #    Priority: prior swing high → bearish FVG fill → EMA200 → EMA50 → 2.5×ATR
         prev_sh = structure.get("prev_swing_high")
+        # Nearest bearish FVG midpoint above cur (price gapped down from there — tends to fill on up-move)
+        fvg_long = None
+        if fvgs:
+            candidates = [f["midpoint"] for f in fvgs
+                          if f["type"] == "bearish" and f["midpoint"] > cur]
+            if candidates:
+                fvg_long = min(candidates)
+
         if prev_sh and prev_sh > cur:
             target       = prev_sh
-            target_basis = f"Prior swing high"
+            target_basis = "Prior swing high"
+        elif fvg_long:
+            target       = round(fvg_long, 6)
+            target_basis = "Bearish FVG fill zone"
         elif ema200_val > cur:
             target       = round(ema200_val, 6)
             target_basis = "EMA200 dynamic resistance"
@@ -694,11 +706,22 @@ def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
         inval   = round(last_sl + stop_multiplier * atr_val, 6)
 
         # ── Target: next meaningful support BELOW current price
-        #    Priority: prior swing low → EMA200 → EMA50 → 2.5×ATR
+        #    Priority: prior swing low → bullish FVG fill → EMA200 → EMA50 → 2.5×ATR
         prev_sl = structure.get("prev_swing_low")
+        # Nearest bullish FVG midpoint below cur (price gapped up from there — tends to fill on down-move)
+        fvg_short = None
+        if fvgs:
+            candidates = [f["midpoint"] for f in fvgs
+                          if f["type"] == "bullish" and f["midpoint"] < cur]
+            if candidates:
+                fvg_short = max(candidates)
+
         if prev_sl and prev_sl < cur:
             target       = prev_sl
             target_basis = "Prior swing low"
+        elif fvg_short:
+            target       = round(fvg_short, 6)
+            target_basis = "Bullish FVG fill zone"
         elif ema200_val < cur:
             target       = round(ema200_val, 6)
             target_basis = "EMA200 dynamic support"
@@ -1099,7 +1122,7 @@ def full_analysis(symbol: str, interval: str = "4h") -> dict:
                                   adx_data=adx_data)
 
     # Section 7: Risk (uses adaptive stop multiplier)
-    risk = risk_context(df, structure, sh, sl, interval, adapt_stop_mult)
+    risk = risk_context(df, structure, sh, sl, interval, adapt_stop_mult, fvgs=fvgs)
 
     # Signal (score >= adaptive threshold + BOS)
     signal = generate_signal(confluence, structure, risk, df, adapt_threshold, interval)

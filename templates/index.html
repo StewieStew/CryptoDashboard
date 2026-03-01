@@ -1599,19 +1599,42 @@ function updateChartData(chart, signal) {
     }));
   });
 
-  if (lvl.invalidation) {
+  // ── Signal price lines — show Entry/TP/SL when a signal is active ──────────
+  if (signal) {
+    // Entry — orange solid line
     priceLines.push(seriesMap.candles.createPriceLine({
-      price: lvl.invalidation, color: '#ff4444', lineWidth: 1,
+      price: signal.entry, color: '#f0883e', lineWidth: 2,
       lineStyle: LightweightCharts.LineStyle.Solid,
-      axisLabelVisible: true, title: '✖ Inval',
+      axisLabelVisible: true, title: '▶ Entry',
     }));
-  }
-  if (lvl.target) {
+    // TP — bright green solid line
     priceLines.push(seriesMap.candles.createPriceLine({
-      price: lvl.target, color: '#44ff88', lineWidth: 1,
+      price: signal.target, color: '#3fb950', lineWidth: 2,
       lineStyle: LightweightCharts.LineStyle.Solid,
-      axisLabelVisible: true, title: '⊕ Target',
+      axisLabelVisible: true, title: '✅ TP',
     }));
+    // SL — bright red solid line
+    priceLines.push(seriesMap.candles.createPriceLine({
+      price: signal.stop, color: '#f85149', lineWidth: 2,
+      lineStyle: LightweightCharts.LineStyle.Solid,
+      axisLabelVisible: true, title: '🛑 SL',
+    }));
+  } else {
+    // No signal — show generic structural context lines
+    if (lvl.invalidation) {
+      priceLines.push(seriesMap.candles.createPriceLine({
+        price: lvl.invalidation, color: '#ff4444', lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Solid,
+        axisLabelVisible: true, title: '✖ Inval',
+      }));
+    }
+    if (lvl.target) {
+      priceLines.push(seriesMap.candles.createPriceLine({
+        price: lvl.target, color: '#44ff88', lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Solid,
+        axisLabelVisible: true, title: '⊕ Target',
+      }));
+    }
   }
 
   // ── Set visible range — fewer bars on lower TFs so candles are wider ──
@@ -2670,6 +2693,35 @@ function buildTradeMarkers() {
 
   updateAllMarkers();
   buildTradeLines(trades);
+
+  // ── Open trade TP/SL price lines — show where open trades are targeting ─────
+  // These are added to priceLines so they clear automatically on next chart load.
+  trades
+    .filter(t => t.symbol === sym && t.interval === tf && t.status === 'open')
+    .forEach(t => {
+      const label = t.interval.toUpperCase();
+      const isLong = t.direction === 'LONG';
+      if (t.tp) {
+        priceLines.push(seriesMap.candles.createPriceLine({
+          price: parseFloat(t.tp),
+          color: isLong ? '#3fb95099' : '#f8514999',
+          lineWidth: 1,
+          lineStyle: LightweightCharts.LineStyle.Dotted,
+          axisLabelVisible: true,
+          title: `${label} TP`,
+        }));
+      }
+      if (t.sl) {
+        priceLines.push(seriesMap.candles.createPriceLine({
+          price: parseFloat(t.sl),
+          color: isLong ? '#f8514999' : '#3fb95099',
+          lineWidth: 1,
+          lineStyle: LightweightCharts.LineStyle.Dotted,
+          axisLabelVisible: true,
+          title: `${label} SL`,
+        }));
+      }
+    });
 }
 
 // Central marker rebuild — permanent pivots + trade markers only (signal shown in overlay box)
