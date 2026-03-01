@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Crypto Analysis Dashboard</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-  <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+  <script src="https://s3.tradingview.com/tv.js"></script>
   <style>
     :root {
       --bg-base:    #0d1117;
@@ -40,13 +40,6 @@
 
     /* Charts */
     .chart-section { padding: 12px 16px 0; }
-    #main-chart, #rsi-chart, #obv-chart, #macd-chart { width: 100%; border-radius: 6px; overflow: hidden; }
-    #main-chart  { height: 540px; }
-    #rsi-chart   { height: 100px; margin-top: 2px; }
-    #obv-chart   { height: 80px;  margin-top: 2px; }
-    #macd-chart  { height: 90px;  margin-top: 2px; }
-    .chart-legend { font-size: 11px; color: var(--text-dim); padding: 4px 0; display: flex; gap: 16px; }
-    .legend-dot { display: inline-block; width: 10px; height: 2px; vertical-align: middle; margin-right: 4px; }
 
     /* Cards */
     .card-section { padding: 12px 16px; }
@@ -170,21 +163,6 @@
       border-color: #21262d;
     }
 
-    /* Chart tooltip on price lines */
-    #chart-tooltip {
-      display: none;
-      position: absolute;
-      z-index: 20;
-      background: rgba(13,17,23,0.97);
-      border: 1px solid #30363d;
-      border-radius: 8px;
-      padding: 10px 14px;
-      min-width: 220px;
-      max-width: 290px;
-      pointer-events: none;
-      box-shadow: 0 4px 24px rgba(0,0,0,0.6);
-    }
-
     /* Prediction card scenarios */
     .pred-scenario { border-radius: 6px; padding: 8px 10px; }
 
@@ -295,22 +273,6 @@
     .card-hdr-toggle { cursor: pointer; display: flex; align-items: center; justify-content: space-between; }
     .card-hdr-toggle:hover { color: #e6edf3; }
 
-    /* Trade marker popup */
-    #trade-popup {
-      display: none;
-      position: absolute;
-      z-index: 50;
-      background: rgba(13,17,23,0.97);
-      border: 1px solid #30363d;
-      border-radius: 8px;
-      padding: 10px 14px;
-      min-width: 230px;
-      max-width: 310px;
-      box-shadow: 0 4px 24px rgba(0,0,0,0.7);
-      pointer-events: none;
-      font-size: 12px;
-    }
-
     /* Claude AI card */
     .ai-bias-pill { display:inline-block; font-size:14px; font-weight:800; padding:4px 14px; border-radius:6px; letter-spacing:.04em; }
     .ai-bias-long  { background:#1a3a1a; color:#3fb950; }
@@ -382,17 +344,7 @@
 
 <!-- ═══ CHART ═══ -->
 <div class="chart-section">
-  <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-1">
-    <div class="chart-legend">
-      <span><span class="legend-dot" style="background:#58a6ff;height:1.5px"></span>EMA 50</span>
-      <span><span class="legend-dot" style="background:#f0883e;height:2px"></span>EMA 200</span>
-      <span><span class="legend-dot" style="background:#3fb950;border-top:1px dashed #3fb950"></span>Support</span>
-      <span><span class="legend-dot" style="background:#f85149;border-top:1px dashed #f85149"></span>Resistance</span>
-      <span><span style="color:#bc8cff;font-size:12px">▲</span> Trade Long</span>
-      <span><span style="color:#f0883e;font-size:12px">▼</span> Trade Short</span>
-      <span><span style="color:#3fb950;font-size:12px">●</span> Win Exit</span>
-      <span><span style="color:#f85149;font-size:12px">●</span> Loss Exit</span>
-    </div>
+  <div class="d-flex align-items-center justify-content-end flex-wrap gap-2 mb-1">
     <div class="d-flex align-items-center gap-1">
       <span style="font-size:10px;color:#484f58;text-transform:uppercase;letter-spacing:.06em">Timeframe</span>
       <button class="tf-btn" data-tf="15m" onclick="switchTF('15m',this)">15m</button>
@@ -404,23 +356,14 @@
       <span id="tf-label">Analysis: 4H</span>
     </div>
   </div>
-  <div id="chart-wrap">
-    <div id="main-chart"></div>
+  <div id="chart-wrap" style="position:relative">
+    <!-- TradingView Advanced Chart -->
+    <div id="tv-chart-container" style="height:620px;width:100%"></div>
     <!-- Signal overlay — top-left of chart -->
     <div id="signal-overlay">
       <div style="font-size:11px;color:#8b949e">Waiting for data...</div>
     </div>
-    <!-- Chart line tooltip -->
-    <div id="chart-tooltip"></div>
-    <!-- Trade marker popup — click a trade arrow to see details -->
-    <div id="trade-popup"></div>
   </div>
-  <div style="font-size:10px;color:var(--text-dim);padding:2px 0">RSI (14)</div>
-  <div id="rsi-chart"></div>
-  <div style="font-size:10px;color:var(--text-dim);padding:2px 0 0">OBV — On Balance Volume &nbsp;<span style="color:#484f58">(teal = OBV · dimmed = 20-EMA · dashed = S/R levels)</span></div>
-  <div id="obv-chart"></div>
-  <div style="font-size:10px;color:var(--text-dim);padding:2px 0 0">MACD (12/26/9) &nbsp;<span style="color:#484f58">(blue = MACD · orange = signal · bars = histogram)</span></div>
-  <div id="macd-chart"></div>
 </div>
 
 <!-- ═══ ALL SIGNALS FEED ═══ -->
@@ -1238,13 +1181,6 @@ function _updatePrice(price, open) {
   _lastClose = price;
 }
 
-function _updateCandle(time, open, high, low, close, vol) {
-  if (seriesMap.candles) try { seriesMap.candles.update({time, open, high, low, close}); } catch(e){}
-  if (seriesMap.vol && vol != null) {
-    try { seriesMap.vol.update({time, value: vol, color: close >= open ? '#26a69a' : '#ef5350'}); } catch(e){}
-  }
-}
-
 function _startPoll(symbol, interval) {
   if (_pollTimer) return;
   const go = async () => {
@@ -1253,10 +1189,8 @@ function _startPoll(symbol, interval) {
       const d = await r.json();
       if (!Array.isArray(d) || !d[0]) return;
       const k = d[0];
-      const o = parseFloat(k[1]), h = parseFloat(k[2]), l = parseFloat(k[3]),
-            c = parseFloat(k[4]), v = parseFloat(k[5]), t = Math.floor(k[0]/1000);
-      _candleOpen = o; _candleHigh = h; _candleLow = l; _candleTime = t; _candleVol = v;
-      _updateCandle(t, o, h, l, c, v);
+      const o = parseFloat(k[1]), c = parseFloat(k[4]);
+      _candleOpen = o;
       _updatePrice(c, o);
     } catch(e) {}
   };
@@ -1295,25 +1229,13 @@ function startLiveWs(symbol, interval) {
         const data = msg.data  || msg;
 
         if (name.includes('aggTrade')) {
-          // Every individual trade — instant price update
           const price = parseFloat(data.p);
           if (_candleOpen === null) return;
-          _candleHigh = Math.max(_candleHigh ?? price, price);
-          _candleLow  = Math.min(_candleLow  ?? price, price);
-          _updateCandle(_candleTime, _candleOpen, _candleHigh, _candleLow, price, _candleVol);
           _updatePrice(price, _candleOpen);
-
         } else if (data.k) {
-          // Kline stream — authoritative OHLC sync
           const k = data.k;
-          _candleTime = Math.floor(k.t / 1000);
           _candleOpen = parseFloat(k.o);
-          _candleHigh = parseFloat(k.h);
-          _candleLow  = parseFloat(k.l);
-          _candleVol  = parseFloat(k.v);
-          const close = parseFloat(k.c);
-          _updateCandle(_candleTime, _candleOpen, _candleHigh, _candleLow, close, _candleVol);
-          _updatePrice(close, _candleOpen);
+          _updatePrice(parseFloat(k.c), _candleOpen);
         }
       } catch(err) {}
     };
@@ -1322,26 +1244,9 @@ function startLiveWs(symbol, interval) {
     _liveWs = ws;
   } catch(e) { _startPoll(symbol, interval); }
 }
-let mainChart      = null;
-let rsiChart       = null;
-let obvChart       = null;
-let macdChart      = null;
-let seriesMap      = {};
-let priceLines     = [];
-let obvPriceLines  = [];   // OBV S/R price lines
 let addModal         = null;
 let lastSignal       = null;
 let lastData         = null;  // full analysis response, used for manual close price
-let lineContext      = [];   // [{price, label, why, candle_time, color, type}]
-let permanentMarkers = [];   // always-visible pivot arrows
-let highlightActive  = false;
-let lastHighlightTs  = null;
-let chartCandleTimes = [];   // candle bar times (unix seconds) for nearest-match lookup
-let tradeMarkersData = [];   // [{time, trade, kind, marker}] for click detection
-let tradeLines       = [];   // line series drawn per closed trade (entry→exit band)
-let _rsiMap  = new Map();   // time→value for crosshair sync
-let _obvMap  = new Map();
-let _macdMap = new Map();
 let analysisExpanded = false;
 
 // All-signals feed state
@@ -1362,7 +1267,6 @@ document.addEventListener('DOMContentLoaded', () => {
   // Restore trade size from localStorage
   const tsInput = document.getElementById('trade-size-input');
   if (tsInput) tsInput.value = tradeSize;
-  initCharts();
   renderSymbolBar();
   loadAnalysis(currentSymbol);
   fetchAllSignals();
@@ -1370,394 +1274,51 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // ═══════════════════════════════════════════════════════
-// CHART SETUP
+// TRADINGVIEW CHART
 // ═══════════════════════════════════════════════════════
-function chartOptions(height) {
-  return {
-    layout: { background: { color: '#0d1117' }, textColor: '#8b949e' },
-    grid:   { vertLines: { color: '#1c2128' }, horzLines: { color: '#1c2128' } },
-    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-    rightPriceScale: { borderColor: '#30363d' },
-    timeScale: { borderColor: '#30363d', timeVisible: true, secondsVisible: false },
-    // Eastern Time display (America/New_York — handles EST/EDT automatically)
-    localization: {
-      timeFormatter: ts => {
-        const d = new Date(ts * 1000);
-        const parts = new Intl.DateTimeFormat('en-US', {
-          timeZone: 'America/New_York',
-          hour: '2-digit', minute: '2-digit', hour12: false,
-        }).formatToParts(d);
-        const hh = parts.find(p => p.type === 'hour').value;
-        const mm = parts.find(p => p.type === 'minute').value;
-        return `${hh}:${mm} ET`;
-      },
-      dateFormatter: ts => {
-        const d = new Date(ts * 1000);
-        const parts = new Intl.DateTimeFormat('en-US', {
-          timeZone: 'America/New_York',
-          month: 'short', day: 'numeric', year: 'numeric',
-        }).formatToParts(d);
-        const mo  = parts.find(p => p.type === 'month').value;
-        const day = parts.find(p => p.type === 'day').value;
-        const yr  = parts.find(p => p.type === 'year').value;
-        return `${mo} ${day} ${yr}`;
-      },
+let _tvWidget = null;
+const TV_INTERVAL_MAP = {'15m':'15','30m':'30','1h':'60','4h':'240','1d':'D','1w':'W'};
+
+function initTVChart(symbol, interval) {
+  const container = document.getElementById('tv-chart-container');
+  if (!container) return;
+  container.innerHTML = '';  // clear previous widget
+  if (typeof TradingView === 'undefined') return;
+  _tvWidget = new TradingView.widget({
+    autosize: true,
+    symbol: 'BINANCE:' + symbol,
+    interval: TV_INTERVAL_MAP[interval] || '240',
+    timezone: 'America/New_York',
+    theme: 'dark',
+    style: '1',
+    locale: 'en',
+    toolbar_bg: '#161b22',
+    enable_publishing: false,
+    allow_symbol_change: false,
+    hide_side_toolbar: false,
+    withdateranges: true,
+    details: false,
+    hotlist: false,
+    calendar: false,
+    studies: [
+      'RSI@tv-basicstudies',
+      'MACD@tv-basicstudies',
+    ],
+    overrides: {
+      'mainSeriesProperties.candleStyle.upColor': '#26a69a',
+      'mainSeriesProperties.candleStyle.downColor': '#ef5350',
+      'mainSeriesProperties.candleStyle.borderUpColor': '#26a69a',
+      'mainSeriesProperties.candleStyle.borderDownColor': '#ef5350',
+      'mainSeriesProperties.candleStyle.wickUpColor': '#26a69a',
+      'mainSeriesProperties.candleStyle.wickDownColor': '#ef5350',
+      'paneProperties.background': '#0d1117',
+      'paneProperties.backgroundType': 'solid',
+      'paneProperties.vertGridProperties.color': '#21262d',
+      'paneProperties.horzGridProperties.color': '#21262d',
+      'scalesProperties.textColor': '#8b949e',
     },
-    width: document.getElementById('main-chart').clientWidth,
-    height: height,
-  };
-}
-
-function initCharts() {
-  const mainEl = document.getElementById('main-chart');
-  const rsiEl  = document.getElementById('rsi-chart');
-
-  mainChart = LightweightCharts.createChart(mainEl, chartOptions(540));
-
-  seriesMap.candles = mainChart.addCandlestickSeries({
-    upColor:        '#3fb950', downColor:       '#f85149',
-    borderUpColor:  '#3fb950', borderDownColor: '#f85149',
-    wickUpColor:    '#3fb950', wickDownColor:   '#f85149',
+    container_id: 'tv-chart-container',
   });
-
-  seriesMap.vol = mainChart.addHistogramSeries({
-    priceFormat:  { type: 'volume' },
-    priceScaleId: 'vol',
-    color: '#26a69a',
-  });
-  mainChart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
-
-  seriesMap.ema50 = mainChart.addLineSeries({
-    color: '#58a6ff', lineWidth: 1, title: 'EMA50',
-    priceLineVisible: false, lastValueVisible: false,
-  });
-  seriesMap.ema200 = mainChart.addLineSeries({
-    color: '#f0883e', lineWidth: 1.5, title: 'EMA200',
-    priceLineVisible: false, lastValueVisible: false,
-  });
-
-  seriesMap.channelUpper = mainChart.addLineSeries({
-    color: '#ffd70066', lineWidth: 1,
-    lineStyle: LightweightCharts.LineStyle.Dashed,
-    priceLineVisible: false, lastValueVisible: false,
-  });
-  seriesMap.channelLower = mainChart.addLineSeries({
-    color: '#ffd70066', lineWidth: 1,
-    lineStyle: LightweightCharts.LineStyle.Dashed,
-    priceLineVisible: false, lastValueVisible: false,
-  });
-
-  // RSI chart
-  rsiChart = LightweightCharts.createChart(rsiEl, {
-    ...chartOptions(110),
-    timeScale: { borderColor: '#30363d', timeVisible: true, visible: false },
-  });
-  seriesMap.rsi = rsiChart.addLineSeries({
-    color: '#bc8cff', lineWidth: 1.5,
-    priceLineVisible: false, lastValueVisible: true, title: 'RSI',
-  });
-  [[70,'#f85149'],[50,'#30363d'],[30,'#3fb950']].forEach(([p, c]) => {
-    seriesMap.rsi.createPriceLine({
-      price: p, color: c, lineWidth: 1,
-      lineStyle: LightweightCharts.LineStyle.Dotted,
-      axisLabelVisible: true, title: String(p),
-    });
-  });
-
-  // OBV chart
-  const obvEl = document.getElementById('obv-chart');
-  obvChart = LightweightCharts.createChart(obvEl, {
-    ...chartOptions(80),
-    timeScale: { borderColor: '#30363d', timeVisible: true, visible: false },
-  });
-  seriesMap.obv = obvChart.addLineSeries({
-    color: '#26c6da', lineWidth: 1.5,
-    priceLineVisible: false, lastValueVisible: true, title: 'OBV',
-  });
-  seriesMap.obv_ema = obvChart.addLineSeries({
-    color: '#26c6da44', lineWidth: 1,
-    priceLineVisible: false, lastValueVisible: false,
-  });
-  // OBV trendlines (connect swing lows / swing highs)
-  seriesMap.obv_low_trend = obvChart.addLineSeries({
-    color: '#3fb95088', lineWidth: 1,
-    lineStyle: LightweightCharts.LineStyle.Dashed,
-    priceLineVisible: false, lastValueVisible: false,
-  });
-  seriesMap.obv_high_trend = obvChart.addLineSeries({
-    color: '#f8514988', lineWidth: 1,
-    lineStyle: LightweightCharts.LineStyle.Dashed,
-    priceLineVisible: false, lastValueVisible: false,
-  });
-
-  // MACD chart
-  const macdEl = document.getElementById('macd-chart');
-  macdChart = LightweightCharts.createChart(macdEl, {
-    ...chartOptions(90),
-    timeScale: { borderColor: '#30363d', timeVisible: true, visible: false },
-  });
-  seriesMap.macd_hist = macdChart.addHistogramSeries({
-    color: '#3fb95088',
-    priceLineVisible: false, lastValueVisible: false,
-  });
-  seriesMap.macd_line = macdChart.addLineSeries({
-    color: '#58a6ff', lineWidth: 1.5,
-    priceLineVisible: false, lastValueVisible: true, title: 'MACD',
-  });
-  seriesMap.macd_signal = macdChart.addLineSeries({
-    color: '#f0883e', lineWidth: 1,
-    priceLineVisible: false, lastValueVisible: true, title: 'Signal',
-  });
-  // Zero line on MACD
-  macdChart.priceScale('right').applyOptions({ autoScale: true });
-
-  // Sync all four timescales
-  let syncing = false;
-  mainChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-    if (range && !syncing) {
-      syncing = true;
-      rsiChart.timeScale().setVisibleLogicalRange(range);
-      obvChart.timeScale().setVisibleLogicalRange(range);
-      macdChart.timeScale().setVisibleLogicalRange(range);
-      syncing = false;
-    }
-  });
-  rsiChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-    if (range && !syncing) {
-      syncing = true;
-      mainChart.timeScale().setVisibleLogicalRange(range);
-      obvChart.timeScale().setVisibleLogicalRange(range);
-      macdChart.timeScale().setVisibleLogicalRange(range);
-      syncing = false;
-    }
-  });
-  obvChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-    if (range && !syncing) {
-      syncing = true;
-      mainChart.timeScale().setVisibleLogicalRange(range);
-      rsiChart.timeScale().setVisibleLogicalRange(range);
-      macdChart.timeScale().setVisibleLogicalRange(range);
-      syncing = false;
-    }
-  });
-  macdChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-    if (range && !syncing) {
-      syncing = true;
-      mainChart.timeScale().setVisibleLogicalRange(range);
-      rsiChart.timeScale().setVisibleLogicalRange(range);
-      obvChart.timeScale().setVisibleLogicalRange(range);
-      syncing = false;
-    }
-  });
-
-  // ── Crosshair sync — hover on main chart moves crosshair on all sub-charts ──
-  let crossSyncing = false;
-  mainChart.subscribeCrosshairMove(param => {
-    if (crossSyncing) return;
-    crossSyncing = true;
-    if (!param.time) {
-      rsiChart.clearCrosshairPosition();
-      obvChart.clearCrosshairPosition();
-      macdChart.clearCrosshairPosition();
-    } else {
-      const t  = param.time;
-      const rv = _rsiMap.get(t);
-      const ov = _obvMap.get(t);
-      const mv = _macdMap.get(t);
-      if (rv !== undefined) rsiChart.setCrosshairPosition(rv, t, seriesMap.rsi);
-      if (ov !== undefined) obvChart.setCrosshairPosition(ov, t, seriesMap.obv);
-      if (mv !== undefined) macdChart.setCrosshairPosition(mv, t, seriesMap.macd_line);
-    }
-    crossSyncing = false;
-  });
-
-  // Responsive resize
-  const ro = new ResizeObserver(() => {
-    const w = mainEl.clientWidth;
-    mainChart.applyOptions({ width: w });
-    rsiChart.applyOptions({ width: w });
-    obvChart.applyOptions({ width: w });
-    macdChart.applyOptions({ width: w });
-  });
-  ro.observe(mainEl);
-
-  // Trade marker click detection
-  mainChart.subscribeClick(param => {
-    if (!param.time || tradeMarkersData.length === 0) { hideTradePopup(); return; }
-    const clickedTime = param.time;
-    // Exact match first
-    let match = tradeMarkersData.find(m => m.time === clickedTime);
-    if (!match) {
-      // Nearest within half a candle
-      const half = getCandleSeconds(currentTF) / 2;
-      match = tradeMarkersData.find(m => Math.abs(m.time - clickedTime) <= half);
-    }
-    if (match && param.point) {
-      showTradePopup(match.trade, param.point.x, param.point.y);
-    } else {
-      hideTradePopup();
-    }
-  });
-
-  initTooltip();
-}
-
-function updateChartData(chart, signal) {
-  // ── Price scale reset: clear all data first so switching BTC→XRP auto-scales ──
-  priceLines.forEach(pl => { try { seriesMap.candles.removePriceLine(pl); } catch(e){} });
-  priceLines = [];
-  seriesMap.candles.setData([]);
-  seriesMap.vol.setData([]);
-  seriesMap.ema50.setData([]);
-  seriesMap.ema200.setData([]);
-  seriesMap.rsi.setData([]);
-  seriesMap.obv.setData([]);
-  seriesMap.obv_ema.setData([]);
-  if (seriesMap.channelUpper) seriesMap.channelUpper.setData([]);
-  if (seriesMap.channelLower) seriesMap.channelLower.setData([]);
-  mainChart.priceScale('right').applyOptions({ autoScale: true });
-  rsiChart.priceScale('right').applyOptions({ autoScale: true });
-  obvChart.priceScale('right').applyOptions({ autoScale: true });
-  if (macdChart) macdChart.priceScale('right').applyOptions({ autoScale: true });
-
-  // ── Clear OBV S/R lines ──
-  obvPriceLines.forEach(pl => { try { seriesMap.obv.removePriceLine(pl); } catch(e){} });
-  obvPriceLines = [];
-
-  // ── Dynamic price format (auto-detect decimal precision from current price) ──
-  const lastClose = chart.candles.length ? chart.candles[chart.candles.length - 1].close : 1;
-  const pf = lastClose >= 10000 ? { precision: 1, minMove: 0.1 }
-           : lastClose >= 1000  ? { precision: 2, minMove: 0.01 }
-           : lastClose >= 100   ? { precision: 2, minMove: 0.01 }
-           : lastClose >= 10    ? { precision: 3, minMove: 0.001 }
-           : lastClose >= 1     ? { precision: 4, minMove: 0.0001 }
-           : lastClose >= 0.1   ? { precision: 5, minMove: 0.00001 }
-           :                      { precision: 6, minMove: 0.000001 };
-  seriesMap.candles.applyOptions({ priceFormat: { type: 'price', ...pf } });
-  seriesMap.ema50.applyOptions({ priceFormat: { type: 'price', ...pf } });
-  seriesMap.ema200.applyOptions({ priceFormat: { type: 'price', ...pf } });
-
-  // ── Set fresh data ──
-  tradeMarkersData = [];  // clear old trade markers; rebuilt after fetchTrades()
-  seriesMap.candles.setData(chart.candles);
-  chartCandleTimes = chart.candles.map(c => c.time);
-  seriesMap.vol.setData(chart.volume);
-  seriesMap.ema50.setData(chart.ema50);
-  seriesMap.ema200.setData(chart.ema200);
-  seriesMap.rsi.setData(chart.rsi);
-  if (chart.obv)     seriesMap.obv.setData(chart.obv);
-  if (chart.obv_ema) seriesMap.obv_ema.setData(chart.obv_ema);
-  // Populate lookup maps for crosshair sync
-  _rsiMap  = new Map((chart.rsi  || []).map(p => [p.time, p.value]));
-  _obvMap  = new Map((chart.obv  || []).map(p => [p.time, p.value]));
-  _macdMap = new Map((chart.macd || []).map(p => [p.time, p.value]));
-  // Clear old trade band lines (rebuilt by buildTradeMarkers after fetchTrades)
-  tradeLines.forEach(s => { try { mainChart.removeSeries(s); } catch(e){} });
-  tradeLines = [];
-
-  // ── OBV S/R horizontal levels ──
-  (chart.obv_lows || []).slice(-2).forEach(([t, v]) => {
-    obvPriceLines.push(seriesMap.obv.createPriceLine({
-      price: v, color: '#3fb95066', lineWidth: 1,
-      lineStyle: LightweightCharts.LineStyle.Dashed,
-      axisLabelVisible: false, title: 'OBV S',
-    }));
-  });
-  (chart.obv_highs || []).slice(-2).forEach(([t, v]) => {
-    obvPriceLines.push(seriesMap.obv.createPriceLine({
-      price: v, color: '#f8514966', lineWidth: 1,
-      lineStyle: LightweightCharts.LineStyle.Dashed,
-      axisLabelVisible: false, title: 'OBV R',
-    }));
-  });
-
-  // ── OBV trendlines — connect last 2 swing lows (green) and highs (red) ──
-  if (seriesMap.obv_low_trend) {
-    const lows2 = (chart.obv_lows || []).slice(-2);
-    seriesMap.obv_low_trend.setData(lows2.length >= 2 ? lows2.map(([t, v]) => ({time: t, value: v})) : []);
-  }
-  if (seriesMap.obv_high_trend) {
-    const highs2 = (chart.obv_highs || []).slice(-2);
-    seriesMap.obv_high_trend.setData(highs2.length >= 2 ? highs2.map(([t, v]) => ({time: t, value: v})) : []);
-  }
-
-  // ── MACD ──
-  if (seriesMap.macd_hist)   seriesMap.macd_hist.setData(chart.macd_hist || []);
-  if (seriesMap.macd_line)   seriesMap.macd_line.setData(chart.macd || []);
-  if (seriesMap.macd_signal) seriesMap.macd_signal.setData(chart.macd_signal || []);
-
-  // ── Channel trendlines — only on 4h+ (on 15m/1h they span too much and create visual noise) ──
-  const showChannel = ['4h','1d','1w'].includes(currentTF);
-  if (showChannel && chart.channels && chart.channels.upper_line) {
-    if (seriesMap.channelUpper) seriesMap.channelUpper.setData(chart.channels.upper_line);
-    if (seriesMap.channelLower) seriesMap.channelLower.setData(chart.channels.lower_line || []);
-  } else {
-    if (seriesMap.channelUpper) seriesMap.channelUpper.setData([]);
-    if (seriesMap.channelLower) seriesMap.channelLower.setData([]);
-  }
-
-  const lvl = chart.levels;
-
-  (lvl.support || []).forEach(p => {
-    priceLines.push(seriesMap.candles.createPriceLine({
-      price: p, color: '#3fb950', lineWidth: 1,
-      lineStyle: LightweightCharts.LineStyle.Dashed,
-      axisLabelVisible: true, title: 'S',
-    }));
-  });
-
-  (lvl.resistance || []).forEach(p => {
-    priceLines.push(seriesMap.candles.createPriceLine({
-      price: p, color: '#f85149', lineWidth: 1,
-      lineStyle: LightweightCharts.LineStyle.Dashed,
-      axisLabelVisible: true, title: 'R',
-    }));
-  });
-
-  // ── Signal price lines — show Entry/TP/SL when a signal is active ──────────
-  if (signal) {
-    // Entry — orange solid line
-    priceLines.push(seriesMap.candles.createPriceLine({
-      price: signal.entry, color: '#f0883e', lineWidth: 2,
-      lineStyle: LightweightCharts.LineStyle.Solid,
-      axisLabelVisible: true, title: '▶ Entry',
-    }));
-    // TP — bright green solid line
-    priceLines.push(seriesMap.candles.createPriceLine({
-      price: signal.target, color: '#3fb950', lineWidth: 2,
-      lineStyle: LightweightCharts.LineStyle.Solid,
-      axisLabelVisible: true, title: '✅ TP',
-    }));
-    // SL — bright red solid line
-    priceLines.push(seriesMap.candles.createPriceLine({
-      price: signal.stop, color: '#f85149', lineWidth: 2,
-      lineStyle: LightweightCharts.LineStyle.Solid,
-      axisLabelVisible: true, title: '🛑 SL',
-    }));
-  } else {
-    // No signal — show generic structural context lines
-    if (lvl.invalidation) {
-      priceLines.push(seriesMap.candles.createPriceLine({
-        price: lvl.invalidation, color: '#ff4444', lineWidth: 1,
-        lineStyle: LightweightCharts.LineStyle.Solid,
-        axisLabelVisible: true, title: '✖ Inval',
-      }));
-    }
-    if (lvl.target) {
-      priceLines.push(seriesMap.candles.createPriceLine({
-        price: lvl.target, color: '#44ff88', lineWidth: 1,
-        lineStyle: LightweightCharts.LineStyle.Solid,
-        axisLabelVisible: true, title: '⊕ Target',
-      }));
-    }
-  }
-
-  // ── Set visible range — fewer bars on lower TFs so candles are wider ──
-  const targetCount = {'15m':60,'30m':75,'1h':90,'4h':120,'1d':150,'1w':150}[currentTF] || 100;
-  const len = chart.candles.length;
-  if (len > 0) {
-    mainChart.timeScale().setVisibleLogicalRange({ from: Math.max(0, len - targetCount), to: len + 2 });
-  }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1792,10 +1353,7 @@ function forceRefresh() { loadAnalysis(currentSymbol, true); }
 function renderAll(d) {
   lastData   = d;
   lastSignal = d.signal;
-  updateChartData(d.chart, d.signal);
-  buildLineContext(d);
-  buildPivotMarkers(d);
-  setMarkersWithSignal(d.signal);
+  initTVChart(currentSymbol, currentTF);
   renderHero(d);
   renderSignal(d.signal);
   renderRegime(d.regime);
@@ -2166,232 +1724,7 @@ function renderSignal(sig) {
   `;
 }
 
-// ═══════════════════════════════════════════════════════
-// PIVOT MARKERS & SIGNAL MARKERS
-// ═══════════════════════════════════════════════════════
-function buildPivotMarkers(d) {
-  // Pivot swing arrows removed — structure already visible via S/R price lines.
-  // Keeping them caused stacking with trade entry markers on the same bars.
-  permanentMarkers = [];
-}
 
-function setMarkersWithSignal(signal) {
-  // lastSignal already set by renderAll() before this call
-  updateAllMarkers();
-}
-
-function showHighlightMarker(lineInfo) {
-  const times = lineInfo.candle_times || [];
-  if (times.length === 0) {
-    if (highlightActive) clearHighlightMarker();
-    return;
-  }
-
-  // Skip re-render if same level already highlighted
-  const key = times[0];
-  if (highlightActive && lastHighlightTs === key) return;
-  lastHighlightTs = key;
-  highlightActive = true;
-
-  const isAbove = lineInfo.type === 'resistance' || lineInfo.type === 'invalidation' || lineInfo.type === 'ema200';
-  const pos = isAbove ? 'aboveBar' : 'belowBar';
-
-  // Build circle markers: first touch = white/large, subsequent = colored/smaller
-  const highlights = times.map((t, i) => ({
-    time: t,
-    position: pos,
-    color: i === 0 ? '#ffffff' : lineInfo.color + 'bb',
-    shape: 'circle',
-    size: i === 0 ? 2 : 1.5,
-    text: '',
-  }));
-
-  let markers = [...permanentMarkers, ...highlights, ...tradeMarkersData.map(m => m.marker)];
-  markers.sort((a, b) => a.time - b.time);
-  try { seriesMap.candles.setMarkers(markers); } catch(e) {}
-}
-
-function clearHighlightMarker() {
-  if (!highlightActive) return;
-  highlightActive = false;
-  lastHighlightTs = null;
-  setMarkersWithSignal(lastSignal);
-}
-
-// ═══════════════════════════════════════════════════════
-// CHART LINE TOOLTIPS
-// ═══════════════════════════════════════════════════════
-function buildLineContext(d) {
-  lineContext = [];
-  if (!d || !d.chart) return;
-  const lvl = d.chart.levels;
-  const tf = (d.interval || '4H').toUpperCase();
-
-  // ── Support zones (with touch timestamps from Python) ──
-  (lvl.support || []).forEach((p) => {
-    const touches = (lvl.support_touches && lvl.support_touches[String(p)]) || [];
-    const n = touches.length;
-    const bos = d.structure && d.structure.bullish_bos && d.risk && p === d.risk.invalidation;
-    lineContext.push({
-      price: p, label: 'Support Zone', color: '#3fb950', type: 'support',
-      candle_times: touches,
-      why: `${tf} swing low at $${fmt(p)}. `
-         + (n >= 2
-            ? `${n} candle touches detected — price has bounced from this level multiple times, confirming structural support.`
-            : 'Buyers stepped in here, pushing price back up. Watch for reactions on any retest.')
-         + (bos ? ' This level also serves as the trade invalidation.' : ''),
-    });
-  });
-
-  // ── Resistance zones ──
-  (lvl.resistance || []).forEach((p) => {
-    const touches = (lvl.resistance_touches && lvl.resistance_touches[String(p)]) || [];
-    const n = touches.length;
-    const bos = d.structure && d.structure.bearish_bos && d.risk && p === d.risk.invalidation;
-    lineContext.push({
-      price: p, label: 'Resistance Zone', color: '#f85149', type: 'resistance',
-      candle_times: touches,
-      why: `${tf} swing high at $${fmt(p)}. `
-         + (n >= 2
-            ? `${n} candle touches detected — sellers have stepped in here repeatedly, confirming structural resistance.`
-            : 'Sellers stepped in here, pushing price back down. Watch for rejections on any retest.')
-         + (bos ? ' This level also serves as the trade invalidation.' : ''),
-    });
-  });
-
-  // Fibonacci removed — replaced by MACD
-
-  // ── Invalidation ──
-  if (lvl.invalidation) {
-    const bias = d.risk ? d.risk.bias : 'Neutral';
-    lineContext.push({
-      price: lvl.invalidation, label: 'Invalidation', color: '#ff4444', type: 'invalidation',
-      candle_times: [],
-      why: `A ${tf} close ${bias === 'Long' ? 'below' : 'above'} this level structurally breaks the ${bias.toLowerCase()} thesis. `
-         + `This is the last swing ${bias === 'Long' ? 'low' : 'high'} — once price closes beyond it, the setup is invalid.`,
-    });
-  }
-
-  // ── Swing target ──
-  if (lvl.target) {
-    const bias = d.risk ? d.risk.bias : 'Neutral';
-    lineContext.push({
-      price: lvl.target, label: 'Swing Target', color: '#44ff88', type: 'target',
-      candle_times: [],
-      why: `Next structural objective — the last swing ${bias === 'Long' ? 'high (prior resistance)' : 'low (prior support)'}. `
-         + `If the ${bias.toLowerCase()} setup plays out, price should reach this level. R:R = ${d.risk ? d.risk.rr : '?'}:1.`,
-    });
-  }
-
-  // ── EMA 50 (add current value so hovering near it shows tooltip) ──
-  if (d.chart.ema50 && d.chart.ema50.length > 0) {
-    const v = d.chart.ema50[d.chart.ema50.length - 1].value;
-    const above = d.current_price > v;
-    lineContext.push({
-      price: v, label: 'EMA 50', color: '#58a6ff', type: 'ema50',
-      candle_times: [],
-      why: `50-period EMA = $${fmt(v)} on this timeframe. `
-         + `Price is currently ${above ? 'above' : 'below'} — ${above ? 'short-term bullish momentum. Acts as dynamic support; watch for bounces on retests.' : 'short-term bearish pressure. Acts as dynamic resistance; watch for rejections on retests.'}`,
-    });
-  }
-
-  // ── EMA 200 ──
-  if (d.chart.ema200 && d.chart.ema200.length > 0) {
-    const v = d.chart.ema200[d.chart.ema200.length - 1].value;
-    const above = d.current_price > v;
-    lineContext.push({
-      price: v, label: 'EMA 200', color: '#f0883e', type: 'ema200',
-      candle_times: [],
-      why: `200-period EMA = $${fmt(v)} on this timeframe. `
-         + `Price is ${above ? 'above' : 'below'} the long-term baseline. `
-         + `${above ? 'Institutional buyers are generally positioned long above this level.' : 'Institutional players are generally positioned short below this level.'} `
-         + 'The most-watched EMA by professional desks.',
-    });
-  }
-}
-
-function initTooltip() {
-  const wrap    = document.getElementById('chart-wrap');
-  const tooltip = document.getElementById('chart-tooltip');
-  const CHART_H = 480; // main chart pixel height
-
-  wrap.addEventListener('mousemove', (e) => {
-    const rect   = wrap.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-
-    if (mouseY > CHART_H || lineContext.length === 0) {
-      tooltip.style.display = 'none';
-      clearHighlightMarker();
-      return;
-    }
-
-    let closest = null;
-    let minDist = 9; // px threshold
-
-    lineContext.forEach(info => {
-      try {
-        const lineY = seriesMap.candles.priceToCoordinate(info.price);
-        if (lineY !== null) {
-          const dist = Math.abs(mouseY - lineY);
-          if (dist < minDist) { minDist = dist; closest = info; }
-        }
-      } catch(_) {}
-    });
-
-    if (closest) {
-      showTooltip(closest, mouseX, mouseY, rect);
-      showHighlightMarker(closest);
-    } else {
-      tooltip.style.display = 'none';
-      clearHighlightMarker();
-    }
-  });
-
-  wrap.addEventListener('mouseleave', () => {
-    tooltip.style.display = 'none';
-    clearHighlightMarker();
-  });
-}
-
-function showTooltip(info, mouseX, mouseY, wrapRect) {
-  const tooltip = document.getElementById('chart-tooltip');
-  const times = info.candle_times || [];
-  const n = times.length;
-
-  // Show oldest touch (creator) date + count
-  const primaryTs = n > 0 ? times[0] : null;
-  const dateStr = primaryTs
-    ? new Date(primaryTs * 1000).toLocaleDateString('en-US',
-        { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })
-    : null;
-
-  tooltip.innerHTML = `
-    <div style="font-size:10px;font-weight:700;color:${info.color};text-transform:uppercase;letter-spacing:.07em;margin-bottom:4px">${info.label}</div>
-    <div style="font-size:14px;font-weight:700;color:#e6edf3;margin-bottom:6px">$${fmt(info.price)}</div>
-    <div style="font-size:12px;color:#8b949e;line-height:1.55">${info.why}</div>
-    ${dateStr ? `
-    <div style="font-size:10px;color:#484f58;border-top:1px solid #21262d;padding-top:6px;margin-top:6px">
-      First touched: ${dateStr}${n > 1 ? ` &nbsp;·&nbsp; <span style="color:${info.color}">${n} touches ◉ shown</span>` : ' &nbsp;<span style="color:#bc8cff">◉ highlighted</span>'}
-    </div>` : ''}
-  `;
-
-  tooltip.style.display = 'block';
-  const ttW = tooltip.offsetWidth;
-  const ttH = tooltip.offsetHeight;
-  const W   = wrapRect.width;
-  const H   = 480;
-
-  let tx = mouseX + 18;
-  let ty = mouseY - Math.floor(ttH / 2);
-  if (tx + ttW > W - 8)  tx = mouseX - ttW - 14;
-  if (tx < 8)             tx = 8;
-  if (ty < 8)             ty = 8;
-  if (ty + ttH > H - 8)  ty = H - ttH - 8;
-
-  tooltip.style.left = tx + 'px';
-  tooltip.style.top  = ty + 'px';
-}
 
 // ═══════════════════════════════════════════════════════
 // PRICE PREDICTION CARD
@@ -2731,192 +2064,6 @@ function toggleLearningCard() {
   if (hidden) fetchLearning();
 }
 
-// ═══════════════════════════════════════════════════════
-// TRADE MARKERS ON CHART
-// ═══════════════════════════════════════════════════════
-
-function getCandleSeconds(tf) {
-  const map = {'15m':900,'30m':1800,'1h':3600,'4h':14400,'1d':86400,'1w':604800};
-  return map[tf] || 3600;
-}
-
-// Find candle bar time (unix seconds) closest to an ISO timestamp
-function nearestCandleTime(isoStr) {
-  if (!isoStr || chartCandleTimes.length === 0) return null;
-  const ts = Math.floor(new Date(isoStr).getTime() / 1000);
-  let best = null, bestDiff = Infinity;
-  for (const t of chartCandleTimes) {
-    const d = Math.abs(t - ts);
-    if (d < bestDiff) { bestDiff = d; best = t; }
-  }
-  return best;
-}
-
-// Rebuild trade markers for current symbol + TF
-function buildTradeMarkers() {
-  tradeMarkersData = [];
-  const trades = allSignalsData || [];
-  const sym = currentSymbol;
-  const tf  = currentTF;
-
-  // Tier badge: D = Day (15m), S = Swing (4h)
-  const getDayTier = iv => ['15m','30m','1h'].includes(iv) ? 'D' : 'S';
-
-  trades.forEach(t => {
-    if (t.symbol !== sym) return;
-
-    // Entry marker
-    const entryTime = nearestCandleTime(t.opened_at);
-    if (entryTime !== null) {
-      const isLong = t.direction === 'LONG';
-      const tier   = getDayTier(t.interval);
-      // Day=purple/orange  Swing=blue/red  (different hues so you can tell them apart)
-      const color  = isLong
-        ? (tier === 'D' ? '#bc8cff' : '#58a6ff')
-        : (tier === 'D' ? '#f0883e' : '#ff7b72');
-      tradeMarkersData.push({
-        time:  entryTime,
-        trade: t,
-        kind:  'entry',
-        marker: {
-          time:     entryTime,
-          position: isLong ? 'belowBar' : 'aboveBar',
-          color,
-          shape:    isLong ? 'arrowUp' : 'arrowDown',
-          text:     `${tier}${t.direction.charAt(0)}${t.score}`,
-          size:     1.5,
-        },
-      });
-    }
-
-    // Exit marker — circle dot colored by outcome
-    if (t.closed_at && t.status !== 'open') {
-      const exitTime = nearestCandleTime(t.closed_at);
-      if (exitTime !== null) {
-        const exitColor = t.status === 'win' ? '#3fb950' : t.status === 'loss' ? '#f85149' : '#484f58';
-        tradeMarkersData.push({
-          time:  exitTime,
-          trade: t,
-          kind:  'exit',
-          marker: {
-            time:     exitTime,
-            position: 'aboveBar',
-            color:    exitColor,
-            shape:    'circle',
-            text:     t.roi_pct != null
-                        ? (t.roi_pct >= 0 ? '+' : '') + t.roi_pct + '%'
-                        : (t.status === 'win' ? 'W' : t.status === 'loss' ? 'L' : ''),
-            size:     1,
-          },
-        });
-      }
-    }
-  });
-
-  updateAllMarkers();
-  buildTradeLines(trades);
-
-  // ── Open trade TP/SL price lines — show where open trades are targeting ─────
-  // These are added to priceLines so they clear automatically on next chart load.
-  trades
-    .filter(t => t.symbol === sym && t.interval === tf && t.status === 'open')
-    .forEach(t => {
-      const label = t.interval.toUpperCase();
-      const isLong = t.direction === 'LONG';
-      if (t.tp) {
-        priceLines.push(seriesMap.candles.createPriceLine({
-          price: parseFloat(t.tp),
-          color: isLong ? '#3fb95099' : '#f8514999',
-          lineWidth: 1,
-          lineStyle: LightweightCharts.LineStyle.Dotted,
-          axisLabelVisible: true,
-          title: `${label} TP`,
-        }));
-      }
-      if (t.sl) {
-        priceLines.push(seriesMap.candles.createPriceLine({
-          price: parseFloat(t.sl),
-          color: isLong ? '#f8514999' : '#3fb95099',
-          lineWidth: 1,
-          lineStyle: LightweightCharts.LineStyle.Dotted,
-          axisLabelVisible: true,
-          title: `${label} SL`,
-        }));
-      }
-    });
-}
-
-// Central marker rebuild — permanent pivots + trade markers only (signal shown in overlay box)
-function updateAllMarkers() {
-  // Deduplicate trade markers: keep only one arrow per candle+position slot.
-  // Multiple TF trades can map to the same candle bar — keep the highest-scored.
-  // All entries remain in tradeMarkersData for click-to-popup detection.
-  const seen = {};
-  tradeMarkersData.forEach(m => {
-    const key = `${m.time}_${m.marker.position}`;
-    if (!seen[key] || (m.trade.score || 0) > (seen[key].trade.score || 0)) {
-      seen[key] = m;
-    }
-  });
-  const dedupedMarkers = Object.values(seen).map(m => m.marker);
-  let markers = [...permanentMarkers, ...dedupedMarkers];
-  markers.sort((a, b) => a.time - b.time);
-  try { seriesMap.candles.setMarkers(markers); } catch(e) {}
-}
-
-// Show trade detail popup near the clicked marker
-function showTradePopup(trade, x, y) {
-  const popup = document.getElementById('trade-popup');
-  if (!popup) return;
-  const isLong   = trade.direction === 'LONG';
-  const dirColor = isLong ? '#3fb950' : '#f85149';
-  const stColor  = {open:'#d29922',win:'#3fb950',loss:'#f85149',cancelled:'#484f58'}[trade.status] || '#8b949e';
-  const rr       = calcRR(trade.entry, trade.tp, trade.sl, trade.direction);
-  const fmtDt    = dt => dt ? new Date(dt).toLocaleDateString([],{month:'short',day:'numeric'}) + ' ' + new Date(dt).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '—';
-  const roiStr   = trade.roi_pct != null ? (trade.roi_pct >= 0 ? '+' : '') + trade.roi_pct + '%' : '—';
-  const roiColor = trade.roi_pct != null ? (trade.roi_pct >= 0 ? '#3fb950' : '#f85149') : '#8b949e';
-  const sym      = trade.symbol.replace('USDT','');
-
-  popup.innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;border-bottom:1px solid #30363d;padding-bottom:6px">
-      <div>
-        <span style="font-weight:700;color:#e6edf3;font-size:13px">${sym} · ${trade.interval.toUpperCase()}</span>
-        <span style="color:${dirColor};font-weight:700;margin-left:6px">${isLong ? '▲' : '▼'} ${trade.direction}</span>
-      </div>
-      <span style="color:${stColor};font-size:11px;text-transform:uppercase;font-weight:700">${trade.status}</span>
-    </div>
-    <div style="display:grid;grid-template-columns:max-content 1fr;gap:3px 10px;font-size:11px;margin-bottom:6px">
-      <span style="color:#8b949e">Entry</span><span style="font-weight:600">$${fmt(trade.entry)}</span>
-      <span style="color:#8b949e">Target</span><span style="color:#3fb950;font-weight:600">$${fmt(trade.tp)} <span style="opacity:.7">+${rr.gainPct}%</span></span>
-      <span style="color:#8b949e">Stop</span><span style="color:#f85149;font-weight:600">$${fmt(trade.sl)} <span style="opacity:.7">-${rr.lossPct}%</span></span>
-      <span style="color:#8b949e">R:R</span><span><span class="rr-badge ${rr.rrClass}">${rr.rr}:1</span></span>
-      <span style="color:#8b949e">Score</span><span>${trade.score}/10</span>
-      <span style="color:#8b949e">ROI</span><span style="color:${roiColor};font-weight:700">${roiStr}</span>
-    </div>
-    <div style="font-size:10px;color:#8b949e;border-top:1px solid #21262d;padding-top:5px;line-height:1.6">
-      <div>Opened: <span style="color:#c9d1d9">${fmtDt(trade.opened_at)}</span></div>
-      ${trade.closed_at ? `<div>Closed: <span style="color:#c9d1d9">${fmtDt(trade.closed_at)}</span></div>` : ''}
-      ${trade.reason ? `<div style="margin-top:3px;color:#c9d1d9;font-style:italic">${trade.reason}</div>` : ''}
-    </div>
-    <div style="font-size:9px;color:#484f58;margin-top:5px;text-align:center">click chart to close</div>
-  `;
-
-  // Position near cursor, prevent overflow
-  const wrap = document.getElementById('chart-wrap');
-  const rect = wrap ? wrap.getBoundingClientRect() : {width: 800};
-  let px = x + 14;
-  let py = Math.max(0, y - 20);
-  popup.style.display = 'block';
-  const popW = 310;
-  if (px + popW > rect.width) px = Math.max(4, x - popW - 4);
-  popup.style.left = px + 'px';
-  popup.style.top  = py + 'px';
-}
-
-function hideTradePopup() {
-  const popup = document.getElementById('trade-popup');
-  if (popup) popup.style.display = 'none';
-}
 
 // Analysis panel toggle
 function toggleAnalysisPanel() {
@@ -3143,7 +2290,6 @@ async function fetchTrades() {
     const resp = await fetch('/api/trades');
     allSignalsData = await resp.json();
     renderAllSignals();
-    buildTradeMarkers();  // overlay logged trades onto chart for current symbol+TF
   } catch(e) { /* silent — non-critical */ }
   fetchLearning();
 }
@@ -3415,49 +2561,6 @@ function renderAiChart(r) {
     ${risks  ? `<div><div style="font-size:10px;font-weight:700;color:#484f58;text-transform:uppercase;letter-spacing:.07em;margin-bottom:4px">Risks</div>${risks}</div>` : ''}
     <div style="font-size:10px;color:#484f58;margin-top:10px;padding-top:6px;border-top:1px solid #21262d">Claude Haiku · ${currentSymbol.replace('USDT','')} ${currentTF.toUpperCase()} · ${new Date().toLocaleTimeString('en-US',{timeZone:'UTC',hour:'2-digit',minute:'2-digit'})} UTC</div>
   `;
-}
-
-// ═══════════════════════════════════════════════════════
-// TRADE BAND LINES (entry→exit on chart)
-// ═══════════════════════════════════════════════════════
-function buildTradeLines(trades) {
-  // Clear existing
-  tradeLines.forEach(s => { try { mainChart.removeSeries(s); } catch(e){} });
-  tradeLines = [];
-
-  const sym = currentSymbol;
-  const tf  = currentTF;
-
-  trades
-    .filter(t => t.symbol === sym && t.interval === tf && t.closed_at && t.status !== 'open')
-    .slice(-30)   // cap at last 30 to avoid series overload
-    .forEach(t => {
-      const entryTime = nearestCandleTime(t.opened_at);
-      const exitTime  = nearestCandleTime(t.closed_at);
-      if (!entryTime || !exitTime || entryTime === exitTime) return;
-
-      const color = t.status === 'win'
-        ? '#3fb95066'
-        : t.status === 'loss'
-          ? '#f8514966'
-          : '#48495866';
-
-      try {
-        const s = mainChart.addLineSeries({
-          color,
-          lineWidth: 2,
-          lineStyle: 0,   // solid
-          priceLineVisible: false,
-          lastValueVisible: false,
-          crosshairMarkerVisible: false,
-        });
-        s.setData([
-          { time: entryTime, value: parseFloat(t.entry) },
-          { time: exitTime,  value: parseFloat(t.close_price) || parseFloat(t.entry) },
-        ]);
-        tradeLines.push(s);
-      } catch(e) {}
-    });
 }
 
 function showLoading(msg) {
