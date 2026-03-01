@@ -10,6 +10,8 @@ import threading
 import os
 import learning
 import notifications
+import ai_analysis
+import market_data
 
 app          = Flask(__name__)
 _cache       = {}
@@ -43,6 +45,17 @@ _scanner_status  = {
     "signals_logged":   0,
     "trades_closed":    0,
 }
+
+
+# ── Session filter ────────────────────────────────────────────────────────────
+def _in_active_session() -> bool:
+    """
+    True during European or US trading sessions (7am–10pm UTC).
+    Day (15m) signals are only logged during active sessions when volume is highest.
+    Swing (4h) signals fire any time.
+    """
+    h = datetime.now(timezone.utc).hour
+    return 7 <= h < 22
 
 
 # ── Price-based auto-close helper ────────────────────────────────────────────
@@ -118,14 +131,17 @@ def _background_scanner() -> None:
                     with _lock:
                         _cache[f"{sym}_{interval}"] = (data, now)
 
-                    # Log signal only if higher-TF bias agrees
+                    # Log signal only if higher-TF bias agrees + session check
                     sig = data.get("signal")
                     if sig:
-                        htf    = "1h" if interval == "15m" else "1d"
-                        htf_d  = bias_cache.get(htf, {})
-                        if _bias_agrees(sig["direction"], htf_d):
-                            trade_id = f"{sym}_{interval}_{sig['direction']}_{int(time.time())}"
-                            logged = learning.log_trade({
+                        htf   = "1h" if interval == "15m" else "1d"
+                        htf_d = bias_cache.get(htf, {})
+                        is_day = interval in ("15m", "30m", "1h")
+                        session_ok = (not is_day) or _in_active_session()
+
+                        if _bias_agrees(sig["direction"], htf_d) and session_ok:
+                            trade_id   = f"{sym}_{interval}_{sig['direction']}_{int(time.time())}"
+                            trade_data = {
                                 "id":               trade_id,
                                 "symbol":           sym,
                                 "interval":         interval,
@@ -139,9 +155,26 @@ def _background_scanner() -> None:
                                 "factors_snapshot": sig.get("factors_snapshot", {}),
                                 "target_basis":     sig.get("target_basis", ""),
                                 "opened_at":        datetime.now(timezone.utc).isoformat(),
-                            })
+                                # Pass ADX/VWAP context for AI evaluation
+                                "adx_value":        data.get("adx", {}).get("value", 0),
+                                "vwap_side":        ("above" if data.get("vwap") and
+                                                     sig["entry"] > data.get("vwap", 0) else "below"),
+                            }
+                            logged = learning.log_trade(trade_data)
                             if logged:
                                 scan_signals += 1
+
+                                # ── Claude AI signal evaluation ──────────────
+                                try:
+                                    ctx       = market_data.get_market_context(sym)
+                                    history   = learning.get_trades()
+                                    ai_result = ai_analysis.analyze_signal(trade_data, history, ctx)
+                                    if ai_result:
+                                        learning.update_trade_ai(trade_id, ai_result)
+                                        trade_data["ai_analysis"] = ai_result
+                                except Exception:
+                                    ai_result = {}
+
                                 notifications.send_signal_alert({
                                     "symbol":       sym,
                                     "interval":     interval,
@@ -152,6 +185,7 @@ def _background_scanner() -> None:
                                     "score":        sig["score"],
                                     "reason":       sig.get("reason", ""),
                                     "target_basis": sig.get("target_basis", ""),
+                                    "ai_analysis":  trade_data.get("ai_analysis", {}),
                                 })
 
                     # Auto-close trades
@@ -299,6 +333,17 @@ def scanner_status():
         last = datetime.fromisoformat(st["last_scan_at"])
         st["last_scan_ago_s"] = int((datetime.now(timezone.utc) - last).total_seconds())
     return jsonify(st)
+
+
+@app.route("/api/ai-insights")
+def get_ai_insights():
+    """Ask Claude Sonnet to analyze full trade history and surface patterns."""
+    try:
+        history  = learning.get_trades()
+        insights = ai_analysis.get_performance_insights(history)
+        return jsonify(insights)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/test-discord")

@@ -21,7 +21,7 @@ _lock     = threading.Lock()
 # ─────────────────────────────────────────────
 # DEFAULT CONFIGURATION
 # ─────────────────────────────────────────────
-FACTOR_NAMES    = ["regime", "bos", "sweep", "volume", "obv", "rsi", "fib"]
+FACTOR_NAMES    = ["regime", "bos", "sweep", "volume", "obv", "rsi", "fib", "adx", "vwap"]
 DEFAULT_WEIGHTS = {
     "regime": 2.0,   # trending regime aligned (2 pts by default)
     "bos":    2.0,   # confirmed BOS
@@ -29,7 +29,9 @@ DEFAULT_WEIGHTS = {
     "volume": 1.0,   # volume expansion / spike
     "obv":    1.0,   # OBV confirmation / divergence
     "rsi":    1.0,   # RSI confirmation
-    "fib":    1.0,   # Fibonacci confluence
+    "fib":    1.0,   # MACD confluence (key kept as 'fib' for backward compat)
+    "adx":    1.0,   # ADX trend strength
+    "vwap":   1.0,   # VWAP alignment
 }
 DEFAULT_THRESHOLD = 7.0    # minimum score to fire a signal
 DEFAULT_STOP_MULT = 0.5    # ATR multiplier for stop placement
@@ -90,6 +92,18 @@ def _init_db():
         for k, v in defaults.items():
             db.execute("INSERT OR IGNORE INTO config (key, value) VALUES (?, ?)", (k, v))
         db.commit()
+
+        # ── Schema migrations: add new columns to existing tables ──────────
+        for col, defn in [
+            ("breakeven_activated", "INTEGER DEFAULT 0"),
+            ("ai_analysis",         "TEXT"),
+        ]:
+            try:
+                db.execute(f"ALTER TABLE trades ADD COLUMN {col} {defn}")
+                db.commit()
+            except Exception:
+                pass    # column already exists
+
         db.close()
 
 
@@ -240,9 +254,22 @@ def close_trade(trade_id: str, close_price: float, status: str) -> Optional[dict
             db.close()
 
 
+_DAY_MAX_HOURS   = 72    # 3 days max for Day (15m) trades
+_SWING_MAX_HOURS = 336   # 14 days max for Swing (4h) trades
+
+
 def auto_close(symbol: str, interval: str, current_price: float) -> list:
-    """Auto-close open trades whose TP or SL has been crossed."""
+    """
+    Auto-close open trades whose TP/SL has been hit, or that have expired.
+
+    Also manages the breakeven trailing stop:
+    - Once price moves 1× risk distance in our favour, SL moves to entry (breakeven).
+    - If price then falls back to entry level it closes at breakeven (cancelled, 0% ROI).
+    """
     closed = []
+    tier      = "day" if interval in ("15m", "30m", "1h") else "swing"
+    max_hours = _DAY_MAX_HOURS if tier == "day" else _SWING_MAX_HOURS
+
     with _lock:
         db = _conn()
         try:
@@ -251,33 +278,67 @@ def auto_close(symbol: str, interval: str, current_price: float) -> list:
                 (symbol, interval)
             ).fetchall()
             for row in rows:
-                t = dict(row)
+                t   = dict(row)
                 hit = None
+
+                # ── Risk distance used for breakeven calculation ──────────
+                risk_d = abs(float(t["entry"]) - float(t["sl"]))
+
+                # ── Activate breakeven once price moves 1R in our favour ──
+                be_active = bool(t.get("breakeven_activated", 0))
+                if not be_active:
+                    if t["direction"] == "LONG" and current_price >= t["entry"] + risk_d:
+                        db.execute("UPDATE trades SET breakeven_activated=1 WHERE id=?", (t["id"],))
+                        be_active = True
+                    elif t["direction"] == "SHORT" and current_price <= t["entry"] - risk_d:
+                        db.execute("UPDATE trades SET breakeven_activated=1 WHERE id=?", (t["id"],))
+                        be_active = True
+
+                # ── Effective SL: entry (breakeven) or original SL ────────
+                eff_sl = float(t["entry"]) if be_active else float(t["sl"])
+
+                # ── TP / SL checks ────────────────────────────────────────
                 if t["direction"] == "LONG":
                     if current_price >= t["tp"]:
                         hit = "win"
-                    elif current_price <= t["sl"]:
-                        hit = "loss"
+                    elif current_price <= eff_sl:
+                        hit = "loss" if not be_active else "cancelled"
                 elif t["direction"] == "SHORT":
                     if current_price <= t["tp"]:
                         hit = "win"
-                    elif current_price >= t["sl"]:
-                        hit = "loss"
+                    elif current_price >= eff_sl:
+                        hit = "loss" if not be_active else "cancelled"
+
+                # ── Time-based stop ───────────────────────────────────────
+                if not hit:
+                    try:
+                        opened = datetime.fromisoformat(
+                            t["opened_at"].replace("Z", "+00:00")
+                        )
+                        age_h = (datetime.now(timezone.utc) - opened).total_seconds() / 3600
+                        if age_h > max_hours:
+                            hit = "cancelled"
+                    except Exception:
+                        pass
+
                 if hit:
-                    roi      = _calc_roi(t["direction"], t["entry"], current_price)
-                    analysis = _generate_analysis(t, current_price, hit, roi)
+                    close_px = round(current_price, 8)
+                    if hit == "cancelled":
+                        close_px = float(t["entry"])   # 0% ROI on breakeven/time exits
+                    roi      = _calc_roi(t["direction"], t["entry"], close_px)
+                    analysis = _generate_analysis(t, close_px, hit, roi)
                     now      = datetime.now(timezone.utc).isoformat()
                     db.execute("""
                         UPDATE trades SET status=?, closed_at=?, close_price=?, roi_pct=?,
                         post_trade_analysis=? WHERE id=?
-                    """, (hit, now, round(current_price, 8), roi, json.dumps(analysis), t["id"]))
+                    """, (hit, now, close_px, roi, json.dumps(analysis), t["id"]))
                     closed.append({
                         "id":          t["id"],
                         "symbol":      t["symbol"],
                         "interval":    t["interval"],
                         "direction":   t["direction"],
                         "entry":       t["entry"],
-                        "close_price": round(current_price, 8),
+                        "close_price": close_px,
                         "roi_pct":     roi,
                         "status":      hit,
                     })
@@ -287,6 +348,22 @@ def auto_close(symbol: str, interval: str, current_price: float) -> list:
         finally:
             db.close()
     return closed
+
+
+def update_trade_ai(trade_id: str, ai_result: dict) -> None:
+    """Store Claude AI analysis on a trade record."""
+    if not ai_result:
+        return
+    with _lock:
+        db = _conn()
+        try:
+            db.execute(
+                "UPDATE trades SET ai_analysis=? WHERE id=?",
+                (json.dumps(ai_result), trade_id)
+            )
+            db.commit()
+        finally:
+            db.close()
 
 
 def _calc_roi(direction: str, entry: float, close_price: float) -> float:

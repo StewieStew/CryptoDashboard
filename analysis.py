@@ -105,6 +105,159 @@ def macd(series: pd.Series, fast: int = 12, slow: int = 26, signal_p: int = 9):
     return macd_line, signal_line, histogram
 
 
+def adx_indicator(df: pd.DataFrame, period: int = 14):
+    """
+    Average Directional Index.  Returns (adx_series, di_plus_series, di_minus_series).
+    ADX > 25 = trending market (signals are reliable).
+    ADX < 20 = ranging / choppy (signals have lower win rate).
+    """
+    high, low, close = df["high"], df["low"], df["close"]
+    tr = pd.concat([
+        high - low,
+        (high - close.shift()).abs(),
+        (low  - close.shift()).abs(),
+    ], axis=1).max(axis=1)
+
+    up_move   = high - high.shift()
+    down_move = low.shift() - low
+
+    plus_dm  = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
+    minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
+
+    atr_s     = tr.ewm(span=period, adjust=False).mean()
+    di_plus   = 100 * plus_dm.ewm(span=period, adjust=False).mean() / atr_s
+    di_minus  = 100 * minus_dm.ewm(span=period, adjust=False).mean() / atr_s
+    dx        = 100 * (di_plus - di_minus).abs() / (di_plus + di_minus).replace(0, np.nan)
+    adx_s     = dx.ewm(span=period, adjust=False).mean()
+
+    return adx_s, di_plus, di_minus
+
+
+def vwap(df: pd.DataFrame) -> pd.Series:
+    """
+    Daily VWAP — resets at midnight UTC each day.
+    Best used on intraday timeframes (15m, 1h).
+    Price above VWAP = bullish intraday bias; below = bearish.
+    """
+    typical = (df["high"] + df["low"] + df["close"]) / 3
+    pv      = typical * df["volume"]
+    result  = pd.Series(index=df.index, dtype=float)
+    for _date, grp in df.groupby(df.index.date):
+        idx            = grp.index
+        result[idx]    = pv[idx].cumsum() / df["volume"][idx].cumsum().replace(0, np.nan)
+    return result
+
+
+def detect_fvg(df: pd.DataFrame, lookback: int = 100) -> list:
+    """
+    Detect Fair Value Gaps (FVGs) — price imbalances where the market moved
+    too fast to leave overlapping wicks between candle 1 and candle 3.
+
+    Bullish FVG: candle[i+1].low > candle[i-1].high  (gap up — unfilled buy imbalance)
+    Bearish FVG: candle[i+1].high < candle[i-1].low  (gap down — unfilled sell imbalance)
+
+    Price tends to retrace into these gaps before continuing the trend.
+    Returns last 5 significant FVGs (≥0.1% size).
+    """
+    recent   = df.iloc[-lookback:]
+    candles  = list(recent.itertuples())
+    fvgs     = []
+
+    for i in range(1, len(candles) - 1):
+        c1, c3 = candles[i - 1], candles[i + 1]
+
+        if c3.low > c1.high:                          # Bullish FVG
+            size_pct = (c3.low - c1.high) / c1.high * 100
+            if size_pct >= 0.1:
+                fvgs.append({
+                    "type":     "bullish",
+                    "upper":    round(float(c3.low),  6),
+                    "lower":    round(float(c1.high), 6),
+                    "midpoint": round((float(c3.low) + float(c1.high)) / 2, 6),
+                    "time":     int(c3.Index.timestamp()),
+                    "size_pct": round(size_pct, 3),
+                })
+        elif c3.high < c1.low:                        # Bearish FVG
+            size_pct = (c1.low - c3.high) / c1.low * 100
+            if size_pct >= 0.1:
+                fvgs.append({
+                    "type":     "bearish",
+                    "upper":    round(float(c1.low),  6),
+                    "lower":    round(float(c3.high), 6),
+                    "midpoint": round((float(c1.low) + float(c3.high)) / 2, 6),
+                    "time":     int(c3.Index.timestamp()),
+                    "size_pct": round(size_pct, 3),
+                })
+
+    return fvgs[-5:]
+
+
+def detect_order_blocks(df: pd.DataFrame, swing_highs, swing_lows) -> dict:
+    """
+    Order Blocks — zones where institutional orders were placed.
+
+    Bullish OB: last bearish candle immediately before a bullish impulse
+                (identified near swing lows). Acts as demand zone / support.
+    Bearish OB: last bullish candle immediately before a bearish impulse
+                (identified near swing highs). Acts as supply zone / resistance.
+
+    Returns {"bullish": [...], "bearish": [...], "nearest": {...}|None}
+    """
+    cur = float(df["close"].iloc[-1])
+    bullish_obs, bearish_obs = [], []
+
+    # Bullish OBs — near swing lows
+    for _ts, level in (swing_lows[-4:] or []):
+        mask = (df["low"] >= level * 0.997) & (df["low"] <= level * 1.003)
+        hits = df[mask]
+        if hits.empty:
+            continue
+        loc = df.index.get_loc(hits.index[-1])
+        if loc > 0:
+            prev = df.iloc[loc - 1]
+            if prev["close"] < prev["open"]:   # bearish candle = institutional sell then reverse
+                bullish_obs.append({
+                    "upper":  round(float(prev["open"]),  6),
+                    "lower":  round(float(prev["close"]), 6),
+                    "level":  round(level, 6),
+                    "active": cur > level,
+                })
+
+    # Bearish OBs — near swing highs
+    for _ts, level in (swing_highs[-4:] or []):
+        mask = (df["high"] >= level * 0.997) & (df["high"] <= level * 1.003)
+        hits = df[mask]
+        if hits.empty:
+            continue
+        loc = df.index.get_loc(hits.index[-1])
+        if loc > 0:
+            prev = df.iloc[loc - 1]
+            if prev["close"] > prev["open"]:   # bullish candle = institutional buy then reverse
+                bearish_obs.append({
+                    "upper":  round(float(prev["close"]), 6),
+                    "lower":  round(float(prev["open"]),  6),
+                    "level":  round(level, 6),
+                    "active": cur < level,
+                })
+
+    # Find nearest OB to current price
+    all_obs = [(abs((ob["upper"] + ob["lower"]) / 2 - cur), "bullish", ob)
+               for ob in bullish_obs]
+    all_obs += [(abs((ob["upper"] + ob["lower"]) / 2 - cur), "bearish", ob)
+                for ob in bearish_obs]
+    all_obs.sort(key=lambda x: x[0])
+    nearest = None
+    if all_obs:
+        _, ob_type, ob = all_obs[0]
+        nearest = {"type": ob_type, **ob}
+
+    return {
+        "bullish": bullish_obs[-2:],
+        "bearish": bearish_obs[-2:],
+        "nearest": nearest,
+    }
+
+
 def obv_swing_levels(obv_s: pd.Series, n: int = 5) -> tuple:
     """Detect recent OBV swing highs/lows for S/R visualization on the OBV chart."""
     vals  = obv_s.values
@@ -351,7 +504,10 @@ def market_regime(daily_df: pd.DataFrame) -> dict:
 # ─────────────────────────────────────────────
 
 def confluence_score(regime, structure, vol, rsi_data, sweeps, macd_data,
-                     interval: str = "4h", weights: dict | None = None) -> dict:
+                     interval: str = "4h", weights: dict | None = None,
+                     adx_data: dict | None = None,
+                     vwap_val: float | None = None,
+                     current_price: float | None = None) -> dict:
     """
     Score = sum of earned factor weights.
     Weights come from the adaptive learning engine (defaults to original point values).
@@ -499,6 +655,36 @@ def confluence_score(regime, structure, vol, rsi_data, sweeps, macd_data,
     else:
         reasons.append({"pts": 0, "earned": False,
                         "text": f"MACD not confirming {bias.upper()} bias — no momentum alignment"})
+
+    # 8. ADX — trend strength filter (default 1 pt)
+    w       = weights.get("adx", 1.0)
+    adx_val = adx_data.get("value", 0) if adx_data else 0
+    adx_ok  = bool(adx_data and adx_data.get("trending", False))
+    snap["adx"] = adx_ok
+    if adx_ok:
+        score += w
+        reasons.append({"pts": round(w, 1), "earned": True,
+                        "text": f"ADX {adx_val:.1f} — strong trend confirmed (>25), signals are reliable"})
+    else:
+        reasons.append({"pts": 0, "earned": False,
+                        "text": f"ADX {adx_val:.1f} — market ranging (<25), signals carry lower win rate"})
+
+    # 9. VWAP alignment (default 1 pt)
+    w        = weights.get("vwap", 1.0)
+    vwap_ok  = False
+    vwap_txt = "VWAP data unavailable"
+    if vwap_val is not None and current_price is not None:
+        above_vwap = current_price > vwap_val
+        vwap_ok = (bias_up and above_vwap) or (bias_dn and not above_vwap)
+        side     = "above" if above_vwap else "below"
+        vwap_txt = (f"Price {side} VWAP (${vwap_val:,.4f}) — "
+                    + ("confirms bullish intraday bias" if above_vwap else "confirms bearish intraday bias"))
+    snap["vwap"] = vwap_ok
+    if vwap_ok:
+        score += w
+        reasons.append({"pts": round(w, 1), "earned": True, "text": vwap_txt})
+    else:
+        reasons.append({"pts": 0, "earned": False, "text": vwap_txt})
 
     score     = round(score, 1)
     max_score = round(sum(weights.values()), 1)
@@ -925,6 +1111,23 @@ def full_analysis(symbol: str, interval: str = "4h") -> dict:
     rsi_data  = rsi_analysis(df)
     macd_data = macd_analysis(df)
 
+    # Section 3b: ADX, VWAP, FVG, Order Blocks
+    adx_s, di_plus_s, di_minus_s = adx_indicator(df)
+    adx_cur  = float(adx_s.iloc[-1]) if not adx_s.empty else 0.0
+    adx_data = {
+        "value":    round(adx_cur, 1),
+        "di_plus":  round(float(di_plus_s.iloc[-1]),  1),
+        "di_minus": round(float(di_minus_s.iloc[-1]), 1),
+        "trending": adx_cur > 25,
+        "strong":   adx_cur > 50,
+    }
+
+    vwap_s   = vwap(df)
+    vwap_cur = float(vwap_s.iloc[-1]) if not vwap_s.empty else None
+
+    fvgs         = detect_fvg(df)
+    order_blocks = detect_order_blocks(df, sh, sl)
+
     # Section 5: Volatility
     df_atr = atr(df)
     volatility = dict(
@@ -939,9 +1142,13 @@ def full_analysis(symbol: str, interval: str = "4h") -> dict:
     adapt_threshold = get_threshold()
     adapt_stop_mult = get_stop_multiplier()
 
-    # Section 6: Confluence (uses adaptive weights; MACD replaces Fibonacci slot)
+    # Section 6: Confluence (adaptive weights + ADX + VWAP)
+    cur_price  = float(df["close"].iloc[-1])
     confluence = confluence_score(regime, structure, vol, rsi_data, sweeps, macd_data,
-                                  interval, adapt_weights)
+                                  interval, adapt_weights,
+                                  adx_data=adx_data,
+                                  vwap_val=vwap_cur,
+                                  current_price=cur_price)
 
     # Section 7: Risk (uses adaptive stop multiplier)
     risk = risk_context(df, structure, sh, sl, interval, adapt_stop_mult)
@@ -999,6 +1206,10 @@ def full_analysis(symbol: str, interval: str = "4h") -> dict:
         current_price=risk["current"],
         regime=regime,
         structure=structure,
+        adx=adx_data,
+        vwap=round(vwap_cur, 6) if vwap_cur else None,
+        fvg=fvgs,
+        order_blocks=order_blocks,
         swings=dict(
             highs=[(str(ts), round(v, 2)) for ts, v in sh[-5:]],
             lows= [(str(ts), round(v, 2)) for ts, v in sl[-5:]],

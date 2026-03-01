@@ -108,6 +108,27 @@ def send_signal_alert(trade: dict) -> None:
         fields.append({"name": "TP Basis",
                         "value": tbasis[:128], "inline": False})
 
+    # ── Claude AI assessment ──────────────────────────────────────────────────
+    ai = trade.get("ai_analysis") or {}
+    if ai:
+        confidence     = ai.get("confidence", "?")
+        recommendation = ai.get("recommendation", "")
+        reasoning      = ai.get("reasoning", "")
+        risks          = ai.get("risks", [])
+        positives      = ai.get("positives", [])
+
+        rec_emoji = {"strong_take": "🔥", "take": "✅", "skip": "⛔"}.get(recommendation, "🤖")
+        ai_lines  = [f"{rec_emoji} **{recommendation.replace('_',' ').title()}** — Confidence: {confidence}/100"]
+        if reasoning:
+            ai_lines.append(reasoning)
+        if positives:
+            ai_lines.append("**+** " + " · ".join(positives[:2]))
+        if risks:
+            ai_lines.append("**⚠** " + " · ".join(risks[:2]))
+
+        fields.append({"name": "🤖 Claude AI Assessment",
+                        "value": "\n".join(ai_lines)[:512], "inline": False})
+
     embed = {
         "color": _signal_color(direction, interval),
         "title": f"{emoji} {direction} — {sym}  ({tier} · {interval})",
