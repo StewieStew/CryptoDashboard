@@ -1217,6 +1217,53 @@ let currentSymbol  = 'BTCUSDT';
 let symbolList     = JSON.parse(localStorage.getItem('cryptoDashSymbols') || '["BTCUSDT","ETHUSDT","XRPUSDT","DOGEUSDT","SOLUSDT","BNBUSDT","ADAUSDT","AVAXUSDT","LINKUSDT","LTCUSDT","DOTUSDT","NEARUSDT","ATOMUSDT"]');
 let autoRefreshOn  = false;
 let autoTimer      = null;
+let _liveWs        = null;   // Binance WebSocket for real-time kline updates
+let _lastClose     = null;   // last known close price for color comparison
+
+// ── Live price WebSocket ──────────────────────────────────────────────────────
+function startLiveWs(symbol, interval) {
+  if (_liveWs) { try { _liveWs.close(); } catch(e){} _liveWs = null; }
+  const stream = `${symbol.toLowerCase()}@kline_${interval}`;
+  const url    = `wss://stream.binance.com:9443/ws/${stream}`;
+  try {
+    const ws = new WebSocket(url);
+    ws.onmessage = e => {
+      try {
+        const msg = JSON.parse(e.data);
+        const k   = msg.k;
+        if (!k) return;
+        const price  = parseFloat(k.c);
+        const open   = parseFloat(k.o);
+        const high   = parseFloat(k.h);
+        const low    = parseFloat(k.l);
+        const vol    = parseFloat(k.v);
+        const time   = Math.floor(k.t / 1000);
+        const closed = k.x;
+
+        // Update last candle on chart
+        if (seriesMap.candles) {
+          try { seriesMap.candles.update({ time, open, high, low, close: price }); } catch(e){}
+        }
+        if (seriesMap.vol) {
+          const vColor = price >= open ? '#26a69a' : '#ef5350';
+          try { seriesMap.vol.update({ time, value: vol, color: vColor }); } catch(e){}
+        }
+
+        // Update hero price with live color
+        const priceEl = document.getElementById('h-price');
+        if (priceEl) {
+          const up = _lastClose === null || price >= _lastClose;
+          priceEl.textContent = '$' + fmt(price);
+          priceEl.style.color = up ? '#3fb950' : '#f85149';
+        }
+        _lastClose = price;
+      } catch(err) {}
+    };
+    ws.onerror = () => {};
+    ws.onclose = () => { _liveWs = null; };
+    _liveWs = ws;
+  } catch(e) {}
+}
 let mainChart      = null;
 let rsiChart       = null;
 let obvChart       = null;
@@ -1274,18 +1321,28 @@ function chartOptions(height) {
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     rightPriceScale: { borderColor: '#30363d' },
     timeScale: { borderColor: '#30363d', timeVisible: true, secondsVisible: false },
-    // Force UTC display — Binance candles are UTC-aligned (4h opens at 00/04/08/12/16/20 UTC)
+    // Eastern Time display (America/New_York — handles EST/EDT automatically)
     localization: {
       timeFormatter: ts => {
         const d = new Date(ts * 1000);
-        const hh = d.getUTCHours().toString().padStart(2, '0');
-        const mm = d.getUTCMinutes().toString().padStart(2, '0');
-        return `${hh}:${mm} UTC`;
+        const parts = new Intl.DateTimeFormat('en-US', {
+          timeZone: 'America/New_York',
+          hour: '2-digit', minute: '2-digit', hour12: false,
+        }).formatToParts(d);
+        const hh = parts.find(p => p.type === 'hour').value;
+        const mm = parts.find(p => p.type === 'minute').value;
+        return `${hh}:${mm} ET`;
       },
       dateFormatter: ts => {
-        const d  = new Date(ts * 1000);
-        const mo = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getUTCMonth()];
-        return `${mo} ${d.getUTCDate()} ${d.getUTCFullYear()}`;
+        const d = new Date(ts * 1000);
+        const parts = new Intl.DateTimeFormat('en-US', {
+          timeZone: 'America/New_York',
+          month: 'short', day: 'numeric', year: 'numeric',
+        }).formatToParts(d);
+        const mo  = parts.find(p => p.type === 'month').value;
+        const day = parts.find(p => p.type === 'day').value;
+        const yr  = parts.find(p => p.type === 'year').value;
+        return `${mo} ${day} ${yr}`;
       },
     },
     width: document.getElementById('main-chart').clientWidth,
@@ -1660,6 +1717,8 @@ async function loadAnalysis(symbol, forceRefresh = false) {
     const data = await resp.json();
     if (data.error) throw new Error(data.error);
     renderAll(data);
+    _lastClose = data.current_price || null;
+    startLiveWs(symbol, tf);   // connect real-time kline stream
   } catch(e) {
     showError(`Failed to load ${symbol}: ${e.message}`);
   } finally {
@@ -2380,6 +2439,9 @@ function renderSymbolBar() {
 function switchSymbol(sym) {
   currentSymbol = sym;
   currentTF = '4h';
+  _lastClose = null;
+  const priceEl = document.getElementById('h-price');
+  if (priceEl) priceEl.style.color = '#e6edf3';
   document.querySelectorAll('.tf-btn').forEach(b => b.classList.toggle('active', b.dataset.tf === '4h'));
   const label = document.getElementById('tf-label');
   if (label) label.textContent = 'Analysis: 4H';

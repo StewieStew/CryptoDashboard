@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 try:
     from learning import get_weights, get_threshold, get_stop_multiplier
 except ImportError:
-    def get_weights():        return {"regime":2.0,"bos":2.0,"sweep":2.0,"volume":1.0,"obv":1.0,"rsi":1.0,"fib":1.0}
+    def get_weights():        return {"regime":2.0,"bos":2.0,"sweep":2.0,"volume":1.0,"obv":1.0,"rsi":1.0,"adx":1.0}
     def get_threshold():     return 7.0
     def get_stop_multiplier(): return 0.5
 
@@ -634,7 +634,7 @@ def confluence_score(regime, structure, vol, rsi_data, sweeps,
                         "text": f"ADX {adx_val:.1f} — market ranging (<25), signals carry lower win rate"})
 
     score     = round(score, 1)
-    max_score = round(sum(weights.values()), 1)
+    max_score = 10.0  # Always display out of 10 regardless of adaptive weight drift
 
     if   score >= max_score * 0.78: strength = "High Probability Swing Environment"
     elif score >= max_score * 0.56: strength = "Moderate Setup"
@@ -762,7 +762,7 @@ def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
     rr = round(reward_d / risk_d, 2) if risk_d > 0 else 0
 
     # ── Enforce minimum R:R: Day trades (15m/30m) = 2:1, Swing/Hourly = 3:1 ───
-    min_rr = 2.0 if interval in ("15m", "30m") else 3.0
+    min_rr = 3.0
     if risk_d > 0 and rr < min_rr and bias != "Neutral":
         if bias == "Long":
             target = round(cur + min_rr * risk_d, 6)
@@ -847,7 +847,7 @@ def generate_signal(confluence: dict, structure, risk: dict, h4_df,
     if not structure:
         return None
     # Hard R:R gate — Day (15m/30m): 2:1 min. Swing/Hourly: 3:1 min.
-    min_rr = 2.0 if interval in ("15m", "30m") else 3.0
+    min_rr = 3.0
     if risk.get("rr", 0) < min_rr:
         return None
 
