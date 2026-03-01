@@ -70,12 +70,38 @@ def _log_signal_from_data(data: dict, sym: str, interval: str) -> None:
         learning.auto_close(sym, interval, float(cur_price))
 
 
+# ── Higher-TF bias filter ─────────────────────────────────────────────────────
+def _bias_agrees(signal_dir: str, htf_data: dict) -> bool:
+    """
+    Returns True only if the higher-timeframe context agrees with the signal.
+    Day (15m) signals filtered by 1h context.
+    Swing (4h) signals filtered by 1d context.
+
+    Agreement = HTF price above 200 EMA (for LONG) or below (for SHORT),
+                OR a confirmed BOS on the HTF in the same direction.
+    """
+    regime    = htf_data.get("regime", {})
+    structure = htf_data.get("structure", {})
+    above_200 = regime.get("above_200", False)
+    bull_bos  = structure.get("bullish_bos", False) if structure else False
+    bear_bos  = structure.get("bearish_bos", False) if structure else False
+
+    if signal_dir == "LONG":
+        return above_200 or bull_bos
+    else:  # SHORT
+        return (not above_200) or bear_bos
+
+
 # ── Background scanner ────────────────────────────────────────────────────────
 def _background_scanner() -> None:
     """
     Runs forever in a daemon thread.
-    Every 5 minutes scans ALL known symbols × ALL SCAN_INTERVALS for signals
-    and auto-closes trades — completely automatic, no user interaction needed.
+    Every 5 minutes scans ALL known symbols × Day (15m) + Swing (4h) tiers.
+    Each signal is filtered by higher-TF bias before logging:
+      - 15m LONG  → only logged if 1h is bullish (above 200 EMA or bullish BOS)
+      - 15m SHORT → only logged if 1h is bearish
+      - 4h  LONG  → only logged if 1d is bullish
+      - 4h  SHORT → only logged if 1d is bearish
     """
     _scanner_status["running"] = True
     time.sleep(10)          # short startup pause, then begin immediately
@@ -86,6 +112,19 @@ def _background_scanner() -> None:
         scan_closes  = 0
 
         for sym in syms:
+            # Fetch bias TFs first (1h = bias for 15m day trades, 1d = bias for 4h swings)
+            bias_cache: dict[str, dict] = {}
+            for bias_tf in ("1h", "1d"):
+                try:
+                    bias_data = full_analysis(sym, bias_tf)
+                    bias_cache[bias_tf] = bias_data
+                    # Cache the bias data too
+                    with _lock:
+                        _cache[f"{sym}_{bias_tf}"] = (bias_data, time.time())
+                except Exception:
+                    bias_cache[bias_tf] = {}
+                time.sleep(1)
+
             for interval in SCAN_INTERVALS:
                 try:
                     data = full_analysis(sym, interval)
@@ -94,27 +133,30 @@ def _background_scanner() -> None:
                     with _lock:
                         _cache[f"{sym}_{interval}"] = (data, now)
 
-                    # Log signal if present
+                    # Log signal only if higher-TF bias agrees
                     sig = data.get("signal")
                     if sig:
-                        trade_id = f"{sym}_{interval}_{sig['direction']}_{int(time.time())}"
-                        logged = learning.log_trade({
-                            "id":               trade_id,
-                            "symbol":           sym,
-                            "interval":         interval,
-                            "direction":        sig["direction"],
-                            "entry":            sig["entry"],
-                            "tp":               sig["target"],
-                            "sl":               sig["stop"],
-                            "score":            sig["score"],
-                            "effective_score":  sig["score"],
-                            "reason":           sig.get("reason", ""),
-                            "factors_snapshot": sig.get("factors_snapshot", {}),
-                            "target_basis":     sig.get("target_basis", ""),
-                            "opened_at":        datetime.now(timezone.utc).isoformat(),
-                        })
-                        if logged:
-                            scan_signals += 1
+                        htf    = "1h" if interval == "15m" else "1d"
+                        htf_d  = bias_cache.get(htf, {})
+                        if _bias_agrees(sig["direction"], htf_d):
+                            trade_id = f"{sym}_{interval}_{sig['direction']}_{int(time.time())}"
+                            logged = learning.log_trade({
+                                "id":               trade_id,
+                                "symbol":           sym,
+                                "interval":         interval,
+                                "direction":        sig["direction"],
+                                "entry":            sig["entry"],
+                                "tp":               sig["target"],
+                                "sl":               sig["stop"],
+                                "score":            sig["score"],
+                                "effective_score":  sig["score"],
+                                "reason":           sig.get("reason", ""),
+                                "factors_snapshot": sig.get("factors_snapshot", {}),
+                                "target_basis":     sig.get("target_basis", ""),
+                                "opened_at":        datetime.now(timezone.utc).isoformat(),
+                            })
+                            if logged:
+                                scan_signals += 1
 
                     # Auto-close trades
                     cur_price = data.get("current_price", 0)
