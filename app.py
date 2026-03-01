@@ -301,6 +301,29 @@ def scanner_status():
     return jsonify(st)
 
 
+@app.route("/api/test-discord")
+def test_discord():
+    """Send a test Discord notification to verify the webhook is configured."""
+    import notifications
+    if not notifications.WEBHOOK_URL:
+        return jsonify({
+            "status": "error",
+            "message": "DISCORD_WEBHOOK_URL environment variable is not set on Render."
+        }), 500
+    notifications.send_signal_alert({
+        "symbol":       "BTCUSDT",
+        "interval":     "15m",
+        "direction":    "LONG",
+        "entry":        94500.0,
+        "tp":           97200.0,
+        "sl":           92800.0,
+        "score":        8.5,
+        "reason":       "TEST — Discord webhook is working correctly ✅",
+        "target_basis": "Next major resistance",
+    })
+    return jsonify({"status": "ok", "message": "Test alert sent to Discord."})
+
+
 @app.route("/api/health")
 def health():
     return jsonify({"status": "ok"})
