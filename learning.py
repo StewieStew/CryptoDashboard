@@ -686,6 +686,49 @@ def get_adaptation_log(limit: int = 15) -> list:
     return [{"timestamp": r[0], "changes": json.loads(r[1])} for r in rows]
 
 
+def get_ai_accuracy() -> dict:
+    """
+    Compute Claude's own prediction accuracy from every closed trade
+    that has an ai_analysis record.
+
+    Returns a dict keyed by recommendation type, e.g.:
+    {
+      "strong_take": {"total":12, "wins":9, "losses":3, "win_rate_pct":75.0, "avg_roi_pct":2.1},
+      "take":        {"total":8,  "wins":5, "losses":3, "win_rate_pct":62.5, "avg_roi_pct":0.8},
+    }
+    Only closed (win/loss) trades are counted — open trades have no outcome yet.
+    """
+    trades = get_trades()
+    closed = [t for t in trades
+              if t.get("status") in ("win", "loss") and t.get("ai_analysis")]
+
+    by_rec: dict = {}
+    for t in closed:
+        ai  = t.get("ai_analysis") or {}
+        rec = ai.get("recommendation", "")
+        if not rec:
+            continue
+        if rec not in by_rec:
+            by_rec[rec] = {"wins": 0, "losses": 0, "total_roi": 0.0}
+        if t["status"] == "win":
+            by_rec[rec]["wins"] += 1
+        else:
+            by_rec[rec]["losses"] += 1
+        by_rec[rec]["total_roi"] += float(t.get("roi_pct") or 0)
+
+    result = {}
+    for rec, s in by_rec.items():
+        total = s["wins"] + s["losses"]
+        result[rec] = {
+            "total":        total,
+            "wins":         s["wins"],
+            "losses":       s["losses"],
+            "win_rate_pct": round(s["wins"] / total * 100, 1) if total else 0.0,
+            "avg_roi_pct":  round(s["total_roi"] / total, 2)  if total else 0.0,
+        }
+    return result
+
+
 def get_learning_state() -> dict:
     weights   = get_weights()
     threshold = get_threshold()

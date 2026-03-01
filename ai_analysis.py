@@ -40,7 +40,8 @@ def _fmt(v) -> str:
 # ── Signal evaluation ─────────────────────────────────────────────────────────
 
 def analyze_signal(signal: dict, trade_history: list,
-                   market_context: dict) -> dict:
+                   market_context: dict,
+                   ai_accuracy: dict | None = None) -> dict:
     """
     Ask Claude Haiku to evaluate a trade signal before it's logged.
 
@@ -105,6 +106,23 @@ def analyze_signal(signal: dict, trade_history: list,
 
     ctx_str = "\n".join(ctx_parts) if ctx_parts else "No extended market context available."
 
+    # ── Build Claude's own accuracy block ─────────────────────────────────────
+    acc_parts = []
+    if ai_accuracy:
+        for rec in ("strong_take", "take"):
+            s = ai_accuracy.get(rec)
+            if s and s["total"] >= 1:
+                acc_parts.append(
+                    f"  {rec}: {s['total']} trades logged → "
+                    f"{s['wins']}W / {s['losses']}L "
+                    f"({s['win_rate_pct']:.0f}% win rate, avg ROI {s['avg_roi_pct']:+.2f}%)"
+                )
+    acc_str = (
+        "\n".join(acc_parts)
+        if acc_parts
+        else "  No closed trades yet — calibrate conservatively until track record builds."
+    )
+
     system_prompt = (
         "You are a professional crypto quant trader evaluating algorithmic signals. "
         "Be direct and concise. Respond ONLY with valid JSON — no markdown, no explanation outside the JSON."
@@ -125,6 +143,12 @@ MARKET CONTEXT:
 SYSTEM TRACK RECORD:
 - Win rate: {win_rate:.0f}% over {total} closed trades | Avg ROI: {avg_roi:.2f}%
 - {sym} recent: {sym_wins}/{len(sym_closed)} wins
+
+YOUR OWN PREDICTION ACCURACY (use this to self-calibrate):
+{acc_str}
+- If your strong_take win rate is below 55%, be more selective — raise the bar for strong_take.
+- If your take win rate is below 45%, tighten your criteria — skip more borderline setups.
+- If both are performing well (>65%), you can trust your conviction signals more.
 
 Respond with this exact JSON:
 {{"confidence": <0-100>, "recommendation": "<strong_take|take|skip>", "reasoning": "<2 sentences max>", "risks": ["<specific risk>"], "positives": ["<specific positive>"]}}
@@ -211,7 +235,8 @@ Respond with ONLY this JSON (no markdown):
 
 # ── Performance review ────────────────────────────────────────────────────────
 
-def get_performance_insights(trade_history: list) -> dict:
+def get_performance_insights(trade_history: list,
+                             ai_accuracy: dict | None = None) -> dict:
     """
     Ask Claude Sonnet to analyze closed trade history and surface patterns.
     Only runs when called explicitly (e.g. via /api/ai-insights).
@@ -273,6 +298,23 @@ def get_performance_insights(trade_history: list) -> dict:
     recent_fields = ["symbol", "interval", "direction", "score", "roi_pct", "status", "reason"]
     recent = [{k: t.get(k) for k in recent_fields} for t in closed[-20:]]
 
+    # ── Claude's own prediction accuracy ──────────────────────────────────────
+    acc_parts = []
+    if ai_accuracy:
+        for rec in ("strong_take", "take", "skip"):
+            s = ai_accuracy.get(rec)
+            if s and s["total"] >= 1:
+                acc_parts.append(
+                    f"  {rec}: {s['total']} evaluated → "
+                    f"{s['wins']}W / {s['losses']}L "
+                    f"({s['win_rate_pct']:.0f}% win rate, avg ROI {s['avg_roi_pct']:+.2f}%)"
+                )
+    acc_str = (
+        "\n".join(acc_parts)
+        if acc_parts
+        else "  No AI-evaluated closed trades yet."
+    )
+
     prompt = f"""Analyze this crypto algorithmic trading system's performance. Be specific and actionable.
 
 PERFORMANCE SUMMARY:
@@ -280,6 +322,9 @@ PERFORMANCE SUMMARY:
 
 RECENT TRADES (last 20):
 {json.dumps(recent, indent=2)}
+
+CLAUDE AI PREDICTION ACCURACY (your own past recommendations on these trades):
+{acc_str}
 
 Respond with this exact JSON:
 {{"overall_assessment": "<1-2 sentences on system health>", "patterns": ["<observed pattern with evidence>"], "recommendations": ["<specific actionable change>"], "watch_out": ["<specific warning or risk>"]}}"""

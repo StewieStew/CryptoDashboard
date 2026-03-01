@@ -166,7 +166,9 @@ def _background_scanner() -> None:
                             try:
                                 ctx       = market_data.get_market_context(sym)
                                 history   = learning.get_trades()
-                                ai_result = ai_analysis.analyze_signal(trade_data, history, ctx)
+                                ai_acc    = learning.get_ai_accuracy()
+                                ai_result = ai_analysis.analyze_signal(
+                                    trade_data, history, ctx, ai_accuracy=ai_acc)
                             except Exception:
                                 ai_result = {}
 
@@ -362,8 +364,9 @@ def ai_chart(symbol: str, interval: str = "4h"):
 def get_ai_insights():
     """Ask Claude Sonnet to analyze full trade history and surface patterns."""
     try:
-        history  = learning.get_trades()
-        insights = ai_analysis.get_performance_insights(history)
+        history   = learning.get_trades()
+        ai_acc    = learning.get_ai_accuracy()
+        insights  = ai_analysis.get_performance_insights(history, ai_accuracy=ai_acc)
         return jsonify(insights)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
