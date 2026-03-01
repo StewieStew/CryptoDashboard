@@ -311,6 +311,21 @@
       font-size: 12px;
     }
 
+    /* Claude AI card */
+    .ai-bias-pill { display:inline-block; font-size:14px; font-weight:800; padding:4px 14px; border-radius:6px; letter-spacing:.04em; }
+    .ai-bias-long  { background:#1a3a1a; color:#3fb950; }
+    .ai-bias-short { background:#3a1010; color:#f85149; }
+    .ai-bias-neutral { background:#21262d; color:#8b949e; }
+    .ai-conf-bar { background:#21262d; border-radius:4px; height:6px; width:100%; overflow:hidden; margin:6px 0 10px; }
+    .ai-conf-fill { height:100%; border-radius:4px; transition:width .4s; }
+    .ai-level { font-size:12px; color:#8b949e; padding:3px 0; border-bottom:1px solid #21262d; }
+    .ai-level:last-child { border-bottom:none; }
+    .ai-risk  { font-size:11px; color:#d29922; padding:2px 0; }
+    .ai-rec-badge { font-size:10px; font-weight:700; padding:1px 7px; border-radius:3px; white-space:nowrap; }
+    .ai-rec-strong { background:#1a3a1a; color:#3fb950; }
+    .ai-rec-take   { background:#1a2535; color:#58a6ff; }
+    .ai-rec-skip   { background:#3a1010; color:#f85149; }
+
     /* Analysis panel toggle bar */
     .analysis-toggle-bar {
       background: var(--bg-card);
@@ -546,6 +561,21 @@
         <div class="card-body-inner" id="card-learning">
           <span class="text-dim" style="font-size:13px">Loading...</span>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CLAUDE AI ANALYSIS -->
+  <div class="card-section" style="padding-top:0;padding-bottom:24px">
+    <div class="analysis-card">
+      <div class="card-hdr" style="display:flex;align-items:center;justify-content:space-between">
+        <span>🤖 Claude AI — Chart Analysis
+          <span style="font-size:10px;color:#484f58;font-weight:400;margin-left:8px">Haiku · on-demand TA read</span>
+        </span>
+        <button class="sym-btn" id="ai-chart-btn" onclick="fetchAiChart()" style="font-size:11px;padding:2px 10px">Ask Claude ↻</button>
+      </div>
+      <div class="card-body-inner" id="card-ai-chart">
+        <span style="font-size:13px;color:#484f58;font-style:italic">Click "Ask Claude" to get an AI analysis of the current chart.</span>
       </div>
     </div>
   </div>
@@ -990,6 +1020,10 @@ let highlightActive  = false;
 let lastHighlightTs  = null;
 let chartCandleTimes = [];   // candle bar times (unix seconds) for nearest-match lookup
 let tradeMarkersData = [];   // [{time, trade, kind, marker}] for click detection
+let tradeLines       = [];   // line series drawn per closed trade (entry→exit band)
+let _rsiMap  = new Map();   // time→value for crosshair sync
+let _obvMap  = new Map();
+let _macdMap = new Map();
 let analysisExpanded = false;
 
 // All-signals feed state
@@ -1174,6 +1208,27 @@ function initCharts() {
     }
   });
 
+  // ── Crosshair sync — hover on main chart moves crosshair on all sub-charts ──
+  let crossSyncing = false;
+  mainChart.subscribeCrosshairMove(param => {
+    if (crossSyncing) return;
+    crossSyncing = true;
+    if (!param.time) {
+      rsiChart.clearCrosshairPosition();
+      obvChart.clearCrosshairPosition();
+      macdChart.clearCrosshairPosition();
+    } else {
+      const t  = param.time;
+      const rv = _rsiMap.get(t);
+      const ov = _obvMap.get(t);
+      const mv = _macdMap.get(t);
+      if (rv !== undefined) rsiChart.setCrosshairPosition(rv, t, seriesMap.rsi);
+      if (ov !== undefined) obvChart.setCrosshairPosition(ov, t, seriesMap.obv);
+      if (mv !== undefined) macdChart.setCrosshairPosition(mv, t, seriesMap.macd_line);
+    }
+    crossSyncing = false;
+  });
+
   // Responsive resize
   const ro = new ResizeObserver(() => {
     const w = mainEl.clientWidth;
@@ -1250,6 +1305,13 @@ function updateChartData(chart, signal) {
   seriesMap.rsi.setData(chart.rsi);
   if (chart.obv)     seriesMap.obv.setData(chart.obv);
   if (chart.obv_ema) seriesMap.obv_ema.setData(chart.obv_ema);
+  // Populate lookup maps for crosshair sync
+  _rsiMap  = new Map((chart.rsi  || []).map(p => [p.time, p.value]));
+  _obvMap  = new Map((chart.obv  || []).map(p => [p.time, p.value]));
+  _macdMap = new Map((chart.macd || []).map(p => [p.time, p.value]));
+  // Clear old trade band lines (rebuilt by buildTradeMarkers after fetchTrades)
+  tradeLines.forEach(s => { try { mainChart.removeSeries(s); } catch(e){} });
+  tradeLines = [];
 
   // ── OBV S/R horizontal levels ──
   (chart.obv_lows || []).slice(-2).forEach(([t, v]) => {
@@ -1379,6 +1441,10 @@ function renderAll(d) {
   renderPrediction(d.prediction);
   setTimestamp(d.fetched_at, d.cache_age);
   fetchTrades();
+  // Auto-trigger Claude AI analysis when symbol or TF changes
+  if (_aiChartSym !== currentSymbol || _aiChartTf !== currentTF) {
+    fetchAiChart();
+  }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -2365,7 +2431,9 @@ function buildTradeMarkers() {
             position: 'aboveBar',
             color:    exitColor,
             shape:    'circle',
-            text:     t.status === 'win' ? 'W' : t.status === 'loss' ? 'L' : '',
+            text:     t.roi_pct != null
+                        ? (t.roi_pct >= 0 ? '+' : '') + t.roi_pct + '%'
+                        : (t.status === 'win' ? 'W' : t.status === 'loss' ? 'L' : ''),
             size:     1,
           },
         });
@@ -2374,6 +2442,7 @@ function buildTradeMarkers() {
   });
 
   updateAllMarkers();
+  buildTradeLines(trades);
 }
 
 // Central marker rebuild — permanent pivots + trade markers only (signal shown in overlay box)
@@ -2596,6 +2665,13 @@ function renderAllSignals() {
             <span style="color:#484f58;font-size:10px">@$${tradeSize.toLocaleString()}</span>
             ${chips ? `<span style="display:flex;gap:3px;flex-wrap:wrap;margin-left:4px">${chips}</span>` : ''}
             ${pta ? `<span class="analysis-toggle" style="margin-left:6px" onclick="event.stopPropagation();togglePTA('${ptaId}')">▸ Post-trade</span>` : ''}
+            ${(() => {
+              const ai = t.ai_analysis;
+              if (!ai || !ai.recommendation) return '';
+              const recMap = { strong_take: ['ai-rec-strong','🔥'], take: ['ai-rec-take','✅'], skip: ['ai-rec-skip','⛔'] };
+              const [cls, em] = recMap[ai.recommendation] || ['ai-rec-take','🤖'];
+              return `<span class="ai-rec-badge ${cls}" style="margin-left:6px" title="${ai.reasoning||''}">${em} ${ai.recommendation.replace('_',' ')} ${ai.confidence||''}%</span>`;
+            })()}
           </div>
         </td>
       </tr>`;
@@ -2878,8 +2954,109 @@ function regimeColor(regime) {
 function setTimestamp(iso, age) {
   const d = new Date(iso);
   const ageStr = age < 60 ? 'just fetched' : `cached ${Math.floor(age/60)}m ago`;
+  const utcTime = d.toLocaleTimeString('en-US', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit' });
   document.getElementById('timestamp').textContent =
-    `Last: ${d.toLocaleTimeString()} UTC — ${ageStr}`;
+    `Last: ${utcTime} UTC — ${ageStr}`;
+}
+
+// ═══════════════════════════════════════════════════════
+// CLAUDE AI CHART ANALYSIS
+// ═══════════════════════════════════════════════════════
+let _aiChartSym = null, _aiChartTf = null;  // track what was last analyzed
+
+async function fetchAiChart() {
+  const el  = document.getElementById('card-ai-chart');
+  const btn = document.getElementById('ai-chart-btn');
+  if (!el) return;
+  el.innerHTML = '<div style="display:flex;align-items:center;gap:8px;color:#8b949e;font-size:13px"><div class="spinner" style="width:16px;height:16px;border-width:2px"></div>Asking Claude...</div>';
+  if (btn) btn.disabled = true;
+  try {
+    const resp = await fetch(`/api/ai-chart/${currentSymbol}/${currentTF}`);
+    const data = await resp.json();
+    if (data.error) {
+      el.innerHTML = `<span style="color:#f85149;font-size:12px">⚠ ${data.error}</span>`;
+    } else {
+      renderAiChart(data);
+      _aiChartSym = currentSymbol;
+      _aiChartTf  = currentTF;
+    }
+  } catch(e) {
+    el.innerHTML = `<span style="color:#f85149;font-size:12px">⚠ Request failed: ${e.message}</span>`;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function renderAiChart(r) {
+  const el = document.getElementById('card-ai-chart');
+  if (!el || !r) return;
+  const bias      = (r.bias || 'NEUTRAL').toUpperCase();
+  const biasClass = bias === 'LONG' ? 'ai-bias-long' : bias === 'SHORT' ? 'ai-bias-short' : 'ai-bias-neutral';
+  const biasEmoji = bias === 'LONG' ? '🟢' : bias === 'SHORT' ? '🔴' : '⚪';
+  const conf      = r.confidence || 0;
+  const confColor = conf >= 70 ? '#3fb950' : conf >= 45 ? '#d29922' : '#f85149';
+  const levels    = (r.key_levels || []).map(l => `<div class="ai-level">📍 ${l}</div>`).join('');
+  const risks     = (r.risks || []).map(r => `<div class="ai-risk">⚠ ${r}</div>`).join('');
+
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;flex-wrap:wrap">
+      <span class="ai-bias-pill ${biasClass}">${biasEmoji} ${bias}</span>
+      <div style="flex:1;min-width:120px">
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:#8b949e;margin-bottom:2px">
+          <span>Confidence</span><span style="color:${confColor};font-weight:700">${conf}/100</span>
+        </div>
+        <div class="ai-conf-bar"><div class="ai-conf-fill" style="width:${conf}%;background:${confColor}"></div></div>
+      </div>
+    </div>
+    <div style="font-size:13px;color:#c9d1d9;line-height:1.6;margin-bottom:10px">${r.summary || ''}</div>
+    ${r.watch_for ? `<div style="font-size:12px;color:#58a6ff;margin-bottom:10px">👁 <strong>Watch for:</strong> ${r.watch_for}</div>` : ''}
+    ${levels ? `<div style="margin-bottom:8px"><div style="font-size:10px;font-weight:700;color:#484f58;text-transform:uppercase;letter-spacing:.07em;margin-bottom:4px">Key Levels</div>${levels}</div>` : ''}
+    ${risks  ? `<div><div style="font-size:10px;font-weight:700;color:#484f58;text-transform:uppercase;letter-spacing:.07em;margin-bottom:4px">Risks</div>${risks}</div>` : ''}
+    <div style="font-size:10px;color:#484f58;margin-top:10px;padding-top:6px;border-top:1px solid #21262d">Claude Haiku · ${currentSymbol.replace('USDT','')} ${currentTF.toUpperCase()} · ${new Date().toLocaleTimeString('en-US',{timeZone:'UTC',hour:'2-digit',minute:'2-digit'})} UTC</div>
+  `;
+}
+
+// ═══════════════════════════════════════════════════════
+// TRADE BAND LINES (entry→exit on chart)
+// ═══════════════════════════════════════════════════════
+function buildTradeLines(trades) {
+  // Clear existing
+  tradeLines.forEach(s => { try { mainChart.removeSeries(s); } catch(e){} });
+  tradeLines = [];
+
+  const sym = currentSymbol;
+  const tf  = currentTF;
+
+  trades
+    .filter(t => t.symbol === sym && t.interval === tf && t.closed_at && t.status !== 'open')
+    .slice(-30)   // cap at last 30 to avoid series overload
+    .forEach(t => {
+      const entryTime = nearestCandleTime(t.opened_at);
+      const exitTime  = nearestCandleTime(t.closed_at);
+      if (!entryTime || !exitTime || entryTime === exitTime) return;
+
+      const color = t.status === 'win'
+        ? '#3fb95066'
+        : t.status === 'loss'
+          ? '#f8514966'
+          : '#48495866';
+
+      try {
+        const s = mainChart.addLineSeries({
+          color,
+          lineWidth: 2,
+          lineStyle: 0,   // solid
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        });
+        s.setData([
+          { time: entryTime, value: parseFloat(t.entry) },
+          { time: exitTime,  value: parseFloat(t.close_price) || parseFloat(t.entry) },
+        ]);
+        tradeLines.push(s);
+      } catch(e) {}
+    });
 }
 
 function showLoading(msg) {

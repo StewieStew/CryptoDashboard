@@ -143,6 +143,72 @@ Rules: skip if R:R < 2 or score < 7. strong_take only if 3+ major factors confir
         return {}
 
 
+# ── On-demand chart analysis ─────────────────────────────────────────────────
+
+def analyze_chart(symbol: str, interval: str, data: dict) -> dict:
+    """
+    Ask Claude Haiku for a TA read on the currently viewed chart.
+    Called by /api/ai-chart when the user opens the AI card.
+
+    Returns {bias, confidence, summary, watch_for, key_levels, risks} or {}
+    """
+    client = _get_client()
+    if not client:
+        return {}
+
+    price     = data.get("current_price", 0)
+    regime    = data.get("regime", {})
+    structure = data.get("structure", {}) or {}
+    rsi_d     = data.get("rsi", {}) or {}
+    macd_d    = data.get("macd", {}) or {}
+    vol_d     = data.get("volume", {}) or {}
+    conf_d    = data.get("confluence", {}) or {}
+    risk_d    = data.get("risk", {}) or {}
+    adx_d     = data.get("adx", {}) or {}
+    vwap      = data.get("vwap")
+
+    above_200 = regime.get("above_200", False)
+    bos = ("Bullish BOS" if structure.get("bullish_bos") else
+           "Bearish BOS" if structure.get("bearish_bos") else
+           "HH/HL uptrend" if structure.get("hh_hl") else
+           "LH/LL downtrend" if structure.get("lh_ll") else "No confirmed BOS")
+
+    tier = _tier(interval)
+
+    vwap_str = (f"${_fmt(vwap)} — price {'above' if price > vwap else 'below'}"
+                if vwap else "N/A")
+
+    prompt = f"""Analyze this {tier} crypto chart and provide a trading bias.
+
+CHART: {symbol} | {interval} timeframe | Current price: ${_fmt(price)}
+
+TECHNICAL DATA:
+- Macro regime: {'Bullish' if above_200 else 'Bearish'} (200 EMA: ${_fmt(regime.get('ema200', 0))}, price {'above' if above_200 else 'below'})
+- Market structure: {bos}
+- RSI(14): {rsi_d.get('value', 0):.1f} ({rsi_d.get('range', '?')})
+- MACD: {'above signal line' if macd_d.get('above_signal') else 'below signal line'}, histogram {'positive' if macd_d.get('histogram_positive') else 'negative'}
+- Volume: {'expanding' if vol_d.get('expanding') else 'contracting'} ({vol_d.get('trend', '?')})
+- ADX: {adx_d.get('value', 0):.1f} ({'trending' if adx_d.get('trending') else 'ranging/weak trend'})
+- VWAP: {vwap_str}
+- Confluence score: {conf_d.get('score', 0)}/{conf_d.get('max', 12)}
+- R:R setup: {risk_d.get('rr', 0)}:1 ({'favorable' if risk_d.get('favorable') else 'unfavorable'})
+- Entry: ${_fmt(risk_d.get('current', 0))} | Target: ${_fmt(risk_d.get('target', 0))} | Stop: ${_fmt(risk_d.get('invalidation', 0))}
+
+Respond with ONLY this JSON (no markdown):
+{{"bias":"<LONG|SHORT|NEUTRAL>","confidence":<0-100>,"summary":"<2 sentences max — current TA read>","watch_for":"<1 sentence — key trigger to confirm or invalidate>","key_levels":["<price: what it means>"],"risks":["<specific risk>"]}}"""
+
+    try:
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=350,
+            system="You are a professional crypto technical analyst. Be direct and concise. Respond ONLY with valid JSON.",
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return json.loads(msg.content[0].text.strip())
+    except Exception:
+        return {}
+
+
 # ── Performance review ────────────────────────────────────────────────────────
 
 def get_performance_insights(trade_history: list) -> dict:

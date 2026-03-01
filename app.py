@@ -335,6 +335,25 @@ def scanner_status():
     return jsonify(st)
 
 
+@app.route("/api/ai-chart/<symbol>/<interval>")
+@app.route("/api/ai-chart/<symbol>")
+def ai_chart(symbol: str, interval: str = "4h"):
+    """On-demand Claude TA analysis for the currently viewed chart."""
+    sym = symbol.upper()
+    if not sym.endswith("USDT"):
+        sym += "USDT"
+    if interval not in VALID_INTERVALS:
+        interval = "4h"
+    try:
+        data   = cached_analysis(sym, interval)
+        result = ai_analysis.analyze_chart(sym, interval, data)
+        if not result:
+            return jsonify({"error": "AI unavailable — check ANTHROPIC_API_KEY"}), 503
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/ai-insights")
 def get_ai_insights():
     """Ask Claude Sonnet to analyze full trade history and surface patterns."""

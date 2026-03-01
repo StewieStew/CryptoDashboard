@@ -671,6 +671,7 @@ def get_trades() -> list:
         t = dict(r)
         t["factors_snapshot"]    = json.loads(t.get("factors_snapshot") or "{}")
         t["post_trade_analysis"] = json.loads(t.get("post_trade_analysis") or "null")
+        t["ai_analysis"]         = json.loads(t.get("ai_analysis") or "null")
         result.append(t)
     return result
 
