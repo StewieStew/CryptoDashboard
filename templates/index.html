@@ -442,7 +442,7 @@
   <div class="d-flex align-items-center gap-2">
     <span id="analysis-panel-arrow" style="color:#58a6ff;font-size:12px">▶</span>
     <span style="font-size:12px;font-weight:700;color:#58a6ff;text-transform:uppercase;letter-spacing:.06em">Analysis</span>
-    <span style="font-size:11px;color:#484f58">Regime · Structure · Volume · Fibonacci · Volatility · Confluence · Risk · Prediction · Learning</span>
+    <span style="font-size:11px;color:#484f58">Regime · Structure · Volume · MACD · Volatility · Confluence · Risk · Prediction · Learning</span>
   </div>
   <span style="font-size:11px;color:#484f58" id="analysis-panel-hint">click to expand</span>
 </div>
@@ -2516,6 +2516,7 @@ function renderAllSignals() {
 
   const TABLE_HDR = `<thead><tr>
     <th style="min-width:72px">Symbol ↗</th>
+    <th title="Day (15m) or Swing (4h) trade tier">Tier</th>
     <th>TF</th><th>Dir</th><th>Entry</th>
     <th>Target (+%)</th><th>Stop (-%)</th>
     <th title="Max loss % of trade size">Risk%</th>
@@ -2555,12 +2556,16 @@ function renderAllSignals() {
       const reason = t.reason || '';
       const tbasis = t.target_basis ? ` · <span style="color:#484f58">TP: ${t.target_basis}</span>` : '';
 
+      const tier      = ['15m','30m','1h'].includes(t.interval) ? 'Day' : 'Swing';
+      const tierColor = tier === 'Day' ? '#bc8cff' : '#58a6ff';
+
       const mainRow = `<tr class="trade-row-clickable ${isOpen ? 'asf-row-open' : ''}"
           onclick="openTradeChart('${t.symbol}','${t.interval}')">
         <td>
           <span style="font-weight:700;color:#e6edf3">${sym}</span>
           <span style="font-size:10px;color:#484f58;margin-left:2px">↗</span>
         </td>
+        <td><span style="font-size:10px;font-weight:700;color:${tierColor};background:${tierColor}18;border-radius:3px;padding:1px 5px">${tier}</span></td>
         <td><span style="background:#21262d;border-radius:3px;padding:1px 5px;font-size:11px;color:#8b949e">${t.interval.toUpperCase()}</span></td>
         <td><span style="color:${dirColor};font-weight:700">${dirArrow} ${t.direction}</span></td>
         <td style="font-weight:600">$${fmt(t.entry)}</td>
@@ -2581,7 +2586,7 @@ function renderAllSignals() {
       </tr>`;
 
       const reasonRow = `<tr class="${isOpen ? 'asf-row-open' : ''}" style="cursor:default">
-        <td colspan="12" style="padding:0 8px 6px !important;border-bottom:1px solid #21262d">
+        <td colspan="13" style="padding:0 8px 6px !important;border-bottom:1px solid #21262d">
           <div style="display:flex;align-items:center;flex-wrap:wrap;gap:5px;font-size:11px;color:#8b949e;padding:2px 0">
             ${reason ? `<span style="color:#c9d1d9">${reason}</span>${tbasis}` : '<span style="color:#484f58;font-style:italic">No reason recorded</span>'}
             <span style="color:#484f58;margin:0 2px">·</span>
@@ -2601,7 +2606,7 @@ function renderAllSignals() {
       const present  = (pta.factors_present||[]).map(f=>`<span class="pta-chip on">${f}</span>`).join('');
       const absent   = (pta.factors_absent ||[]).map(f=>`<span class="pta-chip off">${f}</span>`).join('');
       const ptaRow = `<tr id="${ptaId}" class="pta-row" style="display:none">
-        <td colspan="12">
+        <td colspan="13">
           <div class="pta-inner ${ptaClass}">
             <div class="pta-summary">${pta.summary||''}</div>
             ${pta.detail ? `<div class="pta-detail">${pta.detail}</div>` : ''}
@@ -2847,9 +2852,12 @@ function yn(v, trueLabel='Yes', falseLabel='No') {
 function fmt(v) {
   if (v == null) return '—';
   const n = Number(v);
-  if (n >= 10000) return n.toLocaleString('en-US', {minimumFractionDigits:0, maximumFractionDigits:0});
-  if (n >= 1)     return n.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:4});
-  return n.toLocaleString('en-US', {minimumFractionDigits:4, maximumFractionDigits:6});
+  if (isNaN(n)) return '—';
+  if (n >= 10000) return n.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+  if (n >= 100)   return n.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:3});
+  if (n >= 1)     return n.toLocaleString('en-US', {minimumFractionDigits:3, maximumFractionDigits:4});
+  if (n >= 0.01)  return n.toLocaleString('en-US', {minimumFractionDigits:4, maximumFractionDigits:5});
+  return n.toLocaleString('en-US', {minimumFractionDigits:5, maximumFractionDigits:6});
 }
 
 function fmtDate(ts) {
@@ -2872,15 +2880,6 @@ function setTimestamp(iso, age) {
   const ageStr = age < 60 ? 'just fetched' : `cached ${Math.floor(age/60)}m ago`;
   document.getElementById('timestamp').textContent =
     `Last: ${d.toLocaleTimeString()} UTC — ${ageStr}`;
-}
-
-function toggleLearningCard() {
-  const body   = document.getElementById('learning-body');
-  const toggle = document.getElementById('learning-toggle');
-  if (!body) return;
-  const isOpen = body.style.display !== 'none';
-  body.style.display   = isOpen ? 'none' : 'block';
-  toggle.textContent   = isOpen ? '▶ expand' : '▼ collapse';
 }
 
 function showLoading(msg) {

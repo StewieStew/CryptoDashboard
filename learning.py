@@ -281,6 +281,8 @@ def auto_close(symbol: str, interval: str, current_price: float) -> list:
 
 
 def _calc_roi(direction: str, entry: float, close_price: float) -> float:
+    if not entry or entry == 0:
+        return 0.0
     if direction == "LONG":
         return round((close_price - entry) / entry * 100, 2)
     return round((entry - close_price) / entry * 100, 2)
@@ -290,7 +292,10 @@ def _calc_roi(direction: str, entry: float, close_price: float) -> float:
 # POST-TRADE ANALYSIS
 # ─────────────────────────────────────────────
 def _generate_analysis(trade: dict, close_price: float, status: str, roi: float) -> dict:
-    snap        = json.loads(trade.get("factors_snapshot") or "{}")
+    try:
+        snap = json.loads(trade.get("factors_snapshot") or "{}")
+    except (json.JSONDecodeError, TypeError):
+        snap = {}
     dirn        = trade["direction"]
     entry       = trade["entry"]
     tp          = trade["tp"]

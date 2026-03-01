@@ -27,6 +27,20 @@ INTERVAL_HTF = {
     "1w":  ("1w",  200),
 }
 
+# Swing lookback: candles needed on each side of a pivot to confirm it.
+# Lower TFs use a smaller window so swings are detected faster.
+INTERVAL_SWING_N = {
+    "15m": 3,
+    "30m": 3,
+    "1h":  4,
+    "4h":  5,
+    "1d":  5,
+    "1w":  5,
+}
+
+def _swing_n(interval: str) -> int:
+    return INTERVAL_SWING_N.get(interval, 5)
+
 
 # ─────────────────────────────────────────────
 # DATA FETCHING
@@ -401,29 +415,40 @@ def confluence_score(regime, structure, vol, rsi_data, sweeps, macd_data,
         reasons.append({"pts": 0, "earned": False,
                         "text": "Volume declining / no spike — weak participation"})
 
-    # 5. OBV confirms bias or diverges (default 1 pt)
+    # 5. OBV confirms bias or shows aligned divergence (default 1 pt)
     w = weights.get("obv", 1.0)
     bias_up = "Uptrend"   in regime["regime"] or bool(structure and structure.get("bullish_bos"))
     bias_dn = "Downtrend" in regime["regime"] or bool(structure and structure.get("bearish_bos"))
-    obv_ok  = (
+    # Divergence must align with the trade direction to count as confirmation.
+    # A bearish OBV divergence in a LONG setup is a WARNING, not a point.
+    aligned_bull_div = vol["bullish_obv_div"] and bias_up
+    aligned_bear_div = vol["bearish_obv_div"] and bias_dn
+    obv_ok = (
         (bias_up and vol["obv_bullish"]) or
         (bias_dn and not vol["obv_bullish"]) or
-        vol["bullish_obv_div"] or vol["bearish_obv_div"]
+        aligned_bull_div or aligned_bear_div
     )
     snap["obv"] = obv_ok
     if obv_ok:
         score += w
-        if vol["bullish_obv_div"] or vol["bearish_obv_div"]:
-            obv_dir = "Bullish" if vol["bullish_obv_div"] else "Bearish"
-            obv_txt = f"{obv_dir} OBV divergence — smart money accumulating/distributing"
+        if aligned_bull_div:
+            obv_txt = "Bullish OBV divergence — smart money accumulating while price is low"
+        elif aligned_bear_div:
+            obv_txt = "Bearish OBV divergence — distribution detected while price is elevated"
         elif bias_up:
             obv_txt = "OBV trending up — confirms bullish bias"
         else:
             obv_txt = "OBV trending down — confirms bearish bias"
         reasons.append({"pts": round(w, 1), "earned": True, "text": obv_txt})
     else:
+        # Flag opposing divergences as warnings in the reason text
+        warn = ""
+        if vol["bearish_obv_div"] and bias_up:
+            warn = " (⚠ bearish OBV divergence — distribution signal, caution on longs)"
+        elif vol["bullish_obv_div"] and bias_dn:
+            warn = " (⚠ bullish OBV divergence — accumulation signal, caution on shorts)"
         reasons.append({"pts": 0, "earned": False,
-                        "text": "OBV not confirming direction — volume flow opposing thesis"})
+                        "text": f"OBV not confirming direction — volume flow opposing thesis{warn}"})
 
     # 6. RSI confirmation (default 1 pt)
     w = weights.get("rsi", 1.0)
@@ -443,12 +468,21 @@ def confluence_score(regime, structure, vol, rsi_data, sweeps, macd_data,
 
     # 7. MACD direction confirmation (weight key kept as "fib" for learning-engine compat)
     w = weights.get("fib", 1.0)
+    # Derive bias from structure first (most reliable), then regime as fallback
     bias = "long"
     if structure:
-        if structure.get("bearish_bos") or structure.get("lh_ll"):
+        if structure.get("bearish_bos"):
             bias = "short"
-    elif not regime.get("above_200", True):
-        bias = "short"
+        elif structure.get("bullish_bos"):
+            bias = "long"
+        elif structure.get("lh_ll"):
+            bias = "short"
+        elif structure.get("hh_hl"):
+            bias = "long"
+    if not (structure and (structure.get("bullish_bos") or structure.get("bearish_bos"))):
+        # Fall back to regime if structure is ambiguous
+        if not regime.get("above_200", True):
+            bias = "short"
     macd_ok = macd_data and (
         (bias == "long"  and macd_data.get("bullish", False)) or
         (bias == "short" and macd_data.get("bearish", False))
@@ -880,8 +914,9 @@ def full_analysis(symbol: str, interval: str = "4h") -> dict:
     # Section 1: Regime (always uses HTF for broader market context)
     regime = market_regime(htf_df)
 
-    # Section 2: Structure
-    sh, sl = detect_swings(df, n=5)
+    # Section 2: Structure (adaptive swing window per TF)
+    n  = _swing_n(interval)
+    sh, sl = detect_swings(df, n=n)
     structure = detect_structure(df, sh, sl)
     sweeps    = detect_sweeps(df, sh, sl)
 

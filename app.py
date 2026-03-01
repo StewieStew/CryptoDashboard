@@ -44,27 +44,11 @@ _scanner_status  = {
 }
 
 
-# ── Shared signal-logging helper ─────────────────────────────────────────────
-def _log_signal_from_data(data: dict, sym: str, interval: str) -> None:
-    """Log a signal + auto-close trades based on current price."""
-    sig = data.get("signal")
-    if sig:
-        trade_id = f"{sym}_{interval}_{sig['direction']}_{int(time.time())}"
-        learning.log_trade({
-            "id":               trade_id,
-            "symbol":           sym,
-            "interval":         interval,
-            "direction":        sig["direction"],
-            "entry":            sig["entry"],
-            "tp":               sig["target"],
-            "sl":               sig["stop"],
-            "score":            sig["score"],
-            "effective_score":  sig["score"],
-            "reason":           sig.get("reason", ""),
-            "factors_snapshot": sig.get("factors_snapshot", {}),
-            "target_basis":     sig.get("target_basis", ""),
-            "opened_at":        datetime.now(timezone.utc).isoformat(),
-        })
+# ── Price-based auto-close helper ────────────────────────────────────────────
+def _auto_close_from_data(data: dict, sym: str, interval: str) -> None:
+    """Auto-close trades whose TP/SL has been hit based on current price.
+    Signal logging is handled ONLY by the background scanner (with bias filter).
+    """
     cur_price = data.get("current_price", 0)
     if cur_price:
         learning.auto_close(sym, interval, float(cur_price))
@@ -216,7 +200,7 @@ def analysis(symbol: str, interval: str = "4h"):
         data = cached_analysis(sym, interval)
         if "error" in data:
             return jsonify(data), 400
-        _log_signal_from_data(data, sym, interval)
+        _auto_close_from_data(data, sym, interval)   # TP/SL check only; scanner logs signals
         return jsonify(data)
     except Exception as e:
         return jsonify({"error": str(e), "symbol": sym}), 500
