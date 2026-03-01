@@ -147,21 +147,24 @@
     }
     .method-divider { border: none; border-top: 1px solid var(--border); margin: 32px 0; }
 
-    /* Signal overlay on chart */
-    #chart-wrap { position: relative; }
-    #signal-overlay {
-      display: none;
-      position: absolute; top: 12px; left: 12px; z-index: 10;
-      background: rgba(13,17,23,0.93);
-      border: 1px solid #30363d;
-      border-radius: 8px; padding: 10px 14px;
-      min-width: 210px; max-width: 260px;
-      pointer-events: none;
+    /* Signal bar — horizontal strip below chart */
+    #signal-bar {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-top: none; padding: 6px 14px;
+      display: flex; align-items: center; gap: 16px; flex-wrap: wrap; min-height: 36px;
     }
-    #signal-overlay.no-signal {
-      display: block;
-      border-color: #21262d;
+    #signal-bar .sig-label { font-size:10px; color:var(--text-dim); text-transform:uppercase; letter-spacing:.06em; }
+    #signal-bar .sig-dir   { font-size:14px; font-weight:800; }
+    #signal-bar .sig-val   { font-size:12px; font-weight:600; }
+    #signal-bar .sig-dim   { font-size:10px; color:var(--text-dim); }
+    /* Trade levels strip */
+    #trade-levels {
+      background: var(--bg-card2); border: 1px solid var(--border);
+      border-top: none; padding: 5px 14px;
+      display: none; gap: 12px; flex-wrap: wrap; align-items: center;
     }
+    .tl-item { display:flex; align-items:center; gap:5px; font-size:11px; }
+    .tl-badge { font-size:9px; font-weight:700; padding:1px 5px; border-radius:3px; text-transform:uppercase; }
 
     /* Prediction card scenarios */
     .pred-scenario { border-radius: 6px; padding: 8px 10px; }
@@ -356,14 +359,15 @@
       <span id="tf-label">Analysis: 4H</span>
     </div>
   </div>
-  <div id="chart-wrap" style="position:relative">
-    <!-- TradingView Advanced Chart -->
+  <div id="chart-wrap">
     <div id="tv-chart-container" style="height:620px;width:100%"></div>
-    <!-- Signal overlay — top-left of chart -->
-    <div id="signal-overlay">
-      <div style="font-size:11px;color:#8b949e">Waiting for data...</div>
-    </div>
   </div>
+  <!-- Signal bar — below chart, full width -->
+  <div id="signal-bar">
+    <span style="font-size:12px;color:#484f58;font-style:italic">Loading signal...</span>
+  </div>
+  <!-- Trade levels — open trades for current symbol+TF -->
+  <div id="trade-levels"></div>
 </div>
 
 <!-- ═══ ALL SIGNALS FEED ═══ -->
@@ -1668,16 +1672,14 @@ function renderRisk(rsk, c) {
 }
 
 // ═══════════════════════════════════════════════════════
-// SIGNAL OVERLAY
+// SIGNAL BAR (horizontal strip below chart)
 // ═══════════════════════════════════════════════════════
 function renderSignal(sig) {
-  const el = document.getElementById('signal-overlay');
+  const el = document.getElementById('signal-bar');
+  if (!el) return;
   if (!sig) {
-    el.className = 'no-signal';
-    el.style.borderColor = '#21262d';
-    el.innerHTML = `
-      <div style="font-size:10px;color:#484f58;text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px">Signal</div>
-      <div style="font-size:12px;color:#6e7681">No high-confluence setup<br>Score below 7/10</div>`;
+    el.style.borderColor = 'var(--border)';
+    el.innerHTML = `<span style="font-size:12px;color:#484f58;font-style:italic">No high-confluence setup — score below threshold</span>`;
     return;
   }
 
@@ -1685,43 +1687,51 @@ function renderSignal(sig) {
   const color   = isLong ? '#3fb950' : '#f85149';
   const arrow   = isLong ? '▲' : '▼';
   const rr      = calcRR(sig.entry, sig.target, sig.stop, sig.direction);
-  const rrColor = rr.rr >= 2 ? '#3fb950' : rr.rr >= 1.5 ? '#d29922' : '#f85149';
+  const rrColor = rr.rr >= 3 ? '#3fb950' : rr.rr >= 2 ? '#d29922' : '#f85149';
 
-  el.className = '';
-  el.style.display = 'block';
   el.style.borderColor = color + '55';
   el.innerHTML = `
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-      <span style="color:${color};font-size:18px;font-weight:800;line-height:1">${arrow} ${sig.direction}</span>
-      <span style="background:${color}22;color:${color};border:1px solid ${color}44;border-radius:4px;padding:1px 7px;font-size:11px;font-weight:700">${sig.score}/10</span>
-    </div>
-    <div style="display:grid;grid-template-columns:52px auto;gap:3px 10px;font-size:12px;margin-bottom:8px">
-      <span style="color:#8b949e">Entry</span>
-      <span style="color:#e6edf3;font-weight:600">$${fmt(sig.entry)}</span>
-      <span style="color:#8b949e">Target</span>
-      <span style="color:#3fb950;font-weight:600">$${fmt(sig.target)} <span style="font-size:10px;opacity:.8">+${rr.gainPct}%</span></span>
-      <span style="color:#8b949e">Stop</span>
-      <span style="color:#f85149;font-weight:600">$${fmt(sig.stop)} <span style="font-size:10px;opacity:.8">-${rr.lossPct}%</span></span>
-      <span style="color:#8b949e">R:R</span>
-      <span style="color:${rrColor};font-weight:700">${rr.rr}:1 ${sig.favorable ? '✓' : '⚠'}</span>
-      <span style="color:#8b949e">P&amp;L</span>
-      <span style="font-size:11px">
-        <span style="color:#3fb950">+$${rr.dollarGain.toLocaleString()}</span>
-        <span style="color:#484f58"> / </span>
-        <span style="color:#f85149">-$${rr.dollarLoss.toLocaleString()}</span>
-        <span style="color:#484f58;font-size:10px"> @$${tradeSize.toLocaleString()}</span>
-      </span>
-    </div>
-    <div style="font-size:10px;color:#8b949e;border-top:1px solid #21262d;padding-top:6px;line-height:1.4">
-      ${sig.reason}
-    </div>
-    ${sig.top_reasons && sig.top_reasons.length ? `
-    <div style="margin-top:6px">
-      ${sig.top_reasons.slice(0,3).map(r =>
-        `<div style="font-size:10px;color:#6e7681;padding:1px 0">· ${r}</div>`
-      ).join('')}
-    </div>` : ''}
+    <span class="sig-dir" style="color:${color}">${arrow} ${sig.direction}</span>
+    <span style="background:${color}22;color:${color};border:1px solid ${color}44;border-radius:4px;padding:1px 8px;font-size:11px;font-weight:700">${sig.score}/10</span>
+    <span style="color:#30363d">│</span>
+    <span><span class="sig-label">Entry </span><span class="sig-val">$${fmt(sig.entry)}</span></span>
+    <span><span class="sig-label">TP </span><span class="sig-val" style="color:#3fb950">$${fmt(sig.target)}</span><span class="sig-dim"> +${rr.gainPct}%</span></span>
+    <span><span class="sig-label">SL </span><span class="sig-val" style="color:#f85149">$${fmt(sig.stop)}</span><span class="sig-dim"> -${rr.lossPct}%</span></span>
+    <span><span class="sig-label">R:R </span><span class="sig-val" style="color:${rrColor}">${rr.rr}:1</span></span>
+    <span><span class="sig-label">P&L </span><span style="color:#3fb950;font-size:11px">+$${rr.dollarGain.toLocaleString()}</span><span style="color:#484f58;font-size:11px"> / </span><span style="color:#f85149;font-size:11px">-$${rr.dollarLoss.toLocaleString()}</span></span>
+    <span style="color:#30363d">│</span>
+    <span class="sig-dim" style="font-style:italic;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${sig.reason}">${sig.reason}</span>
   `;
+}
+
+// ═══════════════════════════════════════════════════════
+// TRADE LEVELS STRIP — open trades for current symbol+TF
+// ═══════════════════════════════════════════════════════
+function renderTradeLevels(trades) {
+  const el = document.getElementById('trade-levels');
+  if (!el) return;
+  const open = (trades || []).filter(t =>
+    t.symbol === currentSymbol && t.interval === currentTF && t.status === 'open');
+  if (!open.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
+
+  el.style.display = 'flex';
+  el.innerHTML = open.map(t => {
+    const isLong = t.direction === 'LONG';
+    const dc = isLong ? '#3fb950' : '#f85149';
+    const rr = calcRR(t.entry, t.tp, t.sl, t.direction);
+    return `
+      <span class="tl-item">
+        <span class="tl-badge" style="background:${dc}22;color:${dc};border:1px solid ${dc}44">${t.direction}</span>
+        <span style="color:#8b949e;font-size:10px">${t.interval.toUpperCase()}</span>
+        <span style="color:#f0883e">▶ Entry <b>$${fmt(t.entry)}</b></span>
+        <span style="color:#3fb950">✅ TP <b>$${fmt(t.tp)}</b></span>
+        <span style="color:#f85149">🛑 SL <b>$${fmt(t.sl)}</b></span>
+        <span style="color:#8b949e">R:R <b style="color:${rr.rr>=3?'#3fb950':'#d29922'}">${rr.rr}:1</b></span>
+        <span style="color:#d29922;font-size:10px">${t.score}/10</span>
+      </span>
+      ${open.indexOf(t) < open.length-1 ? '<span style="color:#30363d;margin:0 4px">│</span>' : ''}
+    `;
+  }).join('');
 }
 
 
@@ -2290,6 +2300,7 @@ async function fetchTrades() {
     const resp = await fetch('/api/trades');
     allSignalsData = await resp.json();
     renderAllSignals();
+    renderTradeLevels(allSignalsData);
   } catch(e) { /* silent — non-critical */ }
   fetchLearning();
 }
