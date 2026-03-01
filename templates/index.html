@@ -1061,6 +1061,20 @@ function chartOptions(height) {
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     rightPriceScale: { borderColor: '#30363d' },
     timeScale: { borderColor: '#30363d', timeVisible: true, secondsVisible: false },
+    // Force UTC display — Binance candles are UTC-aligned (4h opens at 00/04/08/12/16/20 UTC)
+    localization: {
+      timeFormatter: ts => {
+        const d = new Date(ts * 1000);
+        const hh = d.getUTCHours().toString().padStart(2, '0');
+        const mm = d.getUTCMinutes().toString().padStart(2, '0');
+        return `${hh}:${mm} UTC`;
+      },
+      dateFormatter: ts => {
+        const d  = new Date(ts * 1000);
+        const mo = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getUTCMonth()];
+        return `${mo} ${d.getUTCDate()} ${d.getUTCFullYear()}`;
+      },
+    },
     width: document.getElementById('main-chart').clientWidth,
     height: height,
   };

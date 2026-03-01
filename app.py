@@ -160,33 +160,37 @@ def _background_scanner() -> None:
                                 "vwap_side":        ("above" if data.get("vwap") and
                                                      sig["entry"] > data.get("vwap", 0) else "below"),
                             }
-                            logged = learning.log_trade(trade_data)
-                            if logged:
-                                scan_signals += 1
+                            # ── Claude AI evaluates BEFORE logging ───────
+                            # If Claude says skip → signal is vetoed entirely.
+                            # If API is down (empty result) → fall back to log.
+                            try:
+                                ctx       = market_data.get_market_context(sym)
+                                history   = learning.get_trades()
+                                ai_result = ai_analysis.analyze_signal(trade_data, history, ctx)
+                            except Exception:
+                                ai_result = {}
 
-                                # ── Claude AI signal evaluation ──────────────
-                                try:
-                                    ctx       = market_data.get_market_context(sym)
-                                    history   = learning.get_trades()
-                                    ai_result = ai_analysis.analyze_signal(trade_data, history, ctx)
+                            if ai_result.get("recommendation") == "skip":
+                                pass  # Claude vetoed — don't log, don't notify
+                            else:
+                                logged = learning.log_trade(trade_data)
+                                if logged:
+                                    scan_signals += 1
                                     if ai_result:
                                         learning.update_trade_ai(trade_id, ai_result)
                                         trade_data["ai_analysis"] = ai_result
-                                except Exception:
-                                    ai_result = {}
-
-                                notifications.send_signal_alert({
-                                    "symbol":       sym,
-                                    "interval":     interval,
-                                    "direction":    sig["direction"],
-                                    "entry":        sig["entry"],
-                                    "tp":           sig["target"],
-                                    "sl":           sig["stop"],
-                                    "score":        sig["score"],
-                                    "reason":       sig.get("reason", ""),
-                                    "target_basis": sig.get("target_basis", ""),
-                                    "ai_analysis":  trade_data.get("ai_analysis", {}),
-                                })
+                                    notifications.send_signal_alert({
+                                        "symbol":       sym,
+                                        "interval":     interval,
+                                        "direction":    sig["direction"],
+                                        "entry":        sig["entry"],
+                                        "tp":           sig["target"],
+                                        "sl":           sig["stop"],
+                                        "score":        sig["score"],
+                                        "reason":       sig.get("reason", ""),
+                                        "target_basis": sig.get("target_basis", ""),
+                                        "ai_analysis":  trade_data.get("ai_analysis", {}),
+                                    })
 
                     # Auto-close trades
                     cur_price = data.get("current_price", 0)
