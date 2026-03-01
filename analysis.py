@@ -791,13 +791,14 @@ def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
 
     rr = round(reward_d / risk_d, 2) if risk_d > 0 else 0
 
-    # ── Enforce minimum 2:1 R:R — project target further if structural level is too close ──
-    if risk_d > 0 and rr < 2.0 and bias != "Neutral":
+    # ── Enforce minimum R:R: Day trades (15m/30m) = 2:1, Swing/Hourly = 3:1 ───
+    min_rr = 2.0 if interval in ("15m", "30m") else 3.0
+    if risk_d > 0 and rr < min_rr and bias != "Neutral":
         if bias == "Long":
-            target = round(cur + 2.0 * risk_d, 6)
+            target = round(cur + min_rr * risk_d, 6)
         else:
-            target = round(cur - 2.0 * risk_d, 6)
-        target_basis = "2:1 R:R projection (structural target too close)"
+            target = round(cur - min_rr * risk_d, 6)
+        target_basis = f"{min_rr:.0f}:1 R:R projection (structural target too close)"
         reward_d = abs(target - cur)
         rr = round(reward_d / risk_d, 2)
 
@@ -808,7 +809,7 @@ def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
         target=round(target, 6),
         target_basis=target_basis,
         rr=rr,
-        favorable=rr >= 2.0,
+        favorable=rr >= min_rr,
         invalidation_note=inval_note,
     )
 
@@ -867,15 +868,17 @@ def chart_for_timeframe(symbol: str, interval: str) -> dict:
 # ─────────────────────────────────────────────
 
 def generate_signal(confluence: dict, structure, risk: dict, h4_df,
-                    signal_threshold: float | None = None) -> dict | None:
-    """Returns a signal dict if effective score >= adaptive threshold, BOS confirmed, and R:R >= 2:1."""
+                    signal_threshold: float | None = None,
+                    interval: str = "4h") -> dict | None:
+    """Returns a signal dict if effective score >= adaptive threshold, BOS confirmed, and tier R:R met."""
     threshold = signal_threshold if signal_threshold is not None else get_threshold()
     if confluence["score"] < threshold:
         return None
     if not structure:
         return None
-    # Hard R:R gate — never log a trade with worse than 2:1
-    if risk.get("rr", 0) < 2.0:
+    # Hard R:R gate — Day (15m/30m): 2:1 min. Swing/Hourly: 3:1 min.
+    min_rr = 2.0 if interval in ("15m", "30m") else 3.0
+    if risk.get("rr", 0) < min_rr:
         return None
 
     if structure["bullish_bos"]:
@@ -1154,7 +1157,7 @@ def full_analysis(symbol: str, interval: str = "4h") -> dict:
     risk = risk_context(df, structure, sh, sl, interval, adapt_stop_mult)
 
     # Signal (score >= adaptive threshold + BOS)
-    signal = generate_signal(confluence, structure, risk, df, adapt_threshold)
+    signal = generate_signal(confluence, structure, risk, df, adapt_threshold, interval)
 
     # Price Prediction
     prediction = price_prediction(df, risk, confluence, volatility, regime, sh, sl, interval)

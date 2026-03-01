@@ -35,7 +35,7 @@ DEFAULT_WEIGHTS = {
 }
 DEFAULT_THRESHOLD = 7.0    # minimum score to fire a signal
 DEFAULT_STOP_MULT = 0.5    # ATR multiplier for stop placement
-ADAPT_WINDOW      = 5      # trades to look back per-factor
+ADAPT_WINDOW      = 8      # trades to look back per-factor
 MIN_SAMPLES       = 2      # minimum trades before adapting a factor
 WEIGHT_FLOOR      = 0.30   # minimum factor weight (as fraction of default)
 WEIGHT_CEIL       = 1.50   # maximum factor weight (as multiple of default)
@@ -97,6 +97,8 @@ def _init_db():
         for col, defn in [
             ("breakeven_activated", "INTEGER DEFAULT 0"),
             ("ai_analysis",         "TEXT"),
+            ("partial_tp",          "REAL"),
+            ("partial_hit",         "INTEGER DEFAULT 0"),
         ]:
             try:
                 db.execute(f"ALTER TABLE trades ADD COLUMN {col} {defn}")
@@ -206,11 +208,17 @@ def log_trade(trade: dict) -> bool:
                     _close_internal(db, ex["id"], trade["entry"], "cancelled")
                     _adapt(db)
 
+            entry_f   = float(trade["entry"])
+            sl_f      = float(trade["sl"])
+            risk_dist = abs(entry_f - sl_f)
+            partial_tp = (round(entry_f + 1.5 * risk_dist, 8) if dirn == "LONG"
+                          else round(entry_f - 1.5 * risk_dist, 8))
+
             db.execute("""
                 INSERT INTO trades
                 (id, symbol, interval, direction, entry, tp, sl, score, effective_score,
-                 reason, factors_snapshot, target_basis, opened_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 reason, factors_snapshot, target_basis, opened_at, partial_tp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 trade["id"], sym, intv, dirn,
                 trade["entry"], trade["tp"], trade["sl"],
@@ -219,6 +227,7 @@ def log_trade(trade: dict) -> bool:
                 json.dumps(trade.get("factors_snapshot", {})),
                 trade.get("target_basis", ""),
                 trade["opened_at"],
+                partial_tp,
             ))
             db.commit()
             return True
@@ -258,15 +267,24 @@ _DAY_MAX_HOURS   = 72    # 3 days max for Day (15m) trades
 _SWING_MAX_HOURS = 336   # 14 days max for Swing (4h) trades
 
 
-def auto_close(symbol: str, interval: str, current_price: float) -> list:
+def auto_close(symbol: str, interval: str, current_price: float) -> tuple:
     """
     Auto-close open trades whose TP/SL has been hit, or that have expired.
 
-    Also manages the breakeven trailing stop:
+    Partial TP system (1.5R):
+    - When price reaches 1.5× risk distance, 50% of position is booked at that level
+      and the stop loss moves to breakeven (entry).
+    - On final close, ROI is blended: 0.5×partial_roi + 0.5×remainder_roi.
+    - If the 50% remainder hits breakeven, the trade still counts as a WIN
+      (since the partial locked in profit).
+
+    Breakeven trailing stop:
     - Once price moves 1× risk distance in our favour, SL moves to entry (breakeven).
-    - If price then falls back to entry level it closes at breakeven (cancelled, 0% ROI).
+
+    Returns: (closed_list, partials_list)
     """
-    closed = []
+    closed   = []
+    partials = []
     tier      = "day" if interval in ("15m", "30m", "1h") else "swing"
     max_hours = _DAY_MAX_HOURS if tier == "day" else _SWING_MAX_HOURS
 
@@ -297,6 +315,31 @@ def auto_close(symbol: str, interval: str, current_price: float) -> list:
                 # ── Effective SL: entry (breakeven) or original SL ────────
                 eff_sl = float(t["entry"]) if be_active else float(t["sl"])
 
+                # ── Partial TP: lock in 50% at 1.5R, activate breakeven ────
+                partial_tp_val = t.get("partial_tp")
+                partial_hit_db = bool(t.get("partial_hit", 0))
+                if partial_tp_val and not partial_hit_db:
+                    hit_partial = (
+                        (t["direction"] == "LONG"  and current_price >= float(partial_tp_val)) or
+                        (t["direction"] == "SHORT" and current_price <= float(partial_tp_val))
+                    )
+                    if hit_partial:
+                        db.execute(
+                            "UPDATE trades SET partial_hit=1, breakeven_activated=1 WHERE id=?",
+                            (t["id"],)
+                        )
+                        partial_hit_db = True
+                        be_active      = True
+                        eff_sl         = float(t["entry"])
+                        partials.append({
+                            "id":            t["id"],
+                            "symbol":        t["symbol"],
+                            "interval":      t["interval"],
+                            "direction":     t["direction"],
+                            "entry":         t["entry"],
+                            "partial_price": float(partial_tp_val),
+                        })
+
                 # ── TP / SL checks ────────────────────────────────────────
                 if t["direction"] == "LONG":
                     if current_price >= t["tp"]:
@@ -323,9 +366,27 @@ def auto_close(symbol: str, interval: str, current_price: float) -> list:
 
                 if hit:
                     close_px = round(current_price, 8)
-                    if hit == "cancelled":
-                        close_px = float(t["entry"])   # 0% ROI on breakeven/time exits
-                    roi      = _calc_roi(t["direction"], t["entry"], close_px)
+                    # ── Blended ROI when partial TP was already booked ───────
+                    if partial_hit_db and partial_tp_val:
+                        p_roi = _calc_roi(t["direction"], float(t["entry"]), float(partial_tp_val))
+                        if hit == "win":
+                            # 50% booked at partial_tp + 50% at full TP
+                            tp_roi = _calc_roi(t["direction"], float(t["entry"]), float(t["tp"]))
+                            roi = round(0.5 * p_roi + 0.5 * tp_roi, 2)
+                        else:
+                            # cancelled (breakeven) or edge-case loss:
+                            # 50% at partial_tp + 50% at close price
+                            remainder = (0.0 if hit == "cancelled"
+                                         else _calc_roi(t["direction"], float(t["entry"]), close_px))
+                            roi = round(0.5 * p_roi + 0.5 * remainder, 2)
+                            if roi > 0:
+                                hit = "win"   # net profitable — count as win
+                            if hit == "cancelled":
+                                close_px = float(t["entry"])
+                    else:
+                        if hit == "cancelled":
+                            close_px = float(t["entry"])   # 0% ROI on breakeven/time exits
+                        roi = _calc_roi(t["direction"], float(t["entry"]), close_px)
                     analysis = _generate_analysis(t, close_px, hit, roi)
                     now      = datetime.now(timezone.utc).isoformat()
                     db.execute("""
@@ -347,7 +408,7 @@ def auto_close(symbol: str, interval: str, current_price: float) -> list:
             db.commit()
         finally:
             db.close()
-    return closed
+    return closed, partials
 
 
 def update_trade_ai(trade_id: str, ai_result: dict) -> None:
@@ -627,6 +688,22 @@ def _adapt(db) -> list:
                 f"⬇ Signal threshold {old_thresh:.1f}→{threshold:.1f} "
                 f"(win rate {overall_wr:.0%} — allowing slightly lower bar)"
             )
+
+    # ── Consecutive loss streak protection ───────────────────────────────────
+    consec_losses = 0
+    for r in list(closed[:8]):
+        if r["status"] == "loss":
+            consec_losses += 1
+        else:
+            break
+    if consec_losses >= 3 and threshold < 9.5:
+        new_thresh = min(round(threshold + 0.5, 1), 9.5)
+        if new_thresh != threshold:
+            changes.append(
+                f"⬆ Signal threshold {threshold:.1f}→{new_thresh:.1f} "
+                f"({consec_losses} consecutive losses — tightening entry criteria)"
+            )
+            threshold = new_thresh
 
     # ── Stop multiplier adaptation ────────────────────────
     # If recent losses were stopped out within 0.5% of entry → stops too tight

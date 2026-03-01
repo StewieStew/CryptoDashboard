@@ -139,6 +139,37 @@ def send_signal_alert(trade: dict) -> None:
     _post({"embeds": [embed]})
 
 
+def send_partial_alert(trade: dict, partial_price: float) -> None:
+    """
+    Discord notification when partial TP (1.5R) is hit and SL moves to breakeven.
+    50% of position is now locked in at a profit.
+    """
+    direction = trade.get("direction", "LONG")
+    interval  = trade.get("interval", "4h")
+    sym       = trade.get("symbol", "???")
+    tier      = _tier(interval)
+    entry     = float(trade.get("entry") or 0)
+
+    gain_pct = abs(partial_price - entry) / entry * 100 if entry else 0
+
+    embed = {
+        "color": _COL_WIN,
+        "title": f"🔒 Partial TP Hit — {sym}  ({tier} · {interval} · {direction})",
+        "description": (
+            "**50% of position booked at 1.5R.** "
+            "Stop loss moved to breakeven (entry). "
+            "Remaining 50% running to full target."
+        ),
+        "fields": [
+            {"name": "Entry",      "value": f"`${_fmt(entry)}`",         "inline": True},
+            {"name": "Partial TP", "value": f"`${_fmt(partial_price)}`",  "inline": True},
+            {"name": "Gain",       "value": f"`+{gain_pct:.2f}%`",        "inline": True},
+        ],
+        "footer": {"text": "Crypto Dashboard · Paper Trade"},
+    }
+    _post({"embeds": [embed]})
+
+
 def send_close_alert(trade: dict, status: str,
                      close_price: float, roi: float) -> None:
     """

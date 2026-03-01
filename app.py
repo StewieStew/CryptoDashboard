@@ -197,7 +197,9 @@ def _background_scanner() -> None:
                     # Auto-close trades
                     cur_price = data.get("current_price", 0)
                     if cur_price:
-                        closed = learning.auto_close(sym, interval, float(cur_price))
+                        closed, partials = learning.auto_close(sym, interval, float(cur_price))
+                        for p in partials:
+                            notifications.send_partial_alert(p, p["partial_price"])
                         for c in closed:
                             notifications.send_close_alert(
                                 c, c["status"], c["close_price"], c["roi_pct"]
