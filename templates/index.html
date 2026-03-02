@@ -370,6 +370,55 @@
   </div>
 </div>
 
+<!-- ═══ BACKTESTER ═══ -->
+<div id="backtest-section">
+  <div id="backtest-header" onclick="toggleBacktest()">
+    <div>
+      <span class="bt-title">Backtester &amp; Research Campaign</span>
+      <span style="font-size:9px;color:var(--dim);margin-left:8px">Historical strategy replay · click to expand</span>
+    </div>
+    <span id="backtest-toggle" style="font-size:9px;color:var(--dim);font-weight:400">▶ expand</span>
+  </div>
+  <div id="backtest-body" style="display:none">
+    <div class="bt-body">
+      <div class="bt-ctrl">
+        <select class="bt-sel" id="bt-symbol" title="Symbol">
+          <option value="BTCUSDT">BTCUSDT</option>
+          <option value="ETHUSDT">ETHUSDT</option>
+          <option value="SOLUSDT">SOLUSDT</option>
+          <option value="XRPUSDT">XRPUSDT</option>
+          <option value="DOGEUSDT">DOGEUSDT</option>
+          <option value="BNBUSDT">BNBUSDT</option>
+          <option value="ADAUSDT">ADAUSDT</option>
+          <option value="AVAXUSDT">AVAXUSDT</option>
+          <option value="LINKUSDT">LINKUSDT</option>
+        </select>
+        <select class="bt-sel" id="bt-interval" title="Interval">
+          <option value="4h" selected>4H</option>
+          <option value="1h">1H</option>
+          <option value="1d">1D</option>
+          <option value="15m">15m</option>
+        </select>
+        <select class="bt-sel" id="bt-years" title="History">
+          <option value="1">1 year</option>
+          <option value="2" selected>2 years</option>
+          <option value="3">3 years</option>
+        </select>
+        <select class="bt-sel" id="bt-mode" title="Mode">
+          <option value="single">Single run (default params)</option>
+          <option value="grid">Grid search (all combos)</option>
+        </select>
+        <button class="ctrl-btn" id="bt-run-btn" onclick="runBacktest()" style="color:var(--amber);border-color:rgba(245,158,11,.3)">▶ Run</button>
+        <span style="color:var(--border2);font-size:12px;margin:0 2px">|</span>
+        <button class="ctrl-btn" id="bt-campaign-btn" onclick="runCampaign()" style="color:var(--green);border-color:rgba(34,197,94,.3)" title="Full research sweep: BTC · ETH · XRP · DOGE × 15m + 4H with max history">🔬 Run Research Campaign</button>
+      </div>
+      <div id="bt-results">
+        <span style="color:var(--dim);font-size:11px;font-style:italic">Select options and click Run — or use Research Campaign for a full BTC/ETH/XRP/DOGE sweep.</span>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ═══ 3-COLUMN GRID ═══ -->
 <div class="grid-3">
 
@@ -444,55 +493,6 @@
   </div>
 
 </div><!-- end .grid-3 -->
-
-<!-- ═══ BACKTESTER ═══ -->
-<div id="backtest-section">
-  <div id="backtest-header" onclick="toggleBacktest()">
-    <div>
-      <span class="bt-title">Backtester</span>
-      <span style="font-size:9px;color:var(--dim);margin-left:8px">Historical strategy replay · Binance OHLCV</span>
-    </div>
-    <span id="backtest-toggle" style="font-size:9px;color:var(--dim);font-weight:400">▶ expand</span>
-  </div>
-  <div id="backtest-body" style="display:none">
-    <div class="bt-body">
-      <div class="bt-ctrl">
-        <select class="bt-sel" id="bt-symbol" title="Symbol">
-          <option value="BTCUSDT">BTCUSDT</option>
-          <option value="ETHUSDT">ETHUSDT</option>
-          <option value="SOLUSDT">SOLUSDT</option>
-          <option value="XRPUSDT">XRPUSDT</option>
-          <option value="DOGEUSDT">DOGEUSDT</option>
-          <option value="BNBUSDT">BNBUSDT</option>
-          <option value="ADAUSDT">ADAUSDT</option>
-          <option value="AVAXUSDT">AVAXUSDT</option>
-          <option value="LINKUSDT">LINKUSDT</option>
-        </select>
-        <select class="bt-sel" id="bt-interval" title="Interval">
-          <option value="4h" selected>4H</option>
-          <option value="1h">1H</option>
-          <option value="1d">1D</option>
-          <option value="15m">15m</option>
-        </select>
-        <select class="bt-sel" id="bt-years" title="History">
-          <option value="1">1 year</option>
-          <option value="2" selected>2 years</option>
-          <option value="3">3 years</option>
-        </select>
-        <select class="bt-sel" id="bt-mode" title="Mode">
-          <option value="single">Single run (default params)</option>
-          <option value="grid">Grid search (all combos)</option>
-        </select>
-        <button class="ctrl-btn" id="bt-run-btn" onclick="runBacktest()" style="color:var(--amber);border-color:rgba(245,158,11,.3)">▶ Run</button>
-        <span style="color:var(--border2);font-size:12px;margin:0 2px">|</span>
-        <button class="ctrl-btn" id="bt-campaign-btn" onclick="runCampaign()" style="color:var(--green);border-color:rgba(34,197,94,.3)" title="Full research sweep: BTC · ETH · XRP · DOGE × 15m + 4H with max history">🔬 Run Research Campaign</button>
-      </div>
-      <div id="bt-results">
-        <span style="color:var(--dim);font-size:11px;font-style:italic">Select options and click Run — or use Research Campaign for a full BTC/ETH/XRP/DOGE sweep.</span>
-      </div>
-    </div>
-  </div>
-</div>
 
 <!-- Hidden render targets kept for backward-compatible render functions -->
 <div style="display:none">
