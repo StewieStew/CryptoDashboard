@@ -4,6 +4,7 @@ to find optimal parameter combinations.
 
 Uses existing indicator functions from analysis.py (no live API calls during replay).
 """
+from __future__ import annotations
 
 import requests
 import time

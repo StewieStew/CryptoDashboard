@@ -3,6 +3,7 @@ Adaptive Learning Engine — Trade Tracking, Post-Trade Analysis & Signal Optimi
 
 Storage: SQLite at /data/trades.db (Render Persistent Disk) with fallback to ./trades.db
 """
+from __future__ import annotations
 
 import sqlite3
 import json

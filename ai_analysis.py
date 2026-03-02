@@ -5,6 +5,7 @@ and Sonnet for periodic deeper performance reviews.
 Set ANTHROPIC_API_KEY in your Render environment variables.
 If unset, all functions return empty dicts gracefully.
 """
+from __future__ import annotations
 
 import os
 import json

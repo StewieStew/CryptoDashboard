@@ -2,6 +2,7 @@
 Crypto Technical Analysis Engine
 Fetches OHLCV from Binance public API and computes all 7 framework sections.
 """
+from __future__ import annotations
 
 import requests
 import pandas as pd
