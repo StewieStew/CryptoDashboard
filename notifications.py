@@ -188,6 +188,78 @@ def send_partial_alert(trade: dict, partial_price: float) -> None:
     _post({"embeds": [embed]})
 
 
+def send_weekly_review_alert(review: dict, deployed: list, baseline: dict) -> None:
+    """
+    Discord notification with the weekly Claude strategy review summary.
+
+    review   — output of ai_analysis.get_weekly_review()
+    deployed — list of parameter_proposals that were auto-deployed
+    baseline — run_backtest() result used for comparison
+    """
+    assessment = review.get("overall_assessment", "")
+    patterns   = review.get("patterns", [])
+    watch_out  = review.get("watch_out", [])
+    proposals  = review.get("parameter_proposals", [])
+
+    fields = []
+
+    if assessment:
+        fields.append({"name": "📊 System Health", "value": assessment[:512], "inline": False})
+
+    if patterns:
+        fields.append({
+            "name":   "🔍 Patterns Identified",
+            "value":  "\n".join(f"• {p}" for p in patterns[:3])[:512],
+            "inline": False,
+        })
+
+    if proposals:
+        proposal_lines = []
+        for p in proposals[:4]:
+            arrow  = "⬆" if float(p.get("proposed", 0)) > float(p.get("current", 0)) else "⬇"
+            chg    = p.get("change_pct", "?")
+            deploy = "✅ deployed" if p in deployed else "⏭ skipped (no backtest improvement)"
+            proposal_lines.append(
+                f"{arrow} `{p['param']}` {p['current']} → {p['proposed']} ({chg:+}%) — {deploy}"
+            )
+        fields.append({
+            "name":   "⚙ Parameter Proposals",
+            "value":  "\n".join(proposal_lines)[:512],
+            "inline": False,
+        })
+
+    if deployed:
+        fields.append({
+            "name":  "🚀 Auto-Deployed",
+            "value": f"{len(deployed)} change(s) validated by backtester and deployed.",
+            "inline": True,
+        })
+
+    if baseline:
+        fields.append({
+            "name":  "📈 Backtest Baseline",
+            "value": (f"`{baseline.get('win_rate', 0)*100:.0f}%` win rate | "
+                      f"`{baseline.get('total_trades', 0)}` trades | "
+                      f"drawdown `{baseline.get('max_drawdown', 0):.1f}R`"),
+            "inline": True,
+        })
+
+    if watch_out:
+        fields.append({
+            "name":   "⚠ Watch Out",
+            "value":  "\n".join(f"• {w}" for w in watch_out[:2])[:256],
+            "inline": False,
+        })
+
+    embed = {
+        "color":  0x58A6FF,
+        "title":  "📅 Weekly Strategy Review — Claude Sonnet",
+        "fields": fields,
+        "footer": {"text": "Crypto Dashboard · Weekly Auto-Review"},
+    }
+    _post({"embeds": [embed]})
+
+
 def send_close_alert(trade: dict, status: str,
                      close_price: float, roi: float) -> None:
     """

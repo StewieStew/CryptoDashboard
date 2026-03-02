@@ -223,6 +223,45 @@
     .method-tag { display:inline-block; font-size:10px; padding:1px 6px; border-radius:2px; margin:2px; font-weight:600; }
     .method-divider { border:none; border-top:1px solid var(--border); margin:28px 0; }
 
+    /* ── BACKTESTER ── */
+    #backtest-section { background:var(--surface); border-top:1px solid var(--border); }
+    #backtest-header { padding:8px 12px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--border); cursor:pointer; user-select:none; }
+    #backtest-header:hover .bt-title { color:var(--text); }
+    .bt-title { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--amber); transition:color .1s; }
+    .bt-body { padding:10px 12px; }
+    .bt-ctrl { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+    .bt-sel { background:var(--surface2); border:1px solid var(--border2); color:var(--text); border-radius:3px; padding:3px 6px; font-size:11px; font-family:inherit; cursor:pointer; }
+    .bt-sel:focus { outline:none; border-color:var(--amber); }
+    .bt-table { width:100%; border-collapse:collapse; font-size:11px; }
+    .bt-table th { font-size:9px; font-weight:700; color:var(--dim); text-transform:uppercase; letter-spacing:.06em; padding:5px 8px; border-bottom:1px solid var(--border); text-align:left; white-space:nowrap; }
+    .bt-table td { padding:5px 8px; border-bottom:1px solid var(--border); }
+    .bt-table tr:last-child td { border-bottom:none; }
+    .bt-best td { background:rgba(245,158,11,.04); }
+    .bt-stat-win  { color:var(--green); font-weight:700; }
+    .bt-stat-loss { color:var(--red);   font-weight:700; }
+    .bt-stat-ok   { color:var(--amber); font-weight:700; }
+    .bt-progress  { display:flex; align-items:center; gap:10px; color:var(--muted); font-size:11px; padding:8px 0; }
+
+    /* ── CAMPAIGN ── */
+    .camp-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:6px; margin-bottom:12px; }
+    .camp-cell { background:var(--surface2); border:1px solid var(--border2); border-radius:3px; padding:6px 8px; font-size:10px; }
+    .camp-cell-sym  { font-weight:700; color:var(--text); margin-bottom:2px; }
+    .camp-cell-tf   { font-size:9px; color:var(--dim); }
+    .camp-cell-stat { font-size:9px; margin-top:3px; }
+    .camp-cell.done    { border-color:rgba(34,197,94,.3); }
+    .camp-cell.error   { border-color:rgba(239,68,68,.3); }
+    .camp-cell.running { border-color:rgba(245,158,11,.3); animation:border-pulse 1.5s ease-in-out infinite; }
+    @keyframes border-pulse { 0%,100%{border-color:rgba(245,158,11,.3)} 50%{border-color:rgba(245,158,11,.7)} }
+    .camp-table { width:100%; border-collapse:collapse; font-size:11px; }
+    .camp-table th { font-size:9px; font-weight:700; color:var(--dim); text-transform:uppercase; letter-spacing:.06em; padding:5px 8px; border-bottom:1px solid var(--border); text-align:left; white-space:nowrap; }
+    .camp-table td { padding:5px 8px; border-bottom:1px solid var(--border); vertical-align:middle; }
+    .camp-table tr:last-child td { border-bottom:none; }
+    .camp-apply-btn { font-size:9px; padding:2px 8px; border-radius:2px; border:1px solid rgba(34,197,94,.4); color:var(--green); background:transparent; cursor:pointer; font-family:inherit; white-space:nowrap; }
+    .camp-apply-btn:hover { background:rgba(34,197,94,.1); }
+    .camp-apply-btn:disabled { opacity:.4; cursor:default; }
+    .camp-applied { font-size:9px; color:var(--green); }
+    .camp-best-row { background:rgba(34,197,94,.03); }
+
     /* ── UTILITIES ── */
     .text-g   { color:var(--green)  !important; }
     .text-r   { color:var(--red)    !important; }
@@ -267,6 +306,7 @@
   <div class="metric"><span class="mlabel">Symbol</span><span class="mvalue" id="h-symbol">—</span></div>
   <div class="metric"><span class="mlabel">Price</span><span class="mvalue" id="h-price">—</span></div>
   <div class="metric"><span class="mlabel">Regime</span><span class="mvalue" id="h-regime">—</span></div>
+  <div class="metric"><span class="mlabel">Mkt Type</span><span class="mvalue" id="h-mkttype">—</span></div>
   <div class="metric"><span class="mlabel">Score</span><span class="mvalue" id="h-score">—</span></div>
   <div class="metric"><span class="mlabel">RSI</span><span class="mvalue" id="h-rsi">—</span></div>
   <div class="metric"><span class="mlabel">BOS</span><span class="mvalue" id="h-struct">—</span></div>
@@ -320,7 +360,10 @@
       <span class="ai-title">Claude AI — Chart Analysis</span>
       <span class="ai-sub">Haiku · on-demand TA read</span>
     </div>
-    <button class="ctrl-btn" id="ai-chart-btn" onclick="fetchAiChart()" style="color:var(--purple);border-color:rgba(168,85,247,.3)">Ask Claude ↻</button>
+    <div style="display:flex;gap:6px">
+      <button class="ctrl-btn" id="ai-chart-btn" onclick="fetchAiChart()" style="color:var(--purple);border-color:rgba(168,85,247,.3)">Ask Claude ↻</button>
+      <button class="ctrl-btn" id="weekly-review-btn" onclick="runWeeklyReview()" style="color:var(--amber);border-color:rgba(245,158,11,.3)" title="Run weekly Claude strategy review (needs ≥10 closed trades)">📅 Weekly Review</button>
+    </div>
   </div>
   <div id="ai-section-body">
     <div id="card-ai-chart" style="color:var(--dim);font-size:11px;font-style:italic">Click "Ask Claude" to get an AI analysis of the current chart.</div>
@@ -401,6 +444,55 @@
   </div>
 
 </div><!-- end .grid-3 -->
+
+<!-- ═══ BACKTESTER ═══ -->
+<div id="backtest-section">
+  <div id="backtest-header" onclick="toggleBacktest()">
+    <div>
+      <span class="bt-title">Backtester</span>
+      <span style="font-size:9px;color:var(--dim);margin-left:8px">Historical strategy replay · Binance OHLCV</span>
+    </div>
+    <span id="backtest-toggle" style="font-size:9px;color:var(--dim);font-weight:400">▶ expand</span>
+  </div>
+  <div id="backtest-body" style="display:none">
+    <div class="bt-body">
+      <div class="bt-ctrl">
+        <select class="bt-sel" id="bt-symbol" title="Symbol">
+          <option value="BTCUSDT">BTCUSDT</option>
+          <option value="ETHUSDT">ETHUSDT</option>
+          <option value="SOLUSDT">SOLUSDT</option>
+          <option value="XRPUSDT">XRPUSDT</option>
+          <option value="DOGEUSDT">DOGEUSDT</option>
+          <option value="BNBUSDT">BNBUSDT</option>
+          <option value="ADAUSDT">ADAUSDT</option>
+          <option value="AVAXUSDT">AVAXUSDT</option>
+          <option value="LINKUSDT">LINKUSDT</option>
+        </select>
+        <select class="bt-sel" id="bt-interval" title="Interval">
+          <option value="4h" selected>4H</option>
+          <option value="1h">1H</option>
+          <option value="1d">1D</option>
+          <option value="15m">15m</option>
+        </select>
+        <select class="bt-sel" id="bt-years" title="History">
+          <option value="1">1 year</option>
+          <option value="2" selected>2 years</option>
+          <option value="3">3 years</option>
+        </select>
+        <select class="bt-sel" id="bt-mode" title="Mode">
+          <option value="single">Single run (default params)</option>
+          <option value="grid">Grid search (all combos)</option>
+        </select>
+        <button class="ctrl-btn" id="bt-run-btn" onclick="runBacktest()" style="color:var(--amber);border-color:rgba(245,158,11,.3)">▶ Run</button>
+        <span style="color:var(--border2);font-size:12px;margin:0 2px">|</span>
+        <button class="ctrl-btn" id="bt-campaign-btn" onclick="runCampaign()" style="color:var(--green);border-color:rgba(34,197,94,.3)" title="Full research sweep: BTC · ETH · XRP · DOGE × 15m + 4H with max history">🔬 Run Research Campaign</button>
+      </div>
+      <div id="bt-results">
+        <span style="color:var(--dim);font-size:11px;font-style:italic">Select options and click Run — or use Research Campaign for a full BTC/ETH/XRP/DOGE sweep.</span>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- Hidden render targets kept for backward-compatible render functions -->
 <div style="display:none">
@@ -1296,6 +1388,8 @@ function renderAll(d) {
   fetchTrades();
   // Analysis chart — always visible, shows EMA/S&R/VWAP/swings/signal
   renderAnalysisChart(d);
+  // Market regime type (trending/ranging/transitioning) — async, non-blocking
+  fetchRegimeType();
   // Auto-trigger Claude AI analysis when symbol or TF changes
   if (_aiChartSym !== currentSymbol || _aiChartTf !== currentTF) {
     fetchAiChart();
@@ -2636,6 +2730,419 @@ function renderAiChart(r) {
     ${risks  ? `<div><div style="font-size:9px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.07em;margin-bottom:4px">Risks</div>${risks}</div>` : ''}
     <div style="font-size:9px;color:var(--dim);margin-top:10px;padding-top:6px;border-top:1px solid var(--border)">Claude Haiku · ${currentSymbol.replace('USDT','')} ${currentTF.toUpperCase()} · ${new Date().toLocaleTimeString('en-US',{timeZone:'UTC',hour:'2-digit',minute:'2-digit'})} UTC</div>
   `;
+}
+
+// ═══════════════════════════════════════════════════════
+// MARKET REGIME TYPE (trending / ranging / transitioning)
+// ═══════════════════════════════════════════════════════
+async function fetchRegimeType() {
+  const el = document.getElementById('h-mkttype');
+  if (!el) return;
+  try {
+    const resp = await fetch(`/api/regime/${currentSymbol}`);
+    const d    = await resp.json();
+    if (d.error) { el.textContent = '—'; return; }
+    const r = d.regime || 'unknown';
+    const color = r === 'trending'      ? '#22c55e'
+                : r === 'ranging'       ? '#f59e0b'
+                : r === 'transitioning' ? '#888888' : '#888888';
+    el.textContent = r;
+    el.style.color = color;
+  } catch(e) {
+    el.textContent = '—';
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// WEEKLY REVIEW
+// ═══════════════════════════════════════════════════════
+async function runWeeklyReview() {
+  const btn = document.getElementById('weekly-review-btn');
+  const el  = document.getElementById('card-ai-chart');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Reviewing...'; }
+  if (el)  el.innerHTML = '<div style="display:flex;align-items:center;gap:8px;color:var(--muted);font-size:11px"><div class="spinner" style="width:14px;height:14px;border-width:2px"></div>Running weekly strategy review — this may take 30–60s…</div>';
+  try {
+    const resp = await fetch('/api/weekly-review');
+    const d    = await resp.json();
+    if (el) renderWeeklyReview(d, el);
+  } catch(e) {
+    if (el) el.innerHTML = `<span style="color:var(--red);font-size:11px">⚠ Weekly review failed: ${e.message}</span>`;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '📅 Weekly Review'; }
+  }
+}
+
+function renderWeeklyReview(d, el) {
+  if (d.error || d.status === 'error') {
+    el.innerHTML = `<span style="color:var(--red);font-size:11px">⚠ ${d.error || d.reason}</span>`;
+    return;
+  }
+  if (d.status === 'skipped') {
+    el.innerHTML = `<span style="color:var(--amber);font-size:11px">⚠ ${d.reason}</span>`;
+    return;
+  }
+  const rev      = d.review || {};
+  const baseline = d.baseline || {};
+  const deployed = d.deployed_params || [];
+
+  const baselineHtml = baseline.win_rate !== undefined
+    ? `<div style="font-size:10px;color:var(--dim);margin-bottom:8px">Backtest baseline (BTCUSDT 4H, 1yr): <b style="color:var(--text)">${(baseline.win_rate*100).toFixed(0)}%</b> win rate · <b style="color:var(--text)">${baseline.total_trades}</b> trades · drawdown <b style="color:var(--amber)">${baseline.max_drawdown?.toFixed(1)}R</b></div>`
+    : '';
+
+  const patternsHtml = (rev.patterns || []).map(p => `<div style="font-size:11px;padding:3px 0;border-bottom:1px solid var(--border);color:var(--muted)">• ${p}</div>`).join('');
+  const proposalsHtml = (rev.parameter_proposals || []).map(p => {
+    const arrow = parseFloat(p.proposed) > parseFloat(p.current) ? '⬆' : '⬇';
+    const dep   = deployed.some(x => x.param === p.param) ? ' <span style="color:var(--green);font-size:9px">✓ deployed</span>' : ' <span style="color:var(--dim);font-size:9px">skipped</span>';
+    return `<div style="font-size:11px;padding:3px 0;border-bottom:1px solid var(--border)">${arrow} <b>${p.param}</b>: ${p.current} → <span style="color:var(--amber)">${p.proposed}</span>${dep}</div>`;
+  }).join('');
+  const recsHtml = (rev.recommendations || []).map(r => `<div style="font-size:11px;padding:2px 0;color:var(--muted)">→ ${r}</div>`).join('');
+  const watchHtml = (rev.watch_out || []).map(w => `<div style="font-size:11px;padding:2px 0;color:var(--amber)">⚠ ${w}</div>`).join('');
+
+  el.innerHTML = `
+    <div style="font-size:10px;font-weight:700;color:var(--amber);text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px">Weekly Strategy Review — Claude Sonnet</div>
+    ${baselineHtml}
+    ${rev.overall_assessment ? `<div style="font-size:12px;color:var(--text);margin-bottom:10px;line-height:1.6">${rev.overall_assessment}</div>` : ''}
+    ${patternsHtml ? `<div style="font-size:9px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.07em;margin:8px 0 4px">Patterns</div>${patternsHtml}` : ''}
+    ${proposalsHtml ? `<div style="font-size:9px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.07em;margin:10px 0 4px">Parameter Proposals (${d.deployed} deployed)</div>${proposalsHtml}` : ''}
+    ${recsHtml ? `<div style="font-size:9px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.07em;margin:10px 0 4px">Recommendations</div>${recsHtml}` : ''}
+    ${watchHtml ? `<div style="font-size:9px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.07em;margin:10px 0 4px">Watch Out</div>${watchHtml}` : ''}
+    <div style="font-size:9px;color:var(--dim);margin-top:10px;padding-top:6px;border-top:1px solid var(--border)">Claude Sonnet · Weekly Review · ${new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</div>
+  `;
+}
+
+// ═══════════════════════════════════════════════════════
+// BACKTESTER
+// ═══════════════════════════════════════════════════════
+let _btJobId     = null;
+let _btPollTimer = null;
+
+function toggleBacktest() {
+  const body   = document.getElementById('backtest-body');
+  const toggle = document.getElementById('backtest-toggle');
+  const open   = body.style.display === 'none';
+  body.style.display   = open ? 'block' : 'none';
+  toggle.textContent   = open ? '▼ collapse' : '▶ expand';
+  // Sync symbol dropdown to whatever is currently on screen
+  if (open && currentSymbol) {
+    const sel = document.getElementById('bt-symbol');
+    if (sel) {
+      for (let opt of sel.options) {
+        if (opt.value === currentSymbol) { sel.value = currentSymbol; break; }
+      }
+    }
+  }
+}
+
+async function runBacktest() {
+  const sym      = document.getElementById('bt-symbol').value;
+  const interval = document.getElementById('bt-interval').value;
+  const years    = parseInt(document.getElementById('bt-years').value, 10);
+  const mode     = document.getElementById('bt-mode').value;
+  const btn      = document.getElementById('bt-run-btn');
+  const resultsEl= document.getElementById('bt-results');
+
+  btn.disabled = true;
+  btn.textContent = '⏳ Starting...';
+  resultsEl.innerHTML = '<div class="bt-progress"><div class="spinner" style="width:14px;height:14px;border-width:2px"></div>Fetching historical data and replaying signals…</div>';
+
+  // Clear any existing poll
+  if (_btPollTimer) { clearInterval(_btPollTimer); _btPollTimer = null; }
+
+  const body = { symbol: sym, interval, years };
+  if (mode === 'grid') {
+    body.param_grid = {
+      adx_threshold:   [20, 25, 30],
+      body_ratio_min:  [0.25, 0.30, 0.35],
+      score_threshold: [6.5, 7.0, 7.5, 8.0],
+      min_rr:          [2.5, 3.0, 3.5],
+    };
+  }
+
+  try {
+    const resp = await fetch('/api/backtest/run', {
+      method:  'POST',
+      headers: {'Content-Type': 'application/json'},
+      body:    JSON.stringify(body),
+    });
+    const d = await resp.json();
+    if (d.error) { resultsEl.innerHTML = `<span style="color:var(--red);font-size:11px">⚠ ${d.error}</span>`; return; }
+    _btJobId = d.job_id;
+    btn.textContent = '⏳ Running…';
+    _btPollTimer = setInterval(() => pollBacktest(resultsEl, btn, mode), 3000);
+  } catch(e) {
+    resultsEl.innerHTML = `<span style="color:var(--red);font-size:11px">⚠ ${e.message}</span>`;
+    btn.disabled = false;
+    btn.textContent = '▶ Run';
+  }
+}
+
+async function pollBacktest(resultsEl, btn, mode) {
+  if (!_btJobId) return;
+  try {
+    const sr = await fetch(`/api/backtest/status/${_btJobId}`);
+    const sd = await sr.json();
+    if (sd.status !== 'done' && sd.status !== 'error') return;
+
+    clearInterval(_btPollTimer);
+    _btPollTimer = null;
+    btn.disabled = false;
+    btn.textContent = '▶ Run';
+
+    if (sd.status === 'error') {
+      resultsEl.innerHTML = `<span style="color:var(--red);font-size:11px">⚠ Backtest error</span>`;
+      return;
+    }
+
+    const rr = await fetch(`/api/backtest/results/${_btJobId}`);
+    const rd = await rr.json();
+    renderBacktestResults(rd.results || [], resultsEl, mode);
+  } catch(e) {
+    clearInterval(_btPollTimer);
+    _btPollTimer = null;
+    btn.disabled = false;
+    btn.textContent = '▶ Run';
+    resultsEl.innerHTML = `<span style="color:var(--red);font-size:11px">⚠ Poll failed: ${e.message}</span>`;
+  }
+}
+
+function renderBacktestResults(results, el, mode) {
+  if (!results || !results.length) {
+    el.innerHTML = '<span style="color:var(--dim);font-size:11px">No results returned.</span>';
+    return;
+  }
+
+  // Filter out error rows
+  const valid = results.filter(r => !r.error);
+  if (!valid.length) {
+    el.innerHTML = `<span style="color:var(--red);font-size:11px">⚠ ${results[0]?.error || 'Unknown error'}</span>`;
+    return;
+  }
+
+  const fmt1 = n => (n == null ? '—' : Number(n).toFixed(1));
+  const fmt2 = n => (n == null ? '—' : Number(n).toFixed(2));
+  const pct  = n => (n == null ? '—' : (Number(n) * 100).toFixed(1) + '%');
+
+  const modeLabel = mode === 'grid'
+    ? `Grid search — ${valid.length} combinations (best first)`
+    : `Single run — ${valid[0].symbol} ${valid[0].interval}`;
+
+  const rows = valid.map((r, i) => {
+    const wr   = Number(r.win_rate || 0);
+    const wrCl = wr >= 0.55 ? 'bt-stat-win' : wr >= 0.40 ? 'bt-stat-ok' : 'bt-stat-loss';
+    const pf   = Number(r.profit_factor || 0);
+    const pfCl = pf >= 1.5  ? 'bt-stat-win' : pf >= 1.0  ? 'bt-stat-ok' : 'bt-stat-loss';
+    const best = i === 0 && mode === 'grid' ? 'bt-best' : '';
+
+    const paramsSnip = mode === 'grid'
+      ? `<div style="font-size:9px;color:var(--dim);margin-top:2px">ADX:${r.params?.adx_threshold} · Body:${r.params?.body_ratio_min} · Thr:${r.params?.score_threshold} · R:R:${r.params?.min_rr}</div>`
+      : '';
+
+    return `<tr class="${best}">
+      <td>${r.symbol?.replace('USDT','') || '—'} ${r.interval || ''}${paramsSnip}</td>
+      <td>${r.total_trades ?? '—'}</td>
+      <td class="${wrCl}">${pct(r.win_rate)}</td>
+      <td>${fmt2(r.avg_rr)}</td>
+      <td class="${pfCl}">${fmt2(r.profit_factor)}</td>
+      <td style="color:var(--amber)">${fmt2(r.max_drawdown)}R</td>
+    </tr>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="font-size:9px;color:var(--dim);margin-bottom:8px;text-transform:uppercase;letter-spacing:.07em">${modeLabel}</div>
+    <table class="bt-table">
+      <thead><tr>
+        <th>Symbol / Params</th><th>Trades</th><th>Win %</th><th>Avg R:R</th><th>P.Factor</th><th>Drawdown</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+// ═══════════════════════════════════════════════════════
+// RESEARCH CAMPAIGN
+// ═══════════════════════════════════════════════════════
+const CAMP_SYMBOLS   = ['BTCUSDT','ETHUSDT','XRPUSDT','DOGEUSDT'];
+const CAMP_INTERVALS = ['15m','4h'];
+let _campId       = null;
+let _campPollTimer= null;
+let _campApplied  = {};  // tracks which rows have been applied: key → true
+
+async function runCampaign() {
+  const btn     = document.getElementById('bt-campaign-btn');
+  const results = document.getElementById('bt-results');
+  btn.disabled  = true;
+  btn.textContent = '⏳ Launching…';
+
+  // Clear previous poll
+  if (_campPollTimer) { clearInterval(_campPollTimer); _campPollTimer = null; }
+  _campApplied = {};
+
+  // Initial progress grid
+  results.innerHTML = buildCampGrid({});
+
+  try {
+    const resp = await fetch('/api/backtest/campaign', {
+      method:  'POST',
+      headers: {'Content-Type': 'application/json'},
+      body:    JSON.stringify({
+        symbols:   CAMP_SYMBOLS,
+        intervals: CAMP_INTERVALS,
+      }),
+    });
+    const d = await resp.json();
+    if (d.error) throw new Error(d.error);
+    _campId = d.campaign_id;
+    btn.textContent = '⏳ Running…';
+    results.innerHTML = buildCampGrid(d.jobs || {});
+    _campPollTimer = setInterval(() => pollCampaign(results, btn), 5000);
+  } catch(e) {
+    results.innerHTML = `<span style="color:var(--red);font-size:11px">⚠ ${e.message}</span>`;
+    btn.disabled = false;
+    btn.textContent = '🔬 Run Research Campaign';
+  }
+}
+
+function buildCampGrid(jobs) {
+  const cells = CAMP_SYMBOLS.flatMap(sym => CAMP_INTERVALS.map(iv => {
+    const key  = `${sym}_${iv}`;
+    const job  = jobs[key] || {};
+    const st   = job.status || 'queued';
+    const dot  = st === 'done'    ? '<span style="color:var(--green)">✓</span>'
+               : st === 'error'   ? '<span style="color:var(--red)">✗</span>'
+               : st === 'running' ? '<span style="color:var(--amber)">⏳</span>'
+               :                    '<span style="color:var(--dim)">—</span>';
+    return `<div class="camp-cell ${st}" id="camp-cell-${key}">
+      <div class="camp-cell-sym">${sym.replace('USDT','')} <span class="camp-cell-tf">${iv.toUpperCase()}</span></div>
+      <div class="camp-cell-stat">${dot} ${st}</div>
+    </div>`;
+  }));
+  return `
+    <div style="font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px">
+      Campaign progress — 27 param combos × 8 jobs · runs in background
+    </div>
+    <div class="camp-grid">${cells.join('')}</div>
+    <div id="camp-results-table"></div>
+  `;
+}
+
+async function pollCampaign(resultsEl, btn) {
+  if (!_campId) return;
+  try {
+    const sr = await fetch(`/api/backtest/campaign/status/${_campId}`);
+    const sd = await sr.json();
+
+    // Update progress cells
+    for (const [key, job] of Object.entries(sd.jobs || {})) {
+      const cell = document.getElementById(`camp-cell-${key}`);
+      if (!cell) continue;
+      const st = job.status;
+      cell.className = `camp-cell ${st}`;
+      const dot = st === 'done'    ? '<span style="color:var(--green)">✓</span>'
+                : st === 'error'   ? '<span style="color:var(--red)">✗</span>'
+                : st === 'running' ? '<span style="color:var(--amber)">⏳</span>'
+                :                    '<span style="color:var(--dim)">—</span>';
+      cell.querySelector('.camp-cell-stat').innerHTML = `${dot} ${st}`;
+    }
+
+    if (sd.status !== 'done') return;  // still running
+
+    // All done — fetch and render results
+    clearInterval(_campPollTimer);
+    _campPollTimer = null;
+    btn.disabled   = false;
+    btn.textContent = '🔬 Run Research Campaign';
+
+    const rr = await fetch(`/api/backtest/campaign/results/${_campId}`);
+    const rd = await rr.json();
+    renderCampaignResults(rd.results || {});
+  } catch(e) {
+    // transient poll error — keep polling
+  }
+}
+
+function renderCampaignResults(results) {
+  const tbl = document.getElementById('camp-results-table');
+  if (!tbl) return;
+
+  const pct  = n => n == null ? '—' : (Number(n)*100).toFixed(1)+'%';
+  const fmt2 = n => n == null ? '—' : Number(n).toFixed(2);
+
+  const rows = Object.entries(results).map(([key, r]) => {
+    const sym = (r.symbol || key.split('_')[0]).replace('USDT','');
+    const iv  = r.interval || key.split('_')[1] || '';
+
+    if (r.status === 'error') {
+      return `<tr>
+        <td><b>${sym}</b></td><td>${iv.toUpperCase()}</td>
+        <td colspan="5" style="color:var(--red)">Error: ${r.error}</td>
+        <td>—</td>
+      </tr>`;
+    }
+    if (r.status !== 'done' || !r.best) {
+      return `<tr>
+        <td><b>${sym}</b></td><td>${iv.toUpperCase()}</td>
+        <td colspan="5" style="color:var(--dim)">No results</td>
+        <td>—</td>
+      </tr>`;
+    }
+
+    const b    = r.best;
+    const wr   = Number(b.win_rate || 0);
+    const wrCl = wr >= 0.55 ? 'bt-stat-win' : wr >= 0.40 ? 'bt-stat-ok' : 'bt-stat-loss';
+    const pf   = Number(b.profit_factor || 0);
+    const pfCl = pf >= 1.5  ? 'bt-stat-win' : pf >= 1.0  ? 'bt-stat-ok' : 'bt-stat-loss';
+    const p    = b.params || {};
+    const applied = _campApplied[key];
+    const btnHtml = applied
+      ? `<span class="camp-applied">✓ applied</span>`
+      : `<button class="camp-apply-btn" id="apply-btn-${key}"
+           onclick="applySymbolParams('${r.symbol}','${iv}',${JSON.stringify(JSON.stringify(p))},'${key}')">
+           Apply to scanner
+         </button>`;
+
+    return `<tr class="camp-best-row" id="camp-row-${key}">
+      <td><b>${sym}</b></td>
+      <td>${iv.toUpperCase()}</td>
+      <td>${b.total_trades ?? '—'} trades</td>
+      <td class="${wrCl}">${pct(b.win_rate)}</td>
+      <td class="${pfCl}">${fmt2(b.profit_factor)}</td>
+      <td style="color:var(--amber)">${fmt2(b.max_drawdown)}R</td>
+      <td style="font-size:10px;color:var(--dim)">ADX:${p.adx_threshold} Thr:${p.score_threshold} R:R:${p.min_rr}</td>
+      <td>${btnHtml}</td>
+    </tr>`;
+  });
+
+  tbl.innerHTML = `
+    <div style="font-size:9px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.07em;margin:12px 0 6px">
+      Best params per symbol — click Apply to activate for live scanner
+    </div>
+    <table class="camp-table">
+      <thead><tr>
+        <th>Symbol</th><th>TF</th><th>Trades</th><th>Win %</th><th>P.Factor</th><th>Drawdown</th><th>Best Params</th><th>Action</th>
+      </tr></thead>
+      <tbody>${rows.join('')}</tbody>
+    </table>
+  `;
+}
+
+async function applySymbolParams(symbol, interval, paramsJson, key) {
+  const btn = document.getElementById(`apply-btn-${key}`);
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  try {
+    const params = JSON.parse(paramsJson);
+    const resp = await fetch('/api/apply-symbol-params', {
+      method:  'POST',
+      headers: {'Content-Type': 'application/json'},
+      body:    JSON.stringify({symbol, interval, params}),
+    });
+    const d = await resp.json();
+    if (d.error) throw new Error(d.error);
+    _campApplied[key] = true;
+    if (btn) btn.parentElement.innerHTML = '<span class="camp-applied">✓ applied</span>';
+  } catch(e) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Apply to scanner'; }
+    alert(`Failed to apply: ${e.message}`);
+  }
 }
 
 function showLoading(msg) {

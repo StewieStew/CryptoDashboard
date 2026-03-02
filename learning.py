@@ -974,3 +974,133 @@ def get_learning_state() -> dict:
         "total_closed":     len(closed),
         "adaptation_log":   get_adaptation_log(10),
     }
+
+
+# ─────────────────────────────────────────────
+# REGIME STORAGE (per-symbol)
+# ─────────────────────────────────────────────
+
+def save_regime(symbol: str, regime: dict) -> None:
+    """Store the detected market regime for a symbol in the config table."""
+    with _lock:
+        db = _conn()
+        try:
+            _set_cfg(db, f"regime_{symbol.upper()}", json.dumps(regime))
+            db.commit()
+        finally:
+            db.close()
+
+
+def get_regime(symbol: str) -> dict | None:
+    """Retrieve the last detected regime for a symbol, or None if not yet stored."""
+    raw = _get_cfg(f"regime_{symbol.upper()}", None)
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
+# ─────────────────────────────────────────────
+# AUTO-DEPLOY (Weekly Review)
+# ─────────────────────────────────────────────
+
+def auto_deploy_params(new_params: dict, reason: str, improvement: dict) -> bool:
+    """
+    Auto-deploy parameter changes validated by the weekly Claude review.
+    Updates config keys and logs to adaptation_log with source='weekly_review'.
+    Returns True if at least one parameter was changed.
+
+    Supported param names:
+        signal_threshold, stop_multiplier, adx_threshold, body_ratio_min, min_rr
+        weight_<factor>  (e.g. weight_regime, weight_bos, ...)
+    """
+    _PARAM_MAP = {
+        "signal_threshold": "signal_threshold",
+        "stop_multiplier":  "stop_multiplier",
+        "adx_threshold":    "adx_threshold",
+        "body_ratio_min":   "body_ratio_min",
+        "min_rr":           "min_rr",
+    }
+
+    changed = []
+    with _lock:
+        db = _conn()
+        try:
+            weights         = get_weights()
+            weights_changed = False
+
+            for param, value in new_params.items():
+                if param.startswith("weight_"):
+                    factor = param[len("weight_"):]
+                    if factor in weights:
+                        old_val = weights[factor]
+                        weights[factor] = round(float(value), 3)
+                        changed.append(
+                            f"⚙ Weekly review: '{param}' {old_val:.3f}→{float(value):.3f} — {reason}"
+                        )
+                        weights_changed = True
+
+                elif param in _PARAM_MAP:
+                    cfg_key = _PARAM_MAP[param]
+                    old_raw = _get_cfg(cfg_key, "?")
+                    _set_cfg(db, cfg_key, str(round(float(value), 4)))
+                    changed.append(
+                        f"⚙ Weekly review: '{param}' {old_raw}→{value} — {reason}"
+                    )
+
+            if weights_changed:
+                _set_cfg(db, "weights", json.dumps(weights))
+
+            if changed:
+                db.execute(
+                    "INSERT INTO adaptation_log (timestamp, changes_json) VALUES (?, ?)",
+                    (
+                        datetime.now(timezone.utc).isoformat(),
+                        json.dumps({
+                            "source":      "weekly_review",
+                            "changes":     changed,
+                            "improvement": improvement,
+                        }),
+                    ),
+                )
+                db.commit()
+        finally:
+            db.close()
+
+    return len(changed) > 0
+
+
+# ─────────────────────────────────────────────
+# PER-SYMBOL PARAMS (Research Campaign)
+# ─────────────────────────────────────────────
+
+def save_symbol_params(symbol: str, interval: str, params: dict) -> None:
+    """
+    Save the best backtest-validated parameters for a specific symbol+interval.
+    Stored in the config table as JSON under key 'sym_params_{SYMBOL}_{INTERVAL}'.
+    The live scanner will use these instead of global defaults when present.
+    """
+    key = f"sym_params_{symbol.upper()}_{interval}"
+    with _lock:
+        db = _conn()
+        try:
+            _set_cfg(db, key, json.dumps(params))
+            db.commit()
+        finally:
+            db.close()
+
+
+def get_symbol_params(symbol: str, interval: str) -> dict | None:
+    """
+    Retrieve per-symbol params set by a research campaign, or None if not saved.
+    """
+    key = f"sym_params_{symbol.upper()}_{interval}"
+    raw = _get_cfg(key, None)
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except Exception:
+        return None

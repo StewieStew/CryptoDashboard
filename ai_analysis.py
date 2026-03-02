@@ -421,3 +421,140 @@ Respond with this exact JSON:
         return json.loads(msg.content[0].text.strip())
     except Exception:
         return {}
+
+
+# ── Weekly strategy review ────────────────────────────────────────────────────
+
+def get_weekly_review(trade_history: list,
+                      current_params: dict,
+                      learning_state: dict | None = None) -> dict:
+    """
+    Weekly Claude Sonnet review: reads closed trades, identifies patterns,
+    and proposes concrete parameter changes with safety caps (±20% per cycle).
+
+    Returns:
+        {
+            overall_assessment: str,
+            patterns: [str],
+            parameter_proposals: [
+                {param, current, proposed, reason, change_pct}
+            ],
+            recommendations: [str],
+            watch_out: [str]
+        }
+    or {} on failure / insufficient data.
+    """
+    client = _get_client()
+    if not client:
+        return {}
+
+    closed = [t for t in trade_history if t.get("status") in ("win", "loss")]
+    if len(closed) < 10:
+        return {"error": f"Need at least 10 closed trades (have {len(closed)})"}
+
+    wins = [t for t in closed if t.get("status") == "win"]
+
+    # Per-symbol breakdown
+    by_sym: dict = {}
+    for t in closed:
+        s = t.get("symbol", "?")
+        if s not in by_sym:
+            by_sym[s] = {"wins": 0, "losses": 0, "total_roi": 0.0}
+        if t.get("status") == "win":
+            by_sym[s]["wins"] += 1
+        else:
+            by_sym[s]["losses"] += 1
+        by_sym[s]["total_roi"] += float(t.get("roi_pct") or 0)
+
+    # Factor win rates
+    factor_wins: dict = {}
+    for t in closed:
+        snap = t.get("factors_snapshot") or {}
+        if isinstance(snap, str):
+            try:
+                snap = json.loads(snap)
+            except Exception:
+                snap = {}
+        for f, present in snap.items():
+            if f not in factor_wins:
+                factor_wins[f] = {"wins": 0, "losses": 0}
+            if present:
+                if t.get("status") == "win":
+                    factor_wins[f]["wins"] += 1
+                else:
+                    factor_wins[f]["losses"] += 1
+
+    summary = {
+        "total_trades":  len(closed),
+        "win_rate_pct":  round(len(wins) / len(closed) * 100, 1),
+        "avg_roi_pct":   round(sum(t.get("roi_pct") or 0 for t in closed) / len(closed), 2),
+        "per_symbol":    by_sym,
+        "factor_stats":  factor_wins,
+    }
+
+    recent_fields = ["symbol", "interval", "direction", "score", "roi_pct",
+                     "status", "reason", "factors_snapshot"]
+    recent = [{k: t.get(k) for k in recent_fields} for t in closed[-20:]]
+
+    adapt_log = (learning_state or {}).get("adaptation_log", [])[:5]
+
+    prompt = f"""You are a trading system optimizer. Analyze this crypto algorithmic trading system's \
+performance and propose specific, measurable parameter changes backed by the data.
+
+PERFORMANCE SUMMARY:
+{json.dumps(summary, indent=2)}
+
+CURRENT PARAMETERS:
+{json.dumps(current_params, indent=2)}
+
+RECENT TRADES (last 20, oldest first):
+{json.dumps(recent, indent=2)}
+
+RECENT ADAPTATION LOG (last 5 events):
+{json.dumps(adapt_log, indent=2)}
+
+VALID PARAMETER NAMES (use ONLY these):
+  signal_threshold, stop_multiplier, adx_threshold, body_ratio_min, min_rr,
+  weight_regime, weight_bos, weight_sweep, weight_volume, weight_obv, weight_rsi, weight_adx
+
+RULES FOR PROPOSALS:
+- Keep each change within ±20% of the current value (hard safety cap)
+- Only propose a change when you have clear data support (≥5 trades of evidence)
+- Prefer small targeted changes over sweeping overhauls
+
+Respond with ONLY this JSON (no markdown, no text outside the JSON):
+{{"overall_assessment": "<1-2 sentences on system health>",
+  "patterns": ["<observed pattern with specific evidence>"],
+  "parameter_proposals": [
+    {{"param": "<param_name>", "current": <current_value>, "proposed": <new_value>,
+      "reason": "<specific data-backed reason, ≤60 words>"}}
+  ],
+  "recommendations": ["<specific actionable non-parameter recommendation>"],
+  "watch_out": ["<specific risk or pattern to monitor>"]}}"""
+
+    try:
+        msg = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=800,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1].lstrip("json").strip()
+        result = json.loads(raw)
+
+        # Enforce ±20% safety cap on every proposal
+        for proposal in result.get("parameter_proposals", []):
+            try:
+                current  = float(proposal.get("current", 0))
+                proposed = float(proposal.get("proposed", 0))
+                if current > 0:
+                    capped   = max(current * 0.80, min(current * 1.20, proposed))
+                    proposal["proposed"]   = round(capped, 4)
+                    proposal["change_pct"] = round((capped - current) / current * 100, 1)
+            except Exception:
+                pass
+
+        return result
+    except Exception:
+        return {}

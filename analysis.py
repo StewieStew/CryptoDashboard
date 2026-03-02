@@ -887,16 +887,23 @@ def chart_for_timeframe(symbol: str, interval: str) -> dict:
 
 def generate_signal(confluence: dict, structure, risk: dict, h4_df,
                     signal_threshold: float | None = None,
-                    interval: str = "4h") -> dict | None:
+                    interval: str = "4h",
+                    body_ratio_min: float = 0.30,
+                    min_rr: float = 3.0,
+                    rsi_long_range: tuple = (40.0, 65.0),
+                    rsi_short_range: tuple = (35.0, 60.0),
+                    level_touch_min: int = 2) -> dict | None:
     """
     Returns a signal dict only when ALL hard gates pass and score >= threshold.
 
     Hard gates (all must be True):
-      - Score >= adaptive threshold (default 8.0)
+      - Score >= adaptive threshold (default 7.0)
       - BOS confirmed
-      - ADX > 25 (trending market — ranging markets produce false BOS)
+      - ADX > threshold (trending market — ranging markets produce false BOS)
       - Volume expanding (low-volume breakouts are almost always fake)
-      - R:R >= 3:1
+      - R:R >= min_rr
+
+    All gate parameters are configurable for backtesting / regime switching.
     """
     threshold = signal_threshold if signal_threshold is not None else get_threshold()
     if confluence["score"] < threshold:
@@ -922,7 +929,7 @@ def generate_signal(confluence: dict, structure, risk: dict, h4_df,
     body_sz    = float(abs(last["close"] - last["open"]))
     body_ratio = body_sz / total_rng if total_rng > 0 else 0
 
-    if body_ratio < 0.30:
+    if body_ratio < body_ratio_min:
         return None  # Doji / spinning top — indecision candle, not a BOS
 
     if structure["bullish_bos"] and last["close"] < last["open"]:
@@ -932,25 +939,22 @@ def generate_signal(confluence: dict, structure, risk: dict, h4_df,
 
     # ── Hard gate 4: RSI range (pullback zone) ────────────────────────────────
     # We want to enter during a pullback, not at exhausted extremes.
-    # Long: RSI 40–65 (cooling from overbought, momentum still positive)
-    # Short: RSI 35–60 (cooling from oversold, momentum still negative)
     rsi_val = float(snap.get("rsi_value", 50.0))
-    if structure["bullish_bos"] and not (40.0 <= rsi_val <= 65.0):
-        return None  # RSI overbought (>65) or too weak (<40) for long entry
-    if structure["bearish_bos"] and not (35.0 <= rsi_val <= 60.0):
-        return None  # RSI oversold (<35) or too strong (>60) for short entry
+    if structure["bullish_bos"] and not (rsi_long_range[0] <= rsi_val <= rsi_long_range[1]):
+        return None  # RSI overbought or too weak for long entry
+    if structure["bearish_bos"] and not (rsi_short_range[0] <= rsi_val <= rsi_short_range[1]):
+        return None  # RSI oversold or too strong for short entry
 
     # ── Hard gate 5: Level significance ──────────────────────────────────────
     # The broken level (our entry) must be a tested, meaningful level —
-    # at least 2 candles touched it, confirming it as real S/R, not noise.
+    # at least level_touch_min candles touched it, confirming it as real S/R.
     entry_price = risk.get("entry", risk["current"])
     level_col   = "high" if structure["bullish_bos"] else "low"
     touch_count = int((abs(h4_df[level_col] - entry_price) / entry_price <= 0.005).sum())
-    if touch_count < 2:
-        return None  # Level only touched once — not confirmed as key S/R
+    if touch_count < level_touch_min:
+        return None  # Level not confirmed as key S/R
 
     # ── Hard R:R gate ─────────────────────────────────────────────────────────
-    min_rr = 3.0
     if risk.get("rr", 0) < min_rr:
         return None
 
