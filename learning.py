@@ -32,7 +32,7 @@ DEFAULT_WEIGHTS = {
     "adx":    1.0,   # ADX trend strength
     # Max = 10 pts
 }
-DEFAULT_THRESHOLD = 8.0    # minimum score to fire a signal (raised from 7.0)
+DEFAULT_THRESHOLD = 7.0    # minimum score to fire a signal
 DEFAULT_STOP_MULT = 0.1    # ATR wick buffer on structural stop (was 0.5 main stop)
 ADAPT_WINDOW      = 8      # trades to look back per-factor
 MIN_SAMPLES       = 2      # minimum trades before adapting a factor
@@ -92,8 +92,9 @@ def _init_db():
             db.execute("INSERT OR IGNORE INTO config (key, value) VALUES (?, ?)", (k, v))
         db.commit()
 
-        # ── Config migrations: upgrade threshold/stop_mult to new defaults ──
-        db.execute("UPDATE config SET value=? WHERE key='signal_threshold' AND CAST(value AS REAL) < 8.0",
+        # ── Config migrations ──────────────────────────────────────────────
+        # Lower threshold from 8.0 → 7.0 (hard gates now do the heavy filtering)
+        db.execute("UPDATE config SET value=? WHERE key='signal_threshold' AND CAST(value AS REAL) = 8.0",
                    (str(DEFAULT_THRESHOLD),))
         db.execute("UPDATE config SET value=? WHERE key='stop_multiplier' AND CAST(value AS REAL) >= 0.4",
                    (str(DEFAULT_STOP_MULT),))
