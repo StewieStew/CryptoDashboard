@@ -156,9 +156,14 @@ def detect_fvg(df: pd.DataFrame, lookback: int = 100) -> list:
     Bullish FVG: candle[i+1].low > candle[i-1].high  (gap up — unfilled buy imbalance)
     Bearish FVG: candle[i+1].high < candle[i-1].low  (gap down — unfilled sell imbalance)
 
-    Price tends to retrace into these gaps before continuing the trend.
+    Each FVG includes fill status:
+      filled       — price has completely passed through (gap no longer valid)
+      in_zone      — price is currently inside the gap (active entry zone)
+      untouched    — price has not yet returned to the gap (future entry opportunity)
+
     Returns last 5 significant FVGs (≥0.1% size).
     """
+    cur      = float(df["close"].iloc[-1])
     recent   = df.iloc[-lookback:]
     candles  = list(recent.itertuples())
     fvgs     = []
@@ -166,27 +171,44 @@ def detect_fvg(df: pd.DataFrame, lookback: int = 100) -> list:
     for i in range(1, len(candles) - 1):
         c1, c3 = candles[i - 1], candles[i + 1]
 
-        if c3.low > c1.high:                          # Bullish FVG
+        if c3.low > c1.high:                          # Bullish FVG (gap up)
             size_pct = (c3.low - c1.high) / c1.high * 100
             if size_pct >= 0.1:
+                lower = round(float(c1.high), 6)
+                upper = round(float(c3.low),  6)
+                # Filled: price has dropped below the lower boundary
+                # In-zone: price is currently between lower and upper
+                filled   = cur < lower
+                in_zone  = lower <= cur <= upper
                 fvgs.append({
-                    "type":     "bullish",
-                    "upper":    round(float(c3.low),  6),
-                    "lower":    round(float(c1.high), 6),
-                    "midpoint": round((float(c3.low) + float(c1.high)) / 2, 6),
-                    "time":     int(c3.Index.timestamp()),
-                    "size_pct": round(size_pct, 3),
+                    "type":      "bullish",
+                    "upper":     upper,
+                    "lower":     lower,
+                    "midpoint":  round((upper + lower) / 2, 6),
+                    "time":      int(c3.Index.timestamp()),
+                    "size_pct":  round(size_pct, 3),
+                    "filled":    filled,
+                    "in_zone":   in_zone,
+                    "untouched": not filled and not in_zone,
                 })
-        elif c3.high < c1.low:                        # Bearish FVG
+        elif c3.high < c1.low:                        # Bearish FVG (gap down)
             size_pct = (c1.low - c3.high) / c1.low * 100
             if size_pct >= 0.1:
+                lower = round(float(c3.high), 6)
+                upper = round(float(c1.low),  6)
+                # Filled: price has risen above the upper boundary
+                filled   = cur > upper
+                in_zone  = lower <= cur <= upper
                 fvgs.append({
-                    "type":     "bearish",
-                    "upper":    round(float(c1.low),  6),
-                    "lower":    round(float(c3.high), 6),
-                    "midpoint": round((float(c1.low) + float(c3.high)) / 2, 6),
-                    "time":     int(c3.Index.timestamp()),
-                    "size_pct": round(size_pct, 3),
+                    "type":      "bearish",
+                    "upper":     upper,
+                    "lower":     lower,
+                    "midpoint":  round((upper + lower) / 2, 6),
+                    "time":      int(c3.Index.timestamp()),
+                    "size_pct":  round(size_pct, 3),
+                    "filled":    filled,
+                    "in_zone":   in_zone,
+                    "untouched": not filled and not in_zone,
                 })
 
     return fvgs[-5:]
@@ -633,6 +655,9 @@ def confluence_score(regime, structure, vol, rsi_data, sweeps,
         reasons.append({"pts": 0, "earned": False,
                         "text": f"ADX {adx_val:.1f} — market ranging (<25), signals carry lower win rate"})
 
+    # Store raw RSI value for downstream gates (RSI range check in generate_signal)
+    snap["rsi_value"] = round(rsi_data.get("value", 50.0), 1)
+
     score     = round(score, 1)
     max_score = 10.0  # Always display out of 10 regardless of adaptive weight drift
 
@@ -685,7 +710,9 @@ def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
         fvg_long = None
         if fvgs:
             candidates = [f["midpoint"] for f in fvgs
-                          if f["type"] == "bearish" and f["midpoint"] > entry_price]
+                          if f["type"] == "bearish"
+                          and f["midpoint"] > entry_price
+                          and not f.get("filled", False)]   # skip filled FVGs
             if candidates:
                 fvg_long = min(candidates)
 
@@ -729,7 +756,9 @@ def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
         fvg_short = None
         if fvgs:
             candidates = [f["midpoint"] for f in fvgs
-                          if f["type"] == "bullish" and f["midpoint"] < entry_price]
+                          if f["type"] == "bullish"
+                          and f["midpoint"] < entry_price
+                          and not f.get("filled", False)]   # skip filled FVGs
             if candidates:
                 fvg_short = max(candidates)
 
@@ -877,15 +906,50 @@ def generate_signal(confluence: dict, structure, risk: dict, h4_df,
 
     snap = confluence.get("factors_snapshot", {})
 
-    # Hard gate: ADX must confirm a trending market
+    # ── Hard gate 1: ADX must confirm a trending market ──────────────────────
     if not snap.get("adx"):
-        return None  # Ranging/choppy market — BOS signals fail here
+        return None  # Ranging/choppy — trend-following BOS signals fail here
 
-    # Hard gate: Volume must be expanding on the BOS candle
+    # ── Hard gate 2: Volume must expand on the BOS candle ────────────────────
     if not snap.get("volume"):
         return None  # Low-volume breakout — high false-break probability
 
-    # Hard R:R gate
+    # ── Hard gate 3: BOS candle quality ──────────────────────────────────────
+    # The candle that broke structure must be a conviction candle, not a doji.
+    # A BOS on a small-body or opposite-color candle is likely a stop hunt.
+    last       = h4_df.iloc[-1]
+    total_rng  = float(last["high"] - last["low"])
+    body_sz    = float(abs(last["close"] - last["open"]))
+    body_ratio = body_sz / total_rng if total_rng > 0 else 0
+
+    if body_ratio < 0.30:
+        return None  # Doji / spinning top — indecision candle, not a BOS
+
+    if structure["bullish_bos"] and last["close"] < last["open"]:
+        return None  # BOS candle closed bearish — wick break, not structural
+    if structure["bearish_bos"] and last["close"] > last["open"]:
+        return None  # BOS candle closed bullish — wick break, not structural
+
+    # ── Hard gate 4: RSI range (pullback zone) ────────────────────────────────
+    # We want to enter during a pullback, not at exhausted extremes.
+    # Long: RSI 40–65 (cooling from overbought, momentum still positive)
+    # Short: RSI 35–60 (cooling from oversold, momentum still negative)
+    rsi_val = float(snap.get("rsi_value", 50.0))
+    if structure["bullish_bos"] and not (40.0 <= rsi_val <= 65.0):
+        return None  # RSI overbought (>65) or too weak (<40) for long entry
+    if structure["bearish_bos"] and not (35.0 <= rsi_val <= 60.0):
+        return None  # RSI oversold (<35) or too strong (>60) for short entry
+
+    # ── Hard gate 5: Level significance ──────────────────────────────────────
+    # The broken level (our entry) must be a tested, meaningful level —
+    # at least 2 candles touched it, confirming it as real S/R, not noise.
+    entry_price = risk.get("entry", risk["current"])
+    level_col   = "high" if structure["bullish_bos"] else "low"
+    touch_count = int((abs(h4_df[level_col] - entry_price) / entry_price <= 0.005).sum())
+    if touch_count < 2:
+        return None  # Level only touched once — not confirmed as key S/R
+
+    # ── Hard R:R gate ─────────────────────────────────────────────────────────
     min_rr = 3.0
     if risk.get("rr", 0) < min_rr:
         return None
@@ -905,8 +969,8 @@ def generate_signal(confluence: dict, structure, risk: dict, h4_df,
         direction=direction,
         score=confluence["score"],
         max_score=confluence["max"],
-        entry=risk.get("entry", risk["current"]),   # structural retest level
-        current_price=risk["current"],               # where price actually is now
+        entry=entry_price,              # structural retest level
+        current_price=risk["current"],  # where BOS actually happened
         target=risk["target"],
         target_basis=risk.get("target_basis", ""),
         stop=risk["invalidation"],
@@ -916,6 +980,8 @@ def generate_signal(confluence: dict, structure, risk: dict, h4_df,
         top_reasons=top_reasons,
         bar_time=int(h4_df.index[-1].timestamp()),
         factors_snapshot=snap,
+        # Candle quality metadata (useful for Claude + dashboard display)
+        bos_body_ratio=round(body_ratio, 2),
     )
 
 

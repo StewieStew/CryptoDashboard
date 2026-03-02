@@ -416,6 +416,20 @@ def auto_close(symbol: str, interval: str, current_price: float) -> tuple:
                     except Exception:
                         pass
 
+                # ── Stagnation exit (spec §7/§8: no momentum after 12 candles)
+                # If the trade has been open > N hours AND price has barely moved
+                # (within 30% of risk distance from entry) → dead trade, exit.
+                if not hit:
+                    try:
+                        _STAG_HOURS = {"day": 3.0, "swing": 24.0}   # 12 × candle period
+                        stag_limit  = _STAG_HOURS.get(tier, 6.0)
+                        if age_h > stag_limit and risk_d > 0:
+                            move = abs(current_price - float(t["entry"]))
+                            if move < 0.30 * risk_d:  # price hasn't gone anywhere
+                                hit = "cancelled"
+                    except Exception:
+                        pass
+
                 if hit:
                     close_px = round(current_price, 8)
                     # ── Blended ROI when partial TP was already booked ───────
@@ -477,6 +491,75 @@ def update_trade_ai(trade_id: str, ai_result: dict) -> None:
             db.commit()
         finally:
             db.close()
+
+
+def update_trailing_stops(symbol: str, interval: str, current_price: float,
+                          swing_highs: list, swing_lows: list) -> list:
+    """
+    After a trade reaches 2R profit, trail the stop loss to the most recent
+    swing structure to lock in gains while letting winners run.
+
+    LONG:  trail SL up to the highest swing LOW that is above the current SL
+           (each new HL raises the floor)
+    SHORT: trail SL down to the lowest swing HIGH that is below the current SL
+           (each new LH lowers the ceiling)
+
+    swing_highs / swing_lows: flat lists of prices (floats), most recent last.
+    Returns list of trade IDs whose SL was updated.
+    """
+    updated = []
+    with _lock:
+        db = _conn()
+        try:
+            rows = db.execute(
+                "SELECT * FROM trades WHERE symbol=? AND interval=? AND status='open'",
+                (symbol, interval)
+            ).fetchall()
+            for row in rows:
+                t         = dict(row)
+                entry     = float(t["entry"])
+                current_sl = float(t["sl"])
+                risk_d    = abs(entry - current_sl)
+                direction = t["direction"]
+
+                if risk_d <= 0:
+                    continue
+
+                # Only trail once 2R in profit
+                profit_r = (
+                    (current_price - entry) / risk_d if direction == "LONG"
+                    else (entry - current_price) / risk_d
+                )
+                if profit_r < 2.0:
+                    continue
+
+                if direction == "LONG" and swing_lows:
+                    # Highest swing low that is: above current SL AND below current price
+                    candidates = [p for p in swing_lows
+                                  if p > current_sl and p < current_price]
+                    if candidates:
+                        new_sl = round(max(candidates), 8)
+                        if new_sl > current_sl:
+                            db.execute("UPDATE trades SET sl=? WHERE id=?",
+                                       (new_sl, t["id"]))
+                            updated.append(t["id"])
+
+                elif direction == "SHORT" and swing_highs:
+                    # Lowest swing high that is: below current SL AND above current price
+                    candidates = [p for p in swing_highs
+                                  if p < current_sl and p > current_price]
+                    if candidates:
+                        new_sl = round(min(candidates), 8)
+                        if new_sl < current_sl:
+                            db.execute("UPDATE trades SET sl=? WHERE id=?",
+                                       (new_sl, t["id"]))
+                            updated.append(t["id"])
+
+            if updated:
+                db.commit()
+        finally:
+            db.close()
+    return updated
 
 
 def _calc_roi(direction: str, entry: float, close_price: float) -> float:

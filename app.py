@@ -140,6 +140,24 @@ def _background_scanner() -> None:
                         session_ok = (not is_day) or _in_active_session()
 
                         if _bias_agrees(sig["direction"], htf_d) and session_ok:
+
+                            # ── Medium: 1H confirmation candle for 4H swing signals ──
+                            # For 4H entries, the most recent 1H candle must confirm
+                            # direction with a real body (not a doji or opposite colour).
+                            if interval == "4h":
+                                h1_candles = bias_cache.get("1h", {}).get("chart", {}).get("candles", [])
+                                if h1_candles:
+                                    h1 = h1_candles[-1]
+                                    h1_rng  = h1["high"] - h1["low"]
+                                    h1_body = abs(h1["close"] - h1["open"])
+                                    h1_ratio = h1_body / h1_rng if h1_rng > 0 else 0
+                                    h1_bull  = h1["close"] > h1["open"]
+                                    h1_bear  = h1["close"] < h1["open"]
+                                    if sig["direction"] == "LONG"  and not (h1_bull and h1_ratio >= 0.40):
+                                        continue  # No 1H bullish confirmation
+                                    if sig["direction"] == "SHORT" and not (h1_bear and h1_ratio >= 0.40):
+                                        continue  # No 1H bearish confirmation
+
                             trade_id  = f"{sym}_{interval}_{sig['direction']}_{int(time.time())}"
                             cur_px    = sig.get("current_price", sig["entry"])
                             vwap_val  = data.get("vwap") or 0
@@ -167,7 +185,8 @@ def _background_scanner() -> None:
                             # Every trade must pass Claude review.
                             # If API key is set but Claude fails → hold signal (no unreviewed trades).
                             has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY", ""))
-                            ohlcv = data.get("candles", [])[-20:] if data.get("candles") else []
+                            # Candles are nested inside chart dict
+                            ohlcv = data.get("chart", {}).get("candles", [])[-20:]
                             try:
                                 ctx       = market_data.get_market_context(sym)
                                 history   = learning.get_trades()
@@ -207,7 +226,7 @@ def _background_scanner() -> None:
                                         "current_price": cur_px,
                                     })
 
-                    # Auto-close trades
+                    # Auto-close trades (TP / SL / time / stagnation)
                     cur_price = data.get("current_price", 0)
                     if cur_price:
                         closed, partials = learning.auto_close(sym, interval, float(cur_price))
@@ -218,6 +237,14 @@ def _background_scanner() -> None:
                                 c, c["status"], c["close_price"], c["roi_pct"]
                             )
                         scan_closes += len(closed)
+
+                        # Trailing stop: after 2R, trail SL to structural swing
+                        swings     = data.get("swings", {})
+                        sw_highs   = [v for _, v in swings.get("highs", [])]
+                        sw_lows    = [v for _, v in swings.get("lows",  [])]
+                        learning.update_trailing_stops(
+                            sym, interval, float(cur_price), sw_highs, sw_lows
+                        )
 
                 except Exception:
                     pass
