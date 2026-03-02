@@ -400,20 +400,15 @@
           <option value="15m">15m</option>
         </select>
         <select class="bt-sel" id="bt-years" title="History">
-          <option value="1">1 year</option>
-          <option value="2" selected>2 years</option>
-          <option value="3">3 years</option>
+          <option value="1" selected>1 year</option>
         </select>
-        <select class="bt-sel" id="bt-mode" title="Mode">
-          <option value="single">Single run (default params)</option>
-          <option value="grid">Grid search (all combos)</option>
-        </select>
-        <button class="ctrl-btn" id="bt-run-btn" onclick="runBacktest()" style="color:var(--amber);border-color:rgba(245,158,11,.3)">▶ Run</button>
-        <span style="color:var(--border2);font-size:12px;margin:0 2px">|</span>
-        <button class="ctrl-btn" id="bt-campaign-btn" onclick="runCampaign()" style="color:var(--green);border-color:rgba(34,197,94,.3)" title="Full research sweep: BTC · ETH · XRP · DOGE × 15m + 4H with max history">🔬 Run Research Campaign</button>
+        <button class="ctrl-btn" id="bt-run-btn" onclick="runBacktest()" style="color:var(--amber);border-color:rgba(245,158,11,.3)">▶ Quick check</button>
+      </div>
+      <div style="font-size:10px;color:var(--dim);margin-bottom:8px;padding:5px 0;border-top:1px solid var(--border)">
+        💡 <b style="color:var(--text)">Full research campaign:</b> run <code style="background:var(--surface2);padding:1px 5px;border-radius:2px;color:var(--green)">python run_campaign.py</code> locally in your terminal. Runs all 4 coins × 2 timeframes with max history — too heavy for Render.
       </div>
       <div id="bt-results">
-        <span style="color:var(--dim);font-size:11px;font-style:italic">Select options and click Run — or use Research Campaign for a full BTC/ETH/XRP/DOGE sweep.</span>
+        <span style="color:var(--dim);font-size:11px;font-style:italic">Single run with current default params — 1 yr history.</span>
       </div>
     </div>
   </div>
