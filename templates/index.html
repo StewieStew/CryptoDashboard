@@ -1,3157 +1,369 @@
 <!DOCTYPE html>
-<html lang="en" data-bs-theme="dark">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Crypto Analysis Dashboard</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-  <script src="https://s3.tradingview.com/tv.js"></script>
-  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Crypto Dashboard — Trades</title>
   <style>
-    :root {
-      --bg:      #080808;
-      --surface: #111111;
-      --surface2:#181818;
-      --border:  #1e1e1e;
-      --border2: #282828;
-      --text:    #e0e0e0;
-      --dim:     #555555;
-      --muted:   #888888;
-      --green:   #22c55e;
-      --red:     #ef4444;
-      --amber:   #f59e0b;
-      --blue:    #3b82f6;
-      --purple:  #a855f7;
-      --orange:  #f97316;
-      /* legacy aliases for render functions */
-      --text-dim: #888888;
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0f0f0f;
+      color: #e0e0e0;
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+      font-size: 13px;
+      min-height: 100vh;
     }
-    *{box-sizing:border-box;}
-    body { background:var(--bg); color:var(--text); font-family:'SF Mono','Cascadia Code','Fira Code',Consolas,monospace; font-size:12px; line-height:1.4; }
 
-    /* ── TOPBAR ── */
-    #topbar { position:sticky; top:0; z-index:100; background:var(--bg); border-bottom:1px solid var(--border); height:44px; padding:0 12px; display:flex; align-items:center; justify-content:space-between; gap:8px; }
-    .sym-btn { background:transparent; border:1px solid var(--border2); color:var(--muted); border-radius:3px; padding:3px 10px; font-size:11px; font-weight:700; font-family:inherit; cursor:pointer; transition:all .1s; white-space:nowrap; }
-    .sym-btn:hover  { border-color:var(--blue); color:var(--blue); }
-    .sym-btn.active { border-color:var(--text); color:var(--text); background:#1a1a1a; }
-    .sym-btn.remove { font-size:9px; padding:2px 5px; color:var(--red); background:transparent; border:none; }
-    .ctrl-btn { background:transparent; border:1px solid var(--border2); color:var(--dim); border-radius:3px; padding:3px 10px; font-size:11px; font-family:inherit; cursor:pointer; transition:all .1s; white-space:nowrap; }
-    .ctrl-btn:hover { color:var(--text); border-color:var(--muted); }
+    header {
+      background: #111;
+      border-bottom: 1px solid #222;
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
 
-    /* ── METRICS STRIP ── */
-    #metrics-strip { background:var(--surface); border-bottom:1px solid var(--border); padding:0 12px; display:flex; align-items:center; flex-wrap:wrap; min-height:34px; }
-    .metric { display:flex; align-items:baseline; gap:4px; padding:4px 10px; border-right:1px solid var(--border); }
-    .metric:first-child { padding-left:0; }
-    .metric .mlabel { font-size:9px; color:var(--dim); text-transform:uppercase; letter-spacing:.08em; white-space:nowrap; }
-    .metric .mvalue { font-size:12px; font-weight:700; color:var(--text); white-space:nowrap; }
-    /* legacy aliases */
-    .metric .label { font-size:9px; color:var(--dim); text-transform:uppercase; letter-spacing:.08em; white-space:nowrap; }
-    .metric .value { font-size:12px; font-weight:700; color:var(--text); white-space:nowrap; }
-    .tf-group { display:flex; align-items:center; gap:3px; padding:4px 10px; margin-left:auto; }
-    .tf-btn { background:transparent; border:1px solid var(--border2); color:var(--dim); border-radius:3px; padding:2px 8px; font-size:10px; font-weight:700; font-family:inherit; cursor:pointer; transition:all .1s; letter-spacing:.03em; }
-    .tf-btn:hover  { border-color:var(--blue); color:var(--blue); }
-    .tf-btn.active { border-color:var(--text); color:var(--text); }
-    #tf-label { display:none; }
+    header h1 {
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      color: #fff;
+    }
 
-    /* ── CHARTS ── */
-    .charts-wrap { background:var(--bg); }
-    #chart-wrap { position:relative; }
-    #tv-chart-container { height:520px; width:100%; }
-    #tv-loading { display:none; position:absolute; inset:0; background:var(--surface); align-items:center; justify-content:center; flex-direction:column; gap:8px; z-index:10; }
+    #refresh-indicator {
+      font-size: 11px;
+      color: #555;
+    }
 
-    /* ── SIGNAL BAR ── */
-    #signal-bar { background:var(--surface); border-top:1px solid var(--border); border-bottom:1px solid var(--border); padding:4px 12px; min-height:28px; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
-    #signal-bar .sig-label { font-size:9px; color:var(--dim); text-transform:uppercase; letter-spacing:.06em; }
-    #signal-bar .sig-dir   { font-size:12px; font-weight:800; }
-    #signal-bar .sig-val   { font-size:11px; font-weight:600; }
-    #signal-bar .sig-dim   { font-size:9px; color:var(--dim); }
+    #refresh-indicator.refreshing { color: #4ade80; }
 
-    /* ── TRADE LEVELS ── */
-    #trade-levels { background:var(--surface2); border-bottom:1px solid var(--border); padding:4px 12px; display:none; gap:10px; flex-wrap:wrap; align-items:center; }
-    .tl-item { display:flex; align-items:center; gap:4px; font-size:10px; }
-    .tl-badge { font-size:9px; font-weight:700; padding:1px 4px; border-radius:2px; text-transform:uppercase; }
+    /* Summary bar */
+    .summary {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      padding: 16px 24px;
+      background: #111;
+      border-bottom: 1px solid #1e1e1e;
+    }
 
-    /* ── TA CHART ── */
-    #signal-chart-wrap { background:var(--surface); border-bottom:1px solid var(--border); }
-    #signal-chart-header { padding:5px 12px 2px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:6px; }
-    #signal-chart-header .sc-title { font-size:9px; color:var(--dim); text-transform:uppercase; letter-spacing:.08em; }
-    #signal-chart-header .sc-legend { display:flex; gap:10px; font-size:9px; }
-    #signal-chart { width:100%; height:280px; }
+    .stat {
+      background: #1a1a1a;
+      border: 1px solid #222;
+      border-radius: 6px;
+      padding: 10px 16px;
+      min-width: 120px;
+    }
 
-    /* ── AI SECTION ── */
-    #ai-section { background:var(--surface); border-bottom:1px solid var(--border); }
-    #ai-section-header { padding:8px 12px 7px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--border); }
-    #ai-section-header .ai-title { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--purple); }
-    #ai-section-header .ai-sub { font-size:9px; color:var(--dim); margin-left:8px; }
-    #ai-section-body { padding:10px 12px; }
-    .ai-bias-pill { display:inline-block; font-size:13px; font-weight:800; padding:3px 12px; border-radius:3px; letter-spacing:.03em; }
-    .ai-bias-long    { background:rgba(34,197,94,.12); color:var(--green); border:1px solid rgba(34,197,94,.25); }
-    .ai-bias-short   { background:rgba(239,68,68,.12);  color:var(--red);   border:1px solid rgba(239,68,68,.25); }
-    .ai-bias-neutral { background:rgba(136,136,136,.08); color:var(--muted); border:1px solid var(--border2); }
-    .ai-conf-bar  { background:var(--border2); border-radius:2px; height:4px; width:100%; overflow:hidden; margin:4px 0 8px; }
-    .ai-conf-fill { height:100%; border-radius:2px; transition:width .4s; }
-    .ai-level { font-size:11px; color:var(--muted); padding:2px 0; border-bottom:1px solid var(--border); }
-    .ai-level:last-child { border-bottom:none; }
-    .ai-risk  { font-size:10px; color:var(--amber); padding:2px 0; }
-    .ai-rec-badge { font-size:10px; font-weight:700; padding:1px 6px; border-radius:2px; white-space:nowrap; }
-    .ai-rec-strong { background:rgba(34,197,94,.12); color:var(--green); }
-    .ai-rec-take   { background:rgba(59,130,246,.12); color:var(--blue); }
-    .ai-rec-skip   { background:rgba(239,68,68,.12); color:var(--red); }
+    .stat-label {
+      font-size: 10px;
+      color: #555;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 4px;
+    }
 
-    /* ── 3-COLUMN GRID ── */
-    .grid-3 { display:grid; grid-template-columns:280px 280px 1fr; border-top:1px solid var(--border); }
-    .grid-col { border-right:1px solid var(--border); overflow-y:auto; max-height:calc(100vh - 200px); min-height:400px; }
-    .grid-col:last-child { border-right:none; }
-    .panel { border-bottom:1px solid var(--border); }
-    .panel-hdr { padding:7px 10px 6px; border-bottom:1px solid var(--border); font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); display:flex; align-items:center; justify-content:space-between; }
-    .panel-body { padding:8px 10px; }
-    .card-hdr-toggle { cursor:pointer; }
-    .card-hdr-toggle:hover { color:var(--text); }
+    .stat-value {
+      font-size: 18px;
+      font-weight: 600;
+      color: #e0e0e0;
+    }
 
-    /* ── CARDS / INFO ROWS (used by render functions) ── */
-    .info-row { display:flex; justify-content:space-between; align-items:baseline; padding:3px 0; border-bottom:1px solid var(--border); font-size:11px; }
-    .info-row:last-child { border-bottom:none; }
-    .info-label { color:var(--muted); }
-    .info-val   { text-align:right; font-weight:600; }
-    .badge-regime { display:inline-block; font-size:11px; font-weight:700; padding:3px 8px; border-radius:3px; margin-bottom:6px; }
-    .conf-bar-wrap { background:var(--border2); border-radius:3px; height:6px; width:100%; overflow:hidden; margin:4px 0; }
-    .conf-bar-fill { height:100%; border-radius:3px; transition:width .4s; }
-    .conf-reason { font-size:10px; padding:2px 0; display:flex; align-items:flex-start; gap:5px; }
-    .conf-dot { width:6px; height:6px; border-radius:50%; margin-top:3px; flex-shrink:0; }
-    .score-badge { font-size:30px; font-weight:800; line-height:1; }
-    .score-label { font-size:9px; text-transform:uppercase; letter-spacing:.06em; margin-top:2px; }
-    .fib-row { display:flex; justify-content:space-between; font-size:11px; padding:2px 0; border-bottom:1px solid var(--border); }
-    .sweep-pill { font-size:10px; padding:1px 7px; border-radius:20px; display:inline-block; margin:2px 2px 2px 0; }
-    .level-pill { font-size:11px; padding:1px 6px; border-radius:3px; display:inline-block; margin:2px 2px 2px 0; font-weight:600; }
-    .pred-scenario { border-radius:3px; padding:6px 8px; }
-    .swing-list { max-height:100px; overflow-y:auto; }
-    .swing-item { display:flex; justify-content:space-between; font-size:10px; padding:2px 0; border-bottom:1px solid var(--border); }
-    .swing-item:last-child { border-bottom:none; }
+    .stat-value.positive { color: #4ade80; }
+    .stat-value.negative { color: #f87171; }
+    .stat-value.neutral  { color: #60a5fa; }
 
-    /* ── ADAPTIVE LEARNING ── */
-    .adapt-factor { display:flex; align-items:center; gap:6px; padding:3px 0; border-bottom:1px solid var(--border); font-size:10px; }
-    .adapt-factor:last-child { border-bottom:none; }
-    .adapt-bar-track { flex:1; background:var(--border2); border-radius:2px; height:4px; overflow:hidden; }
-    .adapt-bar-fill  { height:100%; border-radius:2px; transition:width .4s; }
-    .adapt-log-entry { font-size:10px; color:var(--muted); padding:4px 0; border-bottom:1px solid var(--border); }
-    .adapt-log-entry:last-child { border-bottom:none; }
-    .adapt-log-ts { font-size:9px; color:var(--dim); }
+    /* Table wrapper */
+    .table-wrap {
+      padding: 20px 24px;
+      overflow-x: auto;
+    }
 
-    /* ── TRADE FEED ── */
-    #all-signals-section.collapsed #all-signals-body { display:none; }
-    .asf-header { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:6px; margin-bottom:6px; padding-bottom:6px; border-bottom:1px solid var(--border); }
-    .asf-badge { display:inline-flex; align-items:center; gap:5px; }
-    .asf-open-dot { width:6px; height:6px; border-radius:50%; background:var(--amber); display:inline-block; animation:pulse 2s ease-in-out infinite; }
-    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
-    .asf-filter { display:flex; gap:3px; align-items:center; }
-    .asf-filter-btn { background:transparent; border:1px solid var(--border2); color:var(--dim); border-radius:2px; padding:2px 8px; font-size:10px; font-weight:700; font-family:inherit; cursor:pointer; transition:all .1s; }
-    .asf-filter-btn:hover  { border-color:var(--blue); color:var(--blue); }
-    .asf-filter-btn.active { border-color:var(--blue); color:var(--blue); }
-    .asf-toggle-btn { background:transparent; border:1px solid var(--border2); color:var(--dim); border-radius:2px; padding:2px 6px; font-size:10px; font-family:inherit; cursor:pointer; }
-    .asf-timer { font-size:9px; color:var(--dim); }
-    .asf-row-open td { background:rgba(245,158,11,.03); }
-    .calls-table { width:100%; border-collapse:collapse; font-size:11px; }
-    .calls-table th { font-size:9px; text-transform:uppercase; letter-spacing:.05em; color:var(--dim); border-bottom:1px solid var(--border2); padding:3px 6px; white-space:nowrap; }
-    .calls-table td { padding:4px 6px; border-bottom:1px solid var(--border); vertical-align:middle; }
-    .calls-table tr:last-child td { border-bottom:none; }
-    .calls-btn { font-size:9px; padding:2px 5px; border-radius:2px; border:1px solid; background:transparent; cursor:pointer; margin-right:2px; white-space:nowrap; font-family:inherit; }
-    .calls-btn.win-btn    { color:var(--green); border-color:rgba(34,197,94,.3); }
-    .calls-btn.win-btn:hover { background:rgba(34,197,94,.1); }
-    .calls-btn.loss-btn   { color:var(--red);   border-color:rgba(239,68,68,.3); }
-    .calls-btn.loss-btn:hover { background:rgba(239,68,68,.1); }
-    .calls-btn.cancel-btn { color:var(--muted); border-color:rgba(136,136,136,.3); }
-    .calls-btn.cancel-btn:hover { background:rgba(136,136,136,.1); }
-    .calls-stats-bar { display:flex; gap:14px; flex-wrap:wrap; padding:5px 0 8px; border-bottom:1px solid var(--border); margin-bottom:8px; }
-    .calls-stats-bar span { font-size:11px; }
-    .rr-badge { font-size:10px; font-weight:700; padding:1px 5px; border-radius:2px; white-space:nowrap; }
-    .rr-good  { color:var(--green); background:rgba(34,197,94,.1); }
-    .rr-ok    { color:var(--amber); background:rgba(245,158,11,.1); }
-    .rr-poor  { color:var(--red);   background:rgba(239,68,68,.1); }
-    .pct-gain { color:var(--green); font-size:9px; display:block; }
-    .pct-loss { color:var(--red);   font-size:9px; display:block; }
-    .trade-size-input { background:var(--surface2); border:1px solid var(--border2); color:var(--text); border-radius:2px; padding:2px 5px; font-size:10px; width:72px; text-align:right; font-family:inherit; }
-    .trade-size-input:focus { outline:none; border-color:var(--blue); }
-    .trade-row-clickable { cursor:pointer; transition:background .1s; }
-    .trade-row-clickable:hover td { background:rgba(59,130,246,.05) !important; }
-    .trade-row-clickable td:first-child { border-left:2px solid transparent; transition:border-color .1s; }
-    .trade-row-clickable:hover td:first-child { border-left-color:var(--blue); }
-    .risk-low  { color:var(--green); font-weight:700; font-size:11px; }
-    .risk-mid  { color:var(--amber); font-weight:700; font-size:11px; }
-    .risk-high { color:var(--red);   font-weight:700; font-size:11px; }
-    .trade-group-hdr { font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; padding:6px 0 4px; display:flex; align-items:center; gap:6px; }
-    .trade-group-closed { color:var(--dim); cursor:pointer; }
-    .trade-group-closed:hover { color:var(--muted); }
-    .pta-row { background:var(--bg); }
-    .pta-inner { padding:8px 10px; font-size:11px; line-height:1.6; color:var(--muted); border-left:3px solid var(--border2); margin:3px 6px; border-radius:0 3px 3px 0; }
-    .pta-inner.win  { border-left-color:var(--green); }
-    .pta-inner.loss { border-left-color:var(--red); }
-    .pta-summary { color:var(--text); font-weight:600; margin-bottom:4px; }
-    .pta-detail  { white-space:pre-wrap; margin-bottom:4px; }
-    .pta-lesson  { color:var(--amber); font-style:italic; }
-    .pta-chips   { display:flex; gap:3px; flex-wrap:wrap; margin-top:4px; }
-    .pta-chip    { font-size:9px; padding:1px 5px; border-radius:2px; font-weight:600; }
-    .pta-chip.on  { background:rgba(34,197,94,.12); color:var(--green); }
-    .pta-chip.off { background:rgba(239,68,68,.12); color:var(--red); }
-    .analysis-toggle { font-size:9px; color:var(--blue); cursor:pointer; text-decoration:none; white-space:nowrap; }
-    .asf-reason-row td { padding:0 6px 4px !important; border-bottom:1px solid var(--border); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 900px;
+    }
 
-    /* ── LOADING ── */
-    #loading-overlay { position:fixed; inset:0; background:rgba(8,8,8,.88); display:flex; align-items:center; justify-content:center; z-index:9999; flex-direction:column; gap:10px; pointer-events:none; }
-    .spinner { width:28px; height:28px; border:2px solid var(--border2); border-top-color:var(--blue); border-radius:50%; animation:spin .7s linear infinite; }
-    @keyframes spin { to{transform:rotate(360deg);} }
-    #error-banner { display:none; background:rgba(239,68,68,.08); border:1px solid var(--red); color:var(--red); padding:7px 12px; font-size:11px; }
-    #timestamp { font-size:10px; color:var(--dim); }
-    .modal-content { background:var(--surface); border:1px solid var(--border2); }
+    thead th {
+      background: #141414;
+      color: #555;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      padding: 10px 12px;
+      text-align: left;
+      border-bottom: 1px solid #222;
+      white-space: nowrap;
+    }
 
-    /* ── METHODOLOGY MODAL ── */
-    .method-modal .modal-content { background:var(--bg); border:none; }
-    .method-modal .modal-header  { background:var(--surface); border-bottom:1px solid var(--border); padding:10px 16px; }
-    .method-nav { padding:10px 0; }
-    .method-nav a { display:block; padding:6px 14px; font-size:11px; color:var(--muted); text-decoration:none; border-left:2px solid transparent; transition:all .1s; }
-    .method-nav a:hover  { color:var(--text); background:var(--surface); }
-    .method-nav a.active { color:var(--blue); border-left-color:var(--blue); background:var(--surface); }
-    .method-section { padding:0 0 36px; scroll-margin-top:20px; }
-    .method-title   { font-size:16px; font-weight:700; color:var(--text); margin-bottom:6px; border-bottom:1px solid var(--border); padding-bottom:8px; }
-    .method-lead    { font-size:12px; color:var(--muted); margin-bottom:14px; line-height:1.6; }
-    .method-block   { background:var(--surface); border:1px solid var(--border); border-radius:3px; padding:12px 14px; margin-bottom:10px; }
-    .method-block-title { font-size:10px; font-weight:700; color:var(--blue); text-transform:uppercase; letter-spacing:.06em; margin-bottom:6px; }
-    .method-formula { font-family:'SF Mono','Cascadia Code',Consolas,monospace; font-size:11px; color:var(--purple); background:var(--bg); border:1px solid var(--border); border-radius:3px; padding:8px 10px; margin:6px 0; line-height:1.7; }
-    .method-p     { font-size:11px; color:var(--muted); line-height:1.6; margin:6px 0 0; }
-    .method-table { width:100%; font-size:11px; border-collapse:collapse; margin-top:6px; }
-    .method-table td { padding:4px 6px; border-bottom:1px solid var(--border); color:var(--muted); }
-    .method-table td:first-child { color:var(--text); font-weight:600; width:180px; }
-    .method-tag { display:inline-block; font-size:10px; padding:1px 6px; border-radius:2px; margin:2px; font-weight:600; }
-    .method-divider { border:none; border-top:1px solid var(--border); margin:28px 0; }
+    tbody tr {
+      border-bottom: 1px solid #1a1a1a;
+      transition: background 0.15s;
+    }
 
-    /* ── BACKTESTER ── */
-    #backtest-section { background:var(--surface); border-top:1px solid var(--border); }
-    #backtest-header { padding:8px 12px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--border); cursor:pointer; user-select:none; }
-    #backtest-header:hover .bt-title { color:var(--text); }
-    .bt-title { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--amber); transition:color .1s; }
-    .bt-body { padding:10px 12px; }
-    .bt-ctrl { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
-    .bt-sel { background:var(--surface2); border:1px solid var(--border2); color:var(--text); border-radius:3px; padding:3px 6px; font-size:11px; font-family:inherit; cursor:pointer; }
-    .bt-sel:focus { outline:none; border-color:var(--amber); }
-    .bt-table { width:100%; border-collapse:collapse; font-size:11px; }
-    .bt-table th { font-size:9px; font-weight:700; color:var(--dim); text-transform:uppercase; letter-spacing:.06em; padding:5px 8px; border-bottom:1px solid var(--border); text-align:left; white-space:nowrap; }
-    .bt-table td { padding:5px 8px; border-bottom:1px solid var(--border); }
-    .bt-table tr:last-child td { border-bottom:none; }
-    .bt-best td { background:rgba(245,158,11,.04); }
-    .bt-stat-win  { color:var(--green); font-weight:700; }
-    .bt-stat-loss { color:var(--red);   font-weight:700; }
-    .bt-stat-ok   { color:var(--amber); font-weight:700; }
-    .bt-progress  { display:flex; align-items:center; gap:10px; color:var(--muted); font-size:11px; padding:8px 0; }
+    tbody tr:hover { background: #161616; }
 
-    /* ── CAMPAIGN ── */
-    .camp-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:6px; margin-bottom:12px; }
-    .camp-cell { background:var(--surface2); border:1px solid var(--border2); border-radius:3px; padding:6px 8px; font-size:10px; }
-    .camp-cell-sym  { font-weight:700; color:var(--text); margin-bottom:2px; }
-    .camp-cell-tf   { font-size:9px; color:var(--dim); }
-    .camp-cell-stat { font-size:9px; margin-top:3px; }
-    .camp-cell.done    { border-color:rgba(34,197,94,.3); }
-    .camp-cell.error   { border-color:rgba(239,68,68,.3); }
-    .camp-cell.running { border-color:rgba(245,158,11,.3); animation:border-pulse 1.5s ease-in-out infinite; }
-    @keyframes border-pulse { 0%,100%{border-color:rgba(245,158,11,.3)} 50%{border-color:rgba(245,158,11,.7)} }
-    .camp-table { width:100%; border-collapse:collapse; font-size:11px; }
-    .camp-table th { font-size:9px; font-weight:700; color:var(--dim); text-transform:uppercase; letter-spacing:.06em; padding:5px 8px; border-bottom:1px solid var(--border); text-align:left; white-space:nowrap; }
-    .camp-table td { padding:5px 8px; border-bottom:1px solid var(--border); vertical-align:middle; }
-    .camp-table tr:last-child td { border-bottom:none; }
-    .camp-apply-btn { font-size:9px; padding:2px 8px; border-radius:2px; border:1px solid rgba(34,197,94,.4); color:var(--green); background:transparent; cursor:pointer; font-family:inherit; white-space:nowrap; }
-    .camp-apply-btn:hover { background:rgba(34,197,94,.1); }
-    .camp-apply-btn:disabled { opacity:.4; cursor:default; }
-    .camp-applied { font-size:9px; color:var(--green); }
-    .camp-best-row { background:rgba(34,197,94,.03); }
+    td {
+      padding: 10px 12px;
+      vertical-align: middle;
+      white-space: nowrap;
+    }
 
-    /* ── UTILITIES ── */
-    .text-g   { color:var(--green)  !important; }
-    .text-r   { color:var(--red)    !important; }
-    .text-y   { color:var(--amber)  !important; }
-    .text-b   { color:var(--blue)   !important; }
-    .text-p   { color:var(--purple) !important; }
-    .text-o   { color:var(--orange) !important; }
-    .text-dim { color:var(--muted)  !important; }
-    ::-webkit-scrollbar { width:4px; height:4px; }
-    ::-webkit-scrollbar-track { background:var(--bg); }
-    ::-webkit-scrollbar-thumb { background:var(--border2); border-radius:2px; }
-    @media(max-width:900px){ .grid-3{grid-template-columns:1fr;} .grid-col{border-right:none;border-bottom:1px solid var(--border);max-height:none;} }
+    /* Direction badge */
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+    }
+
+    .badge-long      { background: rgba(74,222,128,0.15); color: #4ade80; border: 1px solid rgba(74,222,128,0.25); }
+    .badge-short     { background: rgba(248,113,113,0.15); color: #f87171; border: 1px solid rgba(248,113,113,0.25); }
+    .badge-open      { background: rgba(96,165,250,0.15); color: #60a5fa; border: 1px solid rgba(96,165,250,0.25); }
+    .badge-closed    { background: rgba(100,116,139,0.15); color: #94a3b8; border: 1px solid rgba(100,116,139,0.25); }
+    .badge-cancelled { background: rgba(100,116,139,0.1); color: #475569; border: 1px solid rgba(100,116,139,0.2); }
+    .badge-win       { background: rgba(74,222,128,0.15); color: #4ade80; border: 1px solid rgba(74,222,128,0.25); }
+    .badge-loss      { background: rgba(248,113,113,0.15); color: #f87171; border: 1px solid rgba(248,113,113,0.25); }
+
+    .pnl-pos { color: #4ade80; font-weight: 600; }
+    .pnl-neg { color: #f87171; font-weight: 600; }
+    .pnl-nil { color: #444; }
+
+    .symbol { color: #fff; font-weight: 600; }
+    .price  { color: #c0c0c0; font-family: monospace; }
+    .tf     { color: #888; }
+    .ts     { color: #555; font-size: 11px; }
+    .tp-src { color: #888; font-size: 11px; max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+
+    .empty {
+      text-align: center;
+      padding: 60px 20px;
+      color: #333;
+      font-size: 14px;
+    }
+
+    @media (max-width: 768px) {
+      header, .summary, .table-wrap { padding-left: 12px; padding-right: 12px; }
+      .stat { min-width: 90px; }
+      .stat-value { font-size: 15px; }
+    }
   </style>
 </head>
 <body>
 
-<!-- ═══ LOADING OVERLAY ═══ -->
-<div id="loading-overlay">
-  <div class="spinner"></div>
-  <div style="color:var(--muted);font-size:11px" id="loading-msg">Fetching market data...</div>
+<header>
+  <h1>TRADES</h1>
+  <span id="refresh-indicator">refreshing in <span id="countdown">30</span>s</span>
+</header>
+
+<div class="summary">
+  <div class="stat"><div class="stat-label">Total</div><div class="stat-value neutral" id="stat-total">—</div></div>
+  <div class="stat"><div class="stat-label">Win Rate</div><div class="stat-value" id="stat-wr">—</div></div>
+  <div class="stat"><div class="stat-label">Total R</div><div class="stat-value" id="stat-r">—</div></div>
+  <div class="stat"><div class="stat-label">Avg R</div><div class="stat-value" id="stat-avg-r">—</div></div>
+  <div class="stat"><div class="stat-label">Open</div><div class="stat-value neutral" id="stat-open">—</div></div>
 </div>
 
-<!-- ═══ ERROR BANNER ═══ -->
-<div id="error-banner"></div>
-
-<!-- ═══ TOPBAR ═══ -->
-<div id="topbar">
-  <div style="display:flex;align-items:center;gap:3px;flex-wrap:nowrap;overflow:hidden;flex:1" id="symbol-bar">
-    <!-- symbols rendered by JS -->
-  </div>
-  <div style="display:flex;align-items:center;gap:5px;flex-shrink:0">
-    <span id="timestamp">—</span>
-    <button class="ctrl-btn" onclick="forceRefresh()" title="Force refresh">↻</button>
-    <button class="ctrl-btn" id="auto-btn" onclick="toggleAuto()">Auto ⏸</button>
-    <button class="ctrl-btn" onclick="openAddSymbol()">+ Add</button>
-    <button class="ctrl-btn" data-bs-toggle="modal" data-bs-target="#methodologyModal" style="color:var(--purple);border-color:rgba(168,85,247,.3)">? Guide</button>
-  </div>
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Symbol</th>
+        <th>TF</th>
+        <th>Dir</th>
+        <th>Entry</th>
+        <th>Stop</th>
+        <th>TP</th>
+        <th>R:R</th>
+        <th>TP Source</th>
+        <th>Status</th>
+        <th>Result</th>
+        <th>P&amp;L (R)</th>
+        <th>Opened</th>
+        <th>Closed</th>
+      </tr>
+    </thead>
+    <tbody id="trades-body">
+      <tr><td colspan="13" class="empty">Loading trades…</td></tr>
+    </tbody>
+  </table>
 </div>
 
-<!-- ═══ METRICS STRIP ═══ -->
-<div id="metrics-strip">
-  <div class="metric"><span class="mlabel">Symbol</span><span class="mvalue" id="h-symbol">—</span></div>
-  <div class="metric"><span class="mlabel">Price</span><span class="mvalue" id="h-price">—</span></div>
-  <div class="metric"><span class="mlabel">Regime</span><span class="mvalue" id="h-regime">—</span></div>
-  <div class="metric"><span class="mlabel">Mkt Type</span><span class="mvalue" id="h-mkttype">—</span></div>
-  <div class="metric"><span class="mlabel">Score</span><span class="mvalue" id="h-score">—</span></div>
-  <div class="metric"><span class="mlabel">RSI</span><span class="mvalue" id="h-rsi">—</span></div>
-  <div class="metric"><span class="mlabel">BOS</span><span class="mvalue" id="h-struct">—</span></div>
-  <div class="metric"><span class="mlabel">R:R</span><span class="mvalue" id="h-rr">—</span></div>
-  <div class="metric"><span class="mlabel">ATR</span><span class="mvalue" id="h-atr">—</span></div>
-  <div class="metric"><span class="mlabel">EMA 200</span><span class="mvalue" id="h-ema">—</span></div>
-  <div class="tf-group">
-    <button class="tf-btn" data-tf="15m" onclick="switchTF('15m',this)">15m</button>
-    <button class="tf-btn" data-tf="30m" onclick="switchTF('30m',this)">30m</button>
-    <button class="tf-btn" data-tf="1h"  onclick="switchTF('1h',this)">1H</button>
-    <button class="tf-btn active" data-tf="4h" onclick="switchTF('4h',this)">4H</button>
-    <button class="tf-btn" data-tf="1d"  onclick="switchTF('1d',this)">1D</button>
-    <button class="tf-btn" data-tf="1w"  onclick="switchTF('1w',this)">1W</button>
-    <span id="tf-label"></span>
-  </div>
-</div>
-
-<!-- ═══ CHARTS ═══ -->
-<div class="charts-wrap">
-  <div id="chart-wrap">
-    <div id="tv-chart-container" style="height:520px;width:100%"></div>
-    <div id="tv-loading">
-      <div class="spinner"></div>
-      <div style="font-size:11px;color:var(--muted)" id="tv-loading-msg">Loading chart...</div>
-    </div>
-  </div>
-  <div id="signal-bar">
-    <span style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-right:4px">Signal</span>
-    <span style="font-size:11px;color:var(--dim);font-style:italic">Loading...</span>
-  </div>
-  <div id="trade-levels"></div>
-  <div id="signal-chart-wrap">
-    <div id="signal-chart-header">
-      <span class="sc-title">Technical Analysis</span>
-      <span class="sc-legend">
-        <span style="color:var(--blue)">— EMA50</span>
-        <span style="color:var(--orange)">— EMA200</span>
-        <span style="color:var(--green)">-- S</span>
-        <span style="color:var(--red)">-- R</span>
-        <span style="color:var(--purple)">-- VWAP</span>
-      </span>
-    </div>
-    <div id="signal-chart"></div>
-  </div>
-</div>
-
-<!-- ═══ AI ANALYSIS — full width, prominent ═══ -->
-<div id="ai-section">
-  <div id="ai-section-header">
-    <div>
-      <span class="ai-title">Claude AI — Chart Analysis</span>
-      <span class="ai-sub">Haiku · on-demand TA read</span>
-    </div>
-    <div style="display:flex;gap:6px">
-      <button class="ctrl-btn" id="ai-chart-btn" onclick="fetchAiChart()" style="color:var(--purple);border-color:rgba(168,85,247,.3)">Ask Claude ↻</button>
-      <button class="ctrl-btn" id="weekly-review-btn" onclick="runWeeklyReview()" style="color:var(--amber);border-color:rgba(245,158,11,.3)" title="Run weekly Claude strategy review (needs ≥10 closed trades)">📅 Weekly Review</button>
-    </div>
-  </div>
-  <div id="ai-section-body">
-    <div id="card-ai-chart" style="color:var(--dim);font-size:11px;font-style:italic">Click "Ask Claude" to get an AI analysis of the current chart.</div>
-  </div>
-</div>
-
-<!-- ═══ BACKTESTER ═══ -->
-<div id="backtest-section">
-  <div id="backtest-header" onclick="toggleBacktest()">
-    <div>
-      <span class="bt-title">Backtester &amp; Research Campaign</span>
-      <span style="font-size:9px;color:var(--dim);margin-left:8px">Historical strategy replay · click to expand</span>
-    </div>
-    <span id="backtest-toggle" style="font-size:9px;color:var(--dim);font-weight:400">▶ expand</span>
-  </div>
-  <div id="backtest-body" style="display:none">
-    <div class="bt-body">
-      <div class="bt-ctrl">
-        <select class="bt-sel" id="bt-symbol" title="Symbol">
-          <option value="BTCUSDT">BTCUSDT</option>
-          <option value="ETHUSDT">ETHUSDT</option>
-          <option value="SOLUSDT">SOLUSDT</option>
-          <option value="XRPUSDT">XRPUSDT</option>
-          <option value="DOGEUSDT">DOGEUSDT</option>
-          <option value="BNBUSDT">BNBUSDT</option>
-          <option value="ADAUSDT">ADAUSDT</option>
-          <option value="AVAXUSDT">AVAXUSDT</option>
-          <option value="LINKUSDT">LINKUSDT</option>
-        </select>
-        <select class="bt-sel" id="bt-interval" title="Interval">
-          <option value="4h" selected>4H</option>
-          <option value="1h">1H</option>
-          <option value="1d">1D</option>
-          <option value="15m">15m</option>
-        </select>
-        <select class="bt-sel" id="bt-years" title="History">
-          <option value="1" selected>1 year</option>
-        </select>
-        <button class="ctrl-btn" id="bt-run-btn" onclick="runBacktest()" style="color:var(--amber);border-color:rgba(245,158,11,.3)">▶ Quick check</button>
-      </div>
-      <div style="font-size:10px;color:var(--dim);margin-bottom:8px;padding:5px 0;border-top:1px solid var(--border)">
-        💡 <b style="color:var(--text)">Full research campaign:</b> run <code style="background:var(--surface2);padding:1px 5px;border-radius:2px;color:var(--green)">python run_campaign.py</code> locally in your terminal. Runs all 4 coins × 2 timeframes with max history — too heavy for Render.
-      </div>
-      <div id="bt-results">
-        <span style="color:var(--dim);font-size:11px;font-style:italic">Single run with current default params — 1 yr history.</span>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- ═══ 3-COLUMN GRID ═══ -->
-<div class="grid-3">
-
-  <!-- ── COL 1: Signal + Learning ── -->
-  <div class="grid-col">
-    <div class="panel">
-      <div class="panel-hdr">
-        <span>Signal</span>
-        <span id="signal-card-tf" style="font-size:9px;color:var(--dim)"></span>
-      </div>
-      <div class="panel-body" id="card-signal">
-        <span style="color:var(--dim);font-style:italic;font-size:11px">No signal active</span>
-      </div>
-    </div>
-    <div class="panel">
-      <div class="panel-hdr card-hdr-toggle" onclick="toggleLearningCard()">
-        <span>Adaptive Learning</span>
-        <span id="learning-toggle" style="font-size:9px;color:var(--dim);font-weight:400">▼</span>
-      </div>
-      <div id="learning-body">
-        <div class="panel-body" id="card-learning">
-          <span class="text-dim" style="font-size:11px">Loading...</span>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- ── COL 2: Confluence + Risk ── -->
-  <div class="grid-col">
-    <div class="panel">
-      <div class="panel-hdr">Confluence Score</div>
-      <div class="panel-body" id="card-confluence">
-        <span class="text-dim" style="font-size:11px">Loading...</span>
-      </div>
-    </div>
-    <div class="panel">
-      <div class="panel-hdr">Risk Context</div>
-      <div class="panel-body" id="card-risk">
-        <span class="text-dim" style="font-size:11px">Loading...</span>
-      </div>
-    </div>
-  </div>
-
-  <!-- ── COL 3: Trade Feed ── -->
-  <div class="grid-col" style="overflow-y:auto">
-    <div id="all-signals-section" style="padding:8px 10px">
-      <div class="asf-header">
-        <div class="asf-badge">
-          <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--blue)">Signals — Live Feed</span>
-          <span id="asf-open-badge"></span>
-          <span id="asf-scanner-status" style="font-size:9px;color:var(--dim);margin-left:4px"></span>
-          <span class="asf-timer" id="asf-timer"></span>
-        </div>
-        <div class="asf-filter">
-          <button class="asf-filter-btn active" id="asf-btn-all"  onclick="filterAllSignals('all')">All</button>
-          <button class="asf-filter-btn"        id="asf-btn-open" onclick="filterAllSignals('open')">Open</button>
-          <button class="asf-filter-btn"        id="asf-btn-win"  onclick="filterAllSignals('win')">Won</button>
-          <button class="asf-filter-btn"        id="asf-btn-loss" onclick="filterAllSignals('loss')">Lost</button>
-          <span style="display:flex;align-items:center;gap:3px;margin-left:6px;border-left:1px solid var(--border);padding-left:6px">
-            <span style="font-size:9px;color:var(--dim)">$</span>
-            <input class="trade-size-input" id="trade-size-input" type="number" min="1"
-                   value="1000" onchange="updateTradeSize(this.value)" title="Trade size USD">
-          </span>
-          <button class="asf-toggle-btn" onclick="fetchAllSignals()" title="Refresh">↻</button>
-          <button class="asf-toggle-btn" id="asf-collapse-btn" onclick="toggleAllSignals()" title="Collapse">▲</button>
-        </div>
-      </div>
-      <div id="all-signals-body">
-        <span style="font-size:11px;color:var(--dim)">Loading...</span>
-      </div>
-    </div>
-  </div>
-
-</div><!-- end .grid-3 -->
-
-<!-- Hidden render targets kept for backward-compatible render functions -->
-<div style="display:none">
-  <div id="card-regime"></div>
-  <div id="card-structure"></div>
-  <div id="card-volume"></div>
-  <div id="card-macd"></div>
-  <div id="card-vol2"></div>
-  <div id="card-prediction"></div>
-</div>
-
-<!-- ═══ ADD SYMBOL MODAL ═══ -->
-<div class="modal fade" id="addModal" tabindex="-1">
-  <div class="modal-dialog modal-sm">
-    <div class="modal-content">
-      <div class="modal-header border-secondary py-2">
-        <span class="fw-bold" style="font-size:14px">Add Symbol</span>
-        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-      </div>
-      <div class="modal-body">
-        <div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">Enter ticker (USDT pair assumed):<br>e.g. SOL, BNB, AVAX</div>
-        <input type="text" id="add-input" class="form-control form-control-sm bg-dark border-secondary text-white"
-               placeholder="SOL" maxlength="10" style="text-transform:uppercase">
-        <div id="add-error" style="color:var(--red);font-size:12px;margin-top:6px;display:none"></div>
-      </div>
-      <div class="modal-footer border-secondary py-2">
-        <button class="sym-btn" onclick="confirmAdd()">Add</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- ═══ METHODOLOGY MODAL ═══ -->
-<div class="modal fade method-modal" id="methodologyModal" tabindex="-1">
-  <div class="modal-dialog modal-fullscreen">
-    <div class="modal-content">
-      <div class="modal-header">
-        <div>
-          <div style="font-size:16px;font-weight:700;color:#e6edf3">How It Works — Complete System Guide</div>
-          <div style="font-size:12px;color:#8b949e">Every signal, filter, and decision explained from raw data to trade management</div>
-        </div>
-        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-      </div>
-      <div class="modal-body d-flex p-0" style="overflow:hidden;height:100%">
-
-        <!-- Left nav -->
-        <div style="width:220px;flex-shrink:0;background:#0d1117;border-right:1px solid #30363d;overflow-y:auto">
-          <nav class="method-nav" id="method-nav">
-            <div style="font-size:10px;color:#484f58;text-transform:uppercase;letter-spacing:.08em;padding:12px 16px 4px">Sections</div>
-            <a href="#m1" onclick="methodNav(this)">1. System Overview</a>
-            <a href="#m2" onclick="methodNav(this)">2. The 9 Signal Factors</a>
-            <a href="#m3" onclick="methodNav(this)">3. Confluence Score</a>
-            <a href="#m4" onclick="methodNav(this)">4. Signal Gating (6 Filters)</a>
-            <a href="#m5" onclick="methodNav(this)">5. Two-Tier Trade System</a>
-            <a href="#m6" onclick="methodNav(this)">6. Trade Management</a>
-            <a href="#m7" onclick="methodNav(this)">7. Claude AI</a>
-            <a href="#m8" onclick="methodNav(this)">8. Adaptive Learning</a>
-            <a href="#m9" onclick="methodNav(this)">9. Chart Reference</a>
-          </nav>
-        </div>
-
-        <!-- Right content -->
-        <div id="method-content" style="flex:1;overflow-y:auto;padding:28px 36px;background:#0d1117">
-
-          <!-- §1 SYSTEM OVERVIEW -->
-          <section class="method-section" id="m1">
-            <div class="method-title">1. System Overview — How Everything Works Together</div>
-            <p class="method-lead">This is a fully automated crypto analysis and paper-trading system. Every 5 minutes, a background scanner checks 13 coins across two timeframes, runs 9 independent technical checks, applies 6 layers of filtering, consults Claude AI, and decides whether to log a trade. Here is the exact sequence from market data to open position.</p>
-
-            <div class="method-block">
-              <div class="method-block-title">End-to-End Signal Flow</div>
-              <div class="method-formula">1. DATA FETCH
-   Binance public API → raw OHLCV candles for each symbol + timeframe
-
-2. TECHNICAL ANALYSIS (9 factors)
-   Regime · BOS · Sweep · Volume · OBV · RSI · MACD · ADX · VWAP
-   → Confluence Score (0 – ~12 pts, adaptive weights)
-
-3. SIGNAL CHECK
-   Score ≥ adaptive threshold (default 7.0) AND BOS confirmed?
-   → Yes: candidate signal with entry / target / stop
-   → No: no trade, continue to next symbol
-
-4. RISK/REWARD GATE
-   Day tier (15m): R:R must be ≥ 2:1
-   Swing tier (4h): R:R must be ≥ 3:1
-   → Fails: signal discarded
-
-5. HIGHER-TIMEFRAME BIAS FILTER
-   15m LONG requires 1H to be bullish (above 200 EMA or bullish BOS)
-   4H  LONG requires 1D to be bullish
-   → Disagrees: signal discarded
-
-6. SESSION FILTER (Day tier only)
-   15m signals only fire 07:00–22:00 UTC (EU + US session overlap)
-
-7. CLAUDE AI PRE-TRADE VETO
-   Haiku evaluates: score, R:R, market context, Fear & Greed, ADX, VWAP,
-   funding rate, BTC dominance, and Claude's own past accuracy
-   → recommendation == "skip": trade vetoed, never logged
-   → "take" or "strong_take": proceed to step 8
-
-8. TRADE LOGGED
-   ID, entry, target, stop, score, factors, AI analysis saved to SQLite
-   Discord notification sent with full trade details + AI assessment
-
-9. TRADE MANAGEMENT (ongoing, every 5-min scan)
-   • Partial TP at 1.5R → 50% booked, SL → breakeven, Discord alert
-   • Full TP hit → WIN, blended ROI recorded
-   • SL hit (or breakeven) → LOSS (or small WIN if partial already hit)
-   • Max age: Day = 72h, Swing = 14 days → cancelled if expired
-
-10. ADAPTATION
-    After each closed trade → adaptive engine reviews last 8 trades,
-    adjusts factor weights, signal threshold, stop multiplier</div>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">What the Dashboard Shows</div>
-              <table class="method-table">
-                <tr><td><span class="method-tag" style="background:#58a6ff22;color:#58a6ff">Analysis Cards</span></td><td>Live read of all 9 factors for the selected symbol + timeframe. Refreshes every 5 minutes from scanner cache.</td></tr>
-                <tr><td><span class="method-tag" style="background:#3fb95022;color:#3fb950">Signal Overlay</span></td><td>If a signal is currently active for this symbol/TF, shows entry, target, stop, and R:R on the chart.</td></tr>
-                <tr><td><span class="method-tag" style="background:#bc8cff22;color:#bc8cff">Claude AI Card</span></td><td>On-demand chart analysis: Claude reads all 9 indicators and gives a directional bias, confidence, and key levels.</td></tr>
-                <tr><td><span class="method-tag" style="background:#d2922222;color:#d29222">Trade History</span></td><td>Every logged trade with entry, exit, ROI%, AI recommendation badge, and post-trade analysis.</td></tr>
-                <tr><td><span class="method-tag" style="background:#3fb95022;color:#3fb950">Past Trade Lines</span></td><td>Green/red lines on the chart connecting each trade's entry to its exit. Lets you see where setups played out.</td></tr>
-              </table>
-            </div>
-          </section>
-
-          <hr class="method-divider">
-
-          <!-- §2 THE 9 SIGNAL FACTORS -->
-          <section class="method-section" id="m2">
-            <div class="method-title">2. The 9 Signal Factors</div>
-            <p class="method-lead">Nine independent checks are run on every scan. Three are structural (2 pts each, maximum weight). Six are confirmation (1 pt each). Adaptive learning adjusts the weight of each factor over time based on its real win rate — a factor that keeps appearing on losing trades gets reduced; one that appears on winners gets boosted.</p>
-
-            <div class="method-block">
-              <div class="method-block-title">Factor 1 — Market Regime (default 2 pts)</div>
-              <div class="method-formula">HTF used:  15m → 1H regime  |  4H → 1D regime
-Bullish:   HTF price ABOVE 200-period EMA (institutional long bias)
-Bearish:   HTF price BELOW 200-period EMA (institutional short bias)
-Also checks: HH/HL (uptrend) vs LH/LL (downtrend) structure on HTF</div>
-              <p class="method-p">The regime is always evaluated on the <em>higher</em> timeframe — never the chart you're trading. A 15m long signal only has regime support if the 1H is above its 200 EMA. This is the most important filter: trading against the macro trend is the #1 cause of BOS failures. When regime aligns, institutional money is flowing in the same direction as your trade.</p>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Factor 2 — Break of Structure / BOS (default 2 pts)</div>
-              <div class="method-formula">Swing detection window:  15m→3 bars, 4H→5 bars each side of pivot
-
-Bullish BOS: Current Close > Last confirmed Swing High
-  → Buyers overpowered the last supply zone. Structural shift.
-
-Bearish BOS: Current Close < Last confirmed Swing Low
-  → Sellers overpowered the last demand zone. Structural shift.
-
-BOS is REQUIRED for a signal — score alone cannot fire a trade</div>
-              <p class="method-p">The BOS is the directional verdict. Without it, any move is just noise inside the existing range. The BOS confirms that one side of the market has taken decisive control, not just briefly pierced a level. Note: the system only accepts BOS via <em>close</em>, not a wick — a candle that briefly prints above the swing high then closes back below is NOT a BOS. This eliminates a major class of false breakout signals.</p>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Factor 3 — Liquidity Sweep (default 2 pts)</div>
-              <div class="method-formula">Bullish Sweep: Low[i] &lt; Swing Low AND Close[i] &gt; Swing Low
-  → Wick pierced below, candle closed above (stops taken, bulls absorbed)
-
-Bearish Sweep: High[i] &gt; Swing High AND Close[i] &lt; Swing High
-  → Wick pierced above, candle closed below (stops taken, bears absorbed)
-
-Checked against last 4 swing pivots within the last 12 bars</div>
-              <p class="method-p">Stop-loss orders cluster below swing lows (retail longs) and above swing highs (retail shorts). A sweep is when institutional players briefly push price through those clusters — triggering all the stops, buying their liquidity — then reverse hard. The trapped traders' forced exits (margin calls, stop-outs) then fuel the new move. A sweep + BOS in sequence is the highest-probability setup in the system.</p>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Factor 4 — Volume Expansion (default 1 pt)</div>
-              <div class="method-formula">Expanding = Avg(Volume last 5 bars) &gt; Avg(Volume bars −20 to −5)
-Spike     = Any bar in last 10 has Volume &gt; 2× Avg(last 20 bars)
-→ Either condition earns the point</div>
-              <p class="method-p">Volume confirms institutional participation. A breakout on low volume is a warning — the move may reverse when volume returns. A BOS on expanding volume or a volume spike means real money is behind the move. Without volume confirmation, the signal still fires if other factors align, but the post-trade AI gives it lower confidence.</p>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Factor 5 — OBV Direction (default 1 pt)</div>
-              <div class="method-formula">OBV = running sum: +Volume on up-close bars, −Volume on down-close bars
-
-Bullish OBV: OBV trending up (20-bar EMA of OBV rising)
-Bearish OBV: OBV trending down
-
-Bullish Divergence: Price down 20 bars but OBV flat/up → hidden accumulation
-Bearish Divergence: Price up 20 bars but OBV flat/down → hidden distribution
-→ Any aligned condition earns the point</div>
-              <p class="method-p">OBV reveals smart-money flow that's invisible on price alone. A slow, quiet accumulation shows up in OBV before price breaks out. The OBV chart panel (below the main chart) lets you visually confirm whether volume flow is leading or lagging price. Divergence between OBV and price is an early warning that the current trend is running on empty.</p>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Factor 6 — RSI Confirmation (default 1 pt)</div>
-              <div class="method-formula">RSI = 14-period exponential RSI on closing prices
-
-Bullish conditions (any one earns the point):
-  • RSI &gt; 60 in an uptrend regime (momentum aligned)
-  • RSI was ≤30 in last 8 bars AND now &gt; 30 (reset from oversold)
-
-Bearish conditions (any one earns the point):
-  • RSI &lt; 40 in a downtrend regime (momentum aligned)
-  • RSI was ≥70 in last 8 bars AND now &lt; 70 (reset from overbought)</div>
-              <p class="method-p">RSI in the 60–100 "bullish range" during an uptrend means momentum is healthy and continuous — not a fade. A reset from oversold (30→31) is more actionable than RSI just sitting at 30, because it shows the selling wave is exhausting and buyers are stepping in. Strong trends often hold RSI above 50 for weeks without touching 30.</p>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Factor 7 — MACD Confirmation (default 1 pt)</div>
-              <div class="method-formula">MACD Line   = EMA(12) − EMA(26)   of closing prices
-Signal Line = EMA(9) of MACD Line
-Histogram   = MACD Line − Signal Line
-
-Bullish: MACD Line &gt; Signal Line AND Histogram &gt; 0
-Bearish: MACD Line &lt; Signal Line AND Histogram &lt; 0
-Bonus:   Bullish/bearish crossover in last 3 bars = stronger confirmation</div>
-              <p class="method-p">MACD measures momentum by comparing fast and slow exponential moving averages. When the MACD line crosses above the signal line, short-term momentum has turned bullish. The histogram shows the acceleration: growing bars = momentum building, shrinking bars = momentum fading. MACD aligns with BOS direction to confirm the breakout has momentum, not just price displacement.</p>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Factor 8 — ADX Trend Strength (default 1 pt)</div>
-              <div class="method-formula">ADX = 14-period Average Directional Index (measures trend strength, not direction)
-DI+ = Directional Indicator Plus  (buying pressure)
-DI− = Directional Indicator Minus (selling pressure)
-
-ADX &gt; 25 → trending market, signals are reliable     → earns the point
-ADX &lt; 25 → ranging/choppy, signal carry lower win rate → no point
-ADX &gt; 50 → strong trend, highest reliability</div>
-              <p class="method-p">ADX is the only factor that measures trend <em>strength</em> without a direction. A BOS in a ranging market (ADX &lt; 25) is much more likely to be a false break than a BOS where ADX is 35+. When ADX is below 25, the system still fires if score is met — but the AI flags lower confidence and the Discord alert notes "ranging market." Over time, if ranging-market signals keep losing, the adaptive engine reduces this factor's weight.</p>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Factor 9 — VWAP Alignment (default 1 pt)</div>
-              <div class="method-formula">VWAP = Σ(Price × Volume) / Σ(Volume)   — rolling from session open
-
-Long signal: Current price &gt; VWAP → price above fair value baseline
-Short signal: Current price &lt; VWAP → price below fair value baseline</div>
-              <p class="method-p">VWAP (Volume-Weighted Average Price) is the true average price paid by all participants weighted by volume. It's the benchmark institutional desks and algorithms use as a "fair value" anchor. Price trading above VWAP means buyers are in control intraday and willing to pay above average. For a long signal, being above VWAP confirms the directional bias has institutional flow behind it. For swing trades on 4H, VWAP acts as a multi-day trend anchor.</p>
-            </div>
-          </section>
-
-          <hr class="method-divider">
-
-          <!-- §3 CONFLUENCE SCORE -->
-          <section class="method-section" id="m3">
-            <div class="method-title">3. Confluence Score</div>
-            <p class="method-lead">All 9 factors are weighted and summed into a single score. The maximum varies as the adaptive engine adjusts individual weights, but starts at ~12 pts. A signal requires a minimum score (default 7.0, adaptive) AND a confirmed BOS. The weights are not fixed — they change automatically based on each factor's real win-rate performance.</p>
-
-            <div class="method-block">
-              <div class="method-block-title">Default Weights &amp; Maximum Score</div>
-              <table class="method-table">
-                <tr><td><span class="method-tag" style="background:#58a6ff22;color:#58a6ff">Regime</span></td><td>2.0 pts — HTF trend aligned with signal direction</td></tr>
-                <tr><td><span class="method-tag" style="background:#58a6ff22;color:#58a6ff">BOS</span></td><td>2.0 pts — Break of Structure confirmed (also required gate)</td></tr>
-                <tr><td><span class="method-tag" style="background:#58a6ff22;color:#58a6ff">Sweep</span></td><td>2.0 pts — Liquidity sweep preceded the BOS</td></tr>
-                <tr><td><span class="method-tag" style="background:#3fb95022;color:#3fb950">Volume</span></td><td>1.0 pt — Volume expansion or spike at signal bar</td></tr>
-                <tr><td><span class="method-tag" style="background:#3fb95022;color:#3fb950">OBV</span></td><td>1.0 pt — OBV confirms direction or shows divergence</td></tr>
-                <tr><td><span class="method-tag" style="background:#3fb95022;color:#3fb950">RSI</span></td><td>1.0 pt — RSI in aligned range or reset from extreme</td></tr>
-                <tr><td><span class="method-tag" style="background:#3fb95022;color:#3fb950">ADX</span></td><td>1.0 pt — ADX &gt; 25 (trending, not ranging)</td></tr>
-                <tr><td colspan="2" style="color:#484f58;padding-top:8px"><strong style="color:#3fb950">Maximum: 10 pts</strong> (all 7 factors present at default weight)</td></tr>
-              </table>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Score Thresholds</div>
-              <table class="method-table">
-                <tr><td><span class="method-tag" style="background:#3fb95022;color:#3fb950">≥ 9.5 — High Probability</span></td><td>≥ 78% of max score. All major factors align. Strong trade candidate — AI likely rates "strong_take".</td></tr>
-                <tr><td><span class="method-tag" style="background:#d2922222;color:#d29222">7.0–9.4 — Moderate Setup</span></td><td>≥ 56% of max. Structural factors present + confirmation. Standard signal zone — requires AI approval.</td></tr>
-                <tr><td><span class="method-tag" style="background:#f8514922;color:#f85149">&lt; 7.0 — No Signal</span></td><td>Below threshold. No trade logged. Dashboard shows analysis only — wait for conditions to improve.</td></tr>
-              </table>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Adaptive Weights — How They Change</div>
-              <p class="method-p">After every 8 closed trades, the adaptive engine reviews each factor's win rate (among trades where that factor was present). If a factor is present on &gt;70% wins → its weight increases up to 1.5× default. If it's present on &lt;40% wins → weight decreases to as low as 0.3× default. This means the score maximum can range roughly from 8 to 18 depending on which factors the market is rewarding. The /api/learning endpoint shows all current weights live.</p>
-            </div>
-          </section>
-
-          <hr class="method-divider">
-
-          <!-- §4 SIGNAL GATING -->
-          <section class="method-section" id="m4">
-            <div class="method-title">4. Signal Gating — 6 Layers Before a Trade Is Logged</div>
-            <p class="method-lead">A high confluence score is necessary but not sufficient. Every candidate signal passes through six independent filters in sequence. If any filter fails, the signal is discarded completely — no partial logging, no "watch" state. This multi-layer approach is why the system only logs high-quality setups.</p>
-
-            <div class="method-block">
-              <div class="method-block-title">Gate 1 — Adaptive Score Threshold</div>
-              <div class="method-formula">Signal fires only if: Confluence Score ≥ Signal Threshold
-Default threshold: 7.0 (adaptive — engine adjusts this over time)
-
-Threshold raises: when overall win rate &lt; 40% in last 8 trades (+0.5)
-                  when 3+ consecutive losses in a row (+0.5, streak protection)
-Threshold lowers: when overall win rate &gt; 70% in last 8 trades (−0.25)
-Range: 6.5 minimum to 9.5 maximum</div>
-              <p class="method-p">The threshold is the system's confidence dial. After a losing streak it automatically becomes more selective — requiring stronger setups. After consistent winning it relaxes slightly to capture more opportunities. This means the system learns which market conditions deserve caution and which allow more aggressive scanning.</p>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Gate 2 — BOS Confirmation (Hard Gate)</div>
-              <div class="method-formula">REQUIRED: Bullish BOS for LONG signals
-           Bearish BOS for SHORT signals
-No BOS = no signal, regardless of score</div>
-              <p class="method-p">No amount of indicator confluence can substitute for a structural break. A high score without BOS means many factors are aligned but price hasn't actually committed to a direction yet. The system waits until price proves it — the BOS is the trigger, not the setup.</p>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Gate 3 — Tier-Based R:R Minimum</div>
-              <div class="method-formula">Day tier  (15m, 30m): R:R must be ≥ 2:1
-Swing tier (1h, 4h, 1d, 1w): R:R must be ≥ 3:1
-
-R:R = |Target − Entry| / |Entry − Stop|
-
-If structural target is too close:
-  → Target is projected to exactly the minimum R:R from entry
-  → target_basis shows "3:1 R:R projection (structural target too close)"</div>
-              <p class="method-p">At 3:1 R:R, the system only needs a 25% win rate to break even (each win is worth 3 losses). This means you can be wrong on 3 of every 4 swing trades and still not lose money. The system enforces this mathematically — if the nearest structural target only offers 2:1, the target is extended to 3:1. When the dashboard shows a 3:1 target, it may be a projected level rather than a named structural zone.</p>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Gate 4 — Higher-Timeframe Bias Filter</div>
-              <div class="method-formula">15m LONG  → passes only if 1H is BULLISH  (above 200 EMA OR bullish BOS on 1H)
-15m SHORT → passes only if 1H is BEARISH (below 200 EMA OR bearish BOS on 1H)
-4H  LONG  → passes only if 1D is BULLISH
-4H  SHORT → passes only if 1D is BEARISH</div>
-              <p class="method-p">Even if the 15m looks perfect, a LONG signal into a 1H downtrend is fighting the dominant order flow. This filter eliminates counter-trend trades at the structural level — not just at the EMA level. "Bullish" on the higher TF means either price is above its 200 EMA, or a bullish BOS was recently confirmed on that TF.</p>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Gate 5 — Session Filter (Day Tier Only)</div>
-              <div class="method-formula">15m signals: only logged between 07:00 and 22:00 UTC
-  → Covers European open (07:00) through US close (22:00)
-  → Avoids Asia-only sessions where volume is thin and fakeouts are high
-
-4H signals: fire any time — 24 hours, 7 days</div>
-              <p class="method-p">Crypto doesn't close but it has session personalities. The highest quality intraday moves happen when European and US markets overlap (12:00–17:00 UTC is peak liquidity). Signals fired during Asian-only hours on the 15m tend to be low-volume, easily manipulated moves that reverse on the European open. The session filter keeps Day trades in high-liquidity windows.</p>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Gate 6 — Claude AI Pre-Trade Veto</div>
-              <div class="method-formula">Input to Claude Haiku: signal score, R:R, entry/target/stop, direction,
-  ADX, VWAP side, funding rate, BTC dominance, Fear &amp; Greed index,
-  system win rate, per-symbol win rate, Claude's own past accuracy
-
-Output: { confidence: 0-100, recommendation: "strong_take"|"take"|"skip" }
-
-→ "skip":        trade is VETOED — not logged, no Discord alert
-→ "take":        trade logged, AI badge shown as ✅
-→ "strong_take": trade logged, AI badge shown as 🔥
-→ API unavailable: fallback — trade logged without AI annotation</div>
-              <p class="method-p">Claude evaluates the full context picture: is the Fear &amp; Greed index showing extreme greed while taking a long? Are funding rates overheated? Is BTC making a major opposing move? These contextual factors aren't in any indicator — Claude synthesizes them with the technical picture and makes a go/no-go call. Critically, Claude also sees its own past accuracy (e.g. "my strong_take signals have a 68% win rate") and self-calibrates whether to be more or less aggressive.</p>
-            </div>
-          </section>
-
-          <hr class="method-divider">
-
-          <!-- §5 TWO-TIER SYSTEM -->
-          <section class="method-section" id="m5">
-            <div class="method-title">5. Two-Tier Trade System</div>
-            <p class="method-lead">The scanner runs two completely separate tiers simultaneously. Each tier has different timeframes, session rules, R:R requirements, and maximum trade duration. The tier separation prevents the same signal from being double-counted — you can have one Day trade and one Swing trade open on the same symbol at the same time.</p>
-
-            <div class="method-block">
-              <div class="method-block-title">Day Tier vs Swing Tier</div>
-              <table class="method-table">
-                <tr style="color:#e6edf3">
-                  <td style="color:#e6edf3;font-weight:700"></td>
-                  <td style="color:#bc8cff;font-weight:700">Day Tier</td>
-                  <td style="color:#58a6ff;font-weight:700">Swing Tier</td>
-                </tr>
-                <tr><td>Scan timeframe</td><td>15 minutes</td><td>4 hours</td></tr>
-                <tr><td>Higher-TF bias check</td><td>1H chart</td><td>1D chart</td></tr>
-                <tr><td>Session restriction</td><td>07:00–22:00 UTC only</td><td>24/7, any time</td></tr>
-                <tr><td>Minimum R:R</td><td>2:1</td><td>3:1</td></tr>
-                <tr><td>Max trade age</td><td>72 hours</td><td>14 days</td></tr>
-                <tr><td>Discord color</td><td style="color:#bc8cff">Purple (LONG) / Orange (SHORT)</td><td style="color:#58a6ff">Blue (LONG) / Red (SHORT)</td></tr>
-                <tr><td>Max concurrent</td><td>1 per symbol</td><td>1 per symbol</td></tr>
-              </table>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Opposing Signal Rule</div>
-              <div class="method-formula">If a LONG is open on 4H BTCUSDT and a new SHORT signal fires on 4H BTCUSDT:
-  → The existing LONG is closed at entry price (cancelled, 0% ROI)
-  → The new SHORT is opened
-
-This only triggers within the same tier. A 15m SHORT does not close a 4H LONG.</div>
-              <p class="method-p">When the system fires a signal in the opposite direction of an existing trade on the same tier, it means the technical picture has completely reversed. Rather than holding a trade that the system no longer believes in, the old position is cancelled and the new thesis is opened. The entry price is used as the cancel price to avoid manufacturing a loss on what may have been a valid trade that simply reversed.</p>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">The 13 Tracked Symbols</div>
-              <p class="method-p">BTC · ETH · XRP · DOGE · SOL · BNB · ADA · AVAX · LINK · LTC · DOT · NEAR · ATOM. Additional symbols are added automatically when you search for them — they persist for the life of the server session and are picked up by the scanner on the next sweep. The scanner fetches bias data (1H + 1D) for every symbol before evaluating their 15m and 4H signals.</p>
-            </div>
-          </section>
-
-          <hr class="method-divider">
-
-          <!-- §6 TRADE MANAGEMENT -->
-          <section class="method-section" id="m6">
-            <div class="method-title">6. Trade Management</div>
-            <p class="method-lead">Once a trade is logged, the system manages it automatically on every 5-minute scanner sweep. Three mechanisms protect open positions: a partial profit lock at 1.5R, a breakeven trailing stop at 1R, and a maximum age expiry. No manual intervention is required.</p>
-
-            <div class="method-block">
-              <div class="method-block-title">Partial TP System — 1.5R Profit Lock</div>
-              <div class="method-formula">Partial TP level (for LONG) = Entry + 1.5 × (Entry − Stop)
-Partial TP level (for SHORT) = Entry − 1.5 × (Entry − Stop)
-
-When price hits the Partial TP:
-  1. 50% of position is considered booked at Partial TP price
-  2. Stop Loss → Entry (breakeven activated)
-  3. Discord "🔒 Partial TP Hit" alert sent
-
-When trade fully closes (after partial was hit):
-  Case A — Full TP reached:  ROI = 0.5 × partial_roi + 0.5 × full_tp_roi
-  Case B — Breakeven hit:    ROI = 0.5 × partial_roi + 0 = half the partial gain
-                              Status = WIN (still net profitable)
-  Case C — SL somehow hit:   ROI = 0.5 × partial_roi + 0.5 × stop_roi</div>
-              <p class="method-p">The partial TP transforms many "break-even cancels" into small wins. Example: BTC trade, Entry $95,000, Stop $93,500 (risk = $1,500), Partial TP $97,250 (1.5R), Full TP $99,500 (3R). If price hits $97,250 then reverses to entry: you still made +$1,250 per BTC on the half position — a win. Without the partial, this would have been a 0% cancelled trade. Over many trades, this materially improves the win rate and average ROI.</p>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Breakeven Trailing Stop — 1R Activation</div>
-              <div class="method-formula">Breakeven activates when price moves 1× risk distance in favour:
-  LONG:  current_price ≥ Entry + (Entry − Stop)
-  SHORT: current_price ≤ Entry − (Entry − Stop)
-
-After activation: effective SL = Entry price
-  → If price returns to entry → trade closes at 0% ROI (cancelled)
-  → Guaranteed no loss once 1R is reached</div>
-              <p class="method-p">The breakeven stop is a built-in loss prevention mechanism. Once the trade is 1R in profit, the stop permanently moves to entry. This creates a "free trade" scenario — the worst case from that point is breaking even. Note: the partial TP fires at 1.5R, which is after the breakeven would normally activate at 1R. Both happen automatically on the same scan cycle if price jumps past both levels in one move.</p>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Target and Stop Levels</div>
-              <div class="method-formula">LONG target priority:
-  1. Prior swing high above current price
-  2. 200 EMA above current price (dynamic resistance)
-  3. 50 EMA above current price
-  4. Current price + 2.5×ATR (fallback projection)
-  → If structural target gives &lt; min R:R → projected to exactly min R:R
-
-LONG stop:
-  Last confirmed swing high − (stop_multiplier × ATR)
-  → ATR buffer absorbs noise/wicks, stop placed just below broken resistance
-  → Max stop: 25% of entry price (hard cap)</div>
-              <p class="method-p">Stops are placed at structurally meaningful levels, not arbitrary percentages. The stop belongs just below the level that, if reclaimed by sellers, would prove the bullish BOS was a false breakout. The adaptive stop multiplier (default 0.5×ATR) widens automatically if the system detects that stops are being hit by normal candle noise — a pattern that indicates the stop buffer is too tight for current volatility.</p>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Maximum Age Expiry</div>
-              <div class="method-formula">Day trades (15m): expire after 72 hours if TP/SL not hit
-Swing trades (4h): expire after 14 days if TP/SL not hit
-→ Closed at entry price → 0% ROI, status: cancelled</div>
-              <p class="method-p">A trade that hasn't resolved after 72 hours (Day) or 14 days (Swing) has failed to follow through. Rather than holding it indefinitely, the system cancels it at entry — no loss, but the capital is freed. This prevents the trade log from filling with zombie positions that the original BOS has long since invalidated by market action.</p>
-            </div>
-          </section>
-
-          <hr class="method-divider">
-
-          <!-- §7 CLAUDE AI -->
-          <section class="method-section" id="m7">
-            <div class="method-title">7. Claude AI</div>
-            <p class="method-lead">Claude Haiku (fast, low-latency) evaluates every signal before it's logged. Claude Sonnet (deep analysis) reviews full trade history on demand. Both models receive the complete technical picture plus market context — not just indicator values, but interpretation of what those values mean together. Claude also tracks its own prediction accuracy and adjusts its criteria over time.</p>
-
-            <div class="method-block">
-              <div class="method-block-title">Pre-Trade Signal Evaluation (Haiku)</div>
-              <div class="method-formula">Inputs:
-  Technical: score, R:R, entry/target/stop, ADX, VWAP side
-  Market context: Fear &amp; Greed index, BTC dominance, funding rate,
-                  open interest, session conditions
-  Track record: system win rate, per-symbol recent wins, Claude's own
-                historical accuracy by recommendation type
-
-Output JSON:
-  confidence:      0–100 (Claude's conviction level)
-  recommendation:  "strong_take" | "take" | "skip"
-  reasoning:       2-sentence explanation
-  risks:           [ list of specific risks ]
-  positives:       [ list of specific positives ]
-
-"skip" → trade vetoed completely, never logged</div>
-              <p class="method-p">Claude doesn't just check boxes — it synthesizes. A score of 8 with extreme greed (F&amp;G = 90) and overheated funding rates gets treated differently than a score of 8 in neutral market conditions. A technically clean setup in a symbol that has a poor recent win record gets flagged. This contextual layer is what makes the AI veto meaningful rather than just another indicator.</p>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Self-Calibration — Claude Learns Its Own Accuracy</div>
-              <div class="method-formula">Before each evaluation, Claude receives:
-  "strong_take: 12 trades → 9W/3L (75% win rate, avg ROI +3.2%)"
-  "take: 8 trades → 4W/4L (50% win rate, avg ROI +0.1%)"
-
-Built-in calibration rules:
-  strong_take win rate &lt; 55% → raise the bar for strong_take
-  take win rate &lt; 45%        → tighten criteria, skip more borderline setups
-  Both &gt; 65%                 → trust conviction signals more</div>
-              <p class="method-p">This is the self-improvement loop. Claude doesn't just evaluate trades in isolation — it knows whether its past "strong_take" calls actually won. If its conviction calls have been right 75% of the time, it's more confident in future strong signals. If its "take" calls have only won 40%, it starts being more critical before recommending "take." No human adjustment needed — the feedback loop is automatic.</p>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">On-Demand Chart Analysis (Haiku)</div>
-              <div class="method-formula">Triggered: "Ask Claude ↻" button in the AI card
-Input:  all 9 indicator values for current symbol + timeframe
-Output: { bias: LONG|SHORT|NEUTRAL, confidence: 0-100,
-          summary: "2-sentence TA read",
-          watch_for: "key trigger to confirm or invalidate",
-          key_levels: ["price: what it means"],
-          risks: ["specific risks"] }</div>
-              <p class="method-p">This is separate from the trade signal evaluation. You can ask Claude for a chart read at any time, even when no signal is active. Claude gives its directional bias and confidence based purely on the current technical state — useful for understanding whether to watch a coin for a developing setup or to stay away from it entirely.</p>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Performance Review (Sonnet)</div>
-              <div class="method-formula">Triggered: /api/ai-insights endpoint (requires ≥10 closed trades)
-Input:  full closed trade history with factors_snapshot per trade,
-        per-symbol breakdown, factor win rates, Claude's own accuracy
-
-Output: { overall_assessment, patterns, recommendations, watch_out }</div>
-              <p class="method-p">Sonnet (the more capable model) does the deep work here. It identifies patterns across the trade history: which symbols have been working, which factors have been most predictive, whether the system is performing better on Day vs Swing trades, whether certain market regimes should be avoided. These insights can inform manual adjustments to the adaptive weights if the automated engine hasn't caught a pattern yet.</p>
-            </div>
-          </section>
-
-          <hr class="method-divider">
-
-          <!-- §8 ADAPTIVE LEARNING -->
-          <section class="method-section" id="m8">
-            <div class="method-title">8. Adaptive Learning Engine</div>
-            <p class="method-lead">After every closed trade, the system automatically reviews the last 8 closed trades and adjusts three parameters: factor weights, signal threshold, and stop multiplier. No manual tuning is required — the engine finds what works in current market conditions and reinforces it, then backs off what is not working.</p>
-
-            <div class="method-block">
-              <div class="method-block-title">Factor Weight Adaptation</div>
-              <div class="method-formula">For each of the 9 factors, look at last 8 trades where that factor was present:
-  Win rate &gt; 70% → weight × 1.10 (capped at 1.5× default)
-  Win rate &lt; 40% → weight × 0.75 (floored at 0.30× default)
-  Win rate 40–70% AND weight was reduced → weight × 1.05 (recovery)
-
-Example: if ADX &gt;25 has been present in 7/8 wins →
-  ADX weight: 1.0 → 1.1 → 1.21 → ... up to 1.5
-  Higher ADX weight means trending-market signals score higher → more fires
-
-Example: if VWAP has been present in 7/8 losses →
-  VWAP weight: 1.0 → 0.75 → 0.56 → ... down to 0.30
-  Lower VWAP weight means VWAP alignment matters less in scoring</div>
-              <p class="method-p">The weights represent the system's current empirical view of what matters. If the current market is range-bound and VWAP keeps being present on losing trades, the engine concludes that VWAP alignment is a false signal in this environment. When the market shifts back to trending, VWAP signals start winning again and the weight recovers. The system adapts to market regimes without being told they changed.</p>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Signal Threshold Adaptation</div>
-              <div class="method-formula">Review: last 8 closed trades (wins + losses)
-
-Overall win rate &lt; 40%:  threshold += 0.5  (requires stronger setups)
-Overall win rate &gt; 70%:  threshold −= 0.25 (allows slightly lower bar)
-3+ consecutive losses:    threshold += 0.5  (streak protection, immediate)
-
-Range: 6.5 minimum (never too permissive) to 9.5 maximum (never impossible)</div>
-              <p class="method-p">The threshold controls signal frequency. In a good run (70%+ win rate) it lowers slightly to catch more opportunities. In a losing streak it raises to force the system to be more selective — only the highest-conviction setups get through. The consecutive loss protection fires faster than the win-rate check: 3 losses in a row immediately tightens the bar, rather than waiting for the full 8-trade window.</p>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Stop Multiplier Adaptation</div>
-              <div class="method-formula">Check last 5 losses:
-  If 3+ of them had Stop within 0.5% of Entry:
-    stop_multiplier += 0.1 (widens ATR buffer on new trades)
-    Range: 0.3× ATR minimum → 1.0× ATR maximum
-
-Default: 0.5×ATR buffer below/above the structural stop level</div>
-              <p class="method-p">If recent losses are being stopped out within 0.5% of entry, the market is printing wicks that just barely clip the stop before reversing in the original direction — a sign the stop buffer is too tight for current volatility. The system detects this and widens the buffer on future trades. As stops get wider, the R:R enforcement means targets are projected further too — the whole setup scales proportionally.</p>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Viewing the Learning State</div>
-              <p class="method-p">The /api/learning endpoint (and the Learning card on the dashboard) shows all current values: each factor's weight vs default, current signal threshold, stop multiplier, win rate, and the last 15 adaptation changes with timestamps. The adaptation log entries explain exactly what changed and why — e.g. "⬆ 'adx' weight 1.00→1.10 (present in 6/8 wins, win rate 75%)".</p>
-            </div>
-          </section>
-
-          <hr class="method-divider">
-
-          <!-- §9 CHART REFERENCE -->
-          <section class="method-section" id="m9">
-            <div class="method-title">9. Chart Reference</div>
-            <p class="method-lead">Every element on the chart is calculated from real market data. Nothing is decorative. The four chart panels (price, RSI, OBV, MACD) are synchronized — moving the crosshair on the main chart moves it on all sub-charts simultaneously. All times are displayed in UTC.</p>
-
-            <div class="method-block">
-              <div class="method-block-title">Price Chart Lines &amp; Overlays</div>
-              <table class="method-table">
-                <tr><td><span style="color:#58a6ff">━ EMA 50 (blue)</span></td><td>50-period EMA on the currently viewed timeframe. Short-term dynamic support/resistance.</td></tr>
-                <tr><td><span style="color:#f0883e">━ EMA 200 (orange)</span></td><td>200-period EMA on the currently viewed timeframe. Long-term macro trend anchor.</td></tr>
-                <tr><td><span style="color:#3fb950">- - S (green dashed)</span></td><td>Last 2 confirmed swing lows — structural support zones where buyers previously defended.</td></tr>
-                <tr><td><span style="color:#f85149">- - R (red dashed)</span></td><td>Last 2 confirmed swing highs — structural resistance zones where sellers previously stepped in.</td></tr>
-                <tr><td><span style="color:#26a69a">━ VWAP (teal)</span></td><td>Volume-Weighted Average Price from session open. Institutional fair value anchor.</td></tr>
-                <tr><td><span style="color:#ffd700">▭ FVG (gold shade)</span></td><td>Fair Value Gap — a candle gap (imbalance) that price tends to revisit and fill.</td></tr>
-                <tr><td><span style="color:#ff8c00">▭ OB (orange shade)</span></td><td>Order Block — the last bearish (for bullish OB) or bullish (for bearish OB) candle before a major move. Institutional supply/demand zones.</td></tr>
-                <tr><td><span style="color:#f85149">━ ✖ Invalidation</span></td><td>Current signal stop level. If price closes beyond this, the structural thesis is broken.</td></tr>
-                <tr><td><span style="color:#3fb950">━ ⊕ Target</span></td><td>Current signal target. Structural level (or projected R:R level) price aims for.</td></tr>
-              </table>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Trade History Markers</div>
-              <table class="method-table">
-                <tr><td><span style="color:#3fb950">▲ Entry (green up)</span></td><td>LONG trade entry. Position where signal was logged and the trade opened.</td></tr>
-                <tr><td><span style="color:#f85149">▼ Entry (red down)</span></td><td>SHORT trade entry. Position where signal was logged and the trade opened.</td></tr>
-                <tr><td><span style="color:#3fb950">+X.X% (green exit)</span></td><td>Winning exit — trade closed at TP. ROI shown is blended if partial TP was hit first.</td></tr>
-                <tr><td><span style="color:#f85149">−X.X% (red exit)</span></td><td>Losing exit — trade closed at SL or expired.</td></tr>
-                <tr><td><span style="color:#3fb950">━ (green line)</span></td><td>Entry-to-exit connecting line for winning trades.</td></tr>
-                <tr><td><span style="color:#f85149">━ (red line)</span></td><td>Entry-to-exit connecting line for losing trades.</td></tr>
-              </table>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Sub-Chart Panels</div>
-              <table class="method-table">
-                <tr><td><span style="color:#bc8cff">RSI panel</span></td><td>14-period RSI. Lines at 70 (overbought), 50 (midline), 30 (oversold). Bullish regime = RSI holds above 50.</td></tr>
-                <tr><td><span style="color:#58a6ff">OBV panel</span></td><td>On Balance Volume with 20-EMA overlay (orange). OBV rising = volume flow bullish. Divergence from price = hidden accumulation/distribution.</td></tr>
-                <tr><td><span style="color:#3fb950">MACD panel</span></td><td>MACD line (blue) vs Signal line (orange). Histogram bars: green = bullish momentum, red = bearish. Crossovers are the directional events.</td></tr>
-              </table>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Timeframe Switcher</div>
-              <p class="method-p">The TF buttons (15m / 1H / 4H / 1D / 1W) switch the chart view and re-run analysis for that timeframe. The scanner actively monitors 15m and 4H. The 1H, 1D, and 1W views are display-only — no trades are logged from them — but they show the higher-timeframe context used by the bias filter. Switching to 1H shows you exactly what the 15m bias filter is checking.</p>
-            </div>
-
-            <div class="method-block">
-              <div class="method-block-title">Discord Notification Color Legend</div>
-              <table class="method-table">
-                <tr><td><span class="method-tag" style="background:#bc8cff22;color:#bc8cff">Purple</span></td><td>Day LONG signal (15m)</td></tr>
-                <tr><td><span class="method-tag" style="background:#58a6ff22;color:#58a6ff">Blue</span></td><td>Swing LONG signal (4H)</td></tr>
-                <tr><td><span class="method-tag" style="background:#ff8c0022;color:#ff8c00">Orange</span></td><td>Day SHORT signal (15m)</td></tr>
-                <tr><td><span class="method-tag" style="background:#f8514922;color:#f85149">Red</span></td><td>Swing SHORT signal (4H) / Trade closed at stop loss</td></tr>
-                <tr><td><span class="method-tag" style="background:#3fb95022;color:#3fb950">Green</span></td><td>Trade closed at take profit (WIN) / Partial TP hit (🔒)</td></tr>
-                <tr><td><span class="method-tag" style="background:#48505822;color:#8b949e">Gray</span></td><td>Trade cancelled (breakeven stop, expired, or opposing signal)</td></tr>
-              </table>
-            </div>
-          </section>
-
-        </div><!-- end right content -->
-      </div><!-- end modal-body -->
-    </div>
-  </div>
-</div>
-
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-// ═══════════════════════════════════════════════════════
-// STATE
-// ═══════════════════════════════════════════════════════
-let currentSymbol  = 'BTCUSDT';
-let symbolList     = JSON.parse(localStorage.getItem('cryptoDashSymbols') || '["BTCUSDT","ETHUSDT","XRPUSDT","DOGEUSDT","SOLUSDT","BNBUSDT","ADAUSDT","AVAXUSDT","LINKUSDT","LTCUSDT","DOTUSDT","NEARUSDT","ATOMUSDT"]');
-let autoRefreshOn  = false;
-let autoTimer      = null;
-let _liveWs        = null;   // Binance WebSocket for real-time kline updates
-let _lastClose     = null;   // last known close price for color comparison
+  // ─── helpers ───────────────────────────────────────────────────────────────
 
-// ── Live price — aggTrade WebSocket (instant) + kline OHLC + REST fallback ────
-let _pollTimer   = null;
-let _wsConnected = false;
-let _candleOpen  = null;
-let _candleTime  = null;
-let _candleHigh  = null;
-let _candleLow   = null;
-let _candleVol   = null;
-
-function _updatePrice(price, open) {
-  const el = document.getElementById('h-price');
-  if (el) {
-    el.textContent = '$' + fmt(price);
-    el.style.color = price >= open ? '#22c55e' : '#ef4444';
-  }
-  _lastClose = price;
-}
-
-function _startPoll(symbol, interval) {
-  if (_pollTimer) return;
-  const go = async () => {
-    try {
-      const r = await fetch(`https://api.binance.us/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=1`);
-      const d = await r.json();
-      if (!Array.isArray(d) || !d[0]) return;
-      const k = d[0];
-      const o = parseFloat(k[1]), c = parseFloat(k[4]);
-      _candleOpen = o;
-      _updatePrice(c, o);
-    } catch(e) {}
-  };
-  go();
-  _pollTimer = setInterval(go, 1000);
-}
-
-function startLiveWs(symbol, interval) {
-  if (_liveWs)    { try { _liveWs.close(); } catch(e){} _liveWs = null; }
-  if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
-  _wsConnected = false;
-  _candleOpen = _candleTime = _candleHigh = _candleLow = _candleVol = null;
-
-  // Seed initial candle state from already-loaded chart data
-  if (lastData && lastData.chart && lastData.chart.candles.length) {
-    const last = lastData.chart.candles[lastData.chart.candles.length - 1];
-    _candleTime = last.time; _candleOpen = last.open;
-    _candleHigh = last.high; _candleLow  = last.low; _candleVol = null;
+  function fmt(n) {
+    if (n == null) return '—';
+    const v = parseFloat(n);
+    if (isNaN(v)) return '—';
+    if (Math.abs(v) >= 10000) return v.toFixed(0);
+    if (Math.abs(v) >= 100)   return v.toFixed(2);
+    if (Math.abs(v) >= 1)     return v.toFixed(3);
+    return v.toFixed(5);
   }
 
-  const sym = symbol.toLowerCase();
-  // Combined stream: aggTrade (instant ticks) + kline (OHLC sync)
-  const url = `wss://stream.binance.com/stream?streams=${sym}@aggTrade/${sym}@kline_${interval}`;
-
-  try {
-    const ws = new WebSocket(url);
-    const giveUp = setTimeout(() => {
-      if (!_wsConnected) { try { ws.close(); } catch(e){} _startPoll(symbol, interval); }
-    }, 5000);
-
-    ws.onmessage = e => {
-      if (!_wsConnected) { _wsConnected = true; clearTimeout(giveUp); }
-      try {
-        const msg  = JSON.parse(e.data);
-        const name = msg.stream || '';
-        const data = msg.data  || msg;
-
-        if (name.includes('aggTrade')) {
-          const price = parseFloat(data.p);
-          if (_candleOpen === null) return;
-          _updatePrice(price, _candleOpen);
-        } else if (data.k) {
-          const k = data.k;
-          _candleOpen = parseFloat(k.o);
-          _updatePrice(parseFloat(k.c), _candleOpen);
-        }
-      } catch(err) {}
-    };
-    ws.onerror = () => { clearTimeout(giveUp); _startPoll(symbol, interval); };
-    ws.onclose = () => { _liveWs = null; if (!_pollTimer) _startPoll(symbol, interval); };
-    _liveWs = ws;
-  } catch(e) { _startPoll(symbol, interval); }
-}
-let addModal         = null;
-let lastSignal       = null;
-let lastData         = null;  // full analysis response, used for manual close price
-let analysisExpanded = false;
-
-// All-signals feed state
-let allSignalsData     = [];
-let allSignalsFilter   = 'all';
-let allSignalsCollapsed= false;
-let asfCountdown       = 60;
-let asfCountdownTimer  = null;
-
-// Trade size for dollar P&L calculations (persists in localStorage)
-let tradeSize = parseFloat(localStorage.getItem('tradeSize') || '1000');
-
-// ═══════════════════════════════════════════════════════
-// INIT
-// ═══════════════════════════════════════════════════════
-document.addEventListener('DOMContentLoaded', () => {
-  addModal = new bootstrap.Modal(document.getElementById('addModal'));
-  // Restore trade size from localStorage
-  const tsInput = document.getElementById('trade-size-input');
-  if (tsInput) tsInput.value = tradeSize;
-  renderSymbolBar();
-  loadAnalysis(currentSymbol);
-  fetchAllSignals();
-  startAsfCountdown();
-});
-
-// ═══════════════════════════════════════════════════════
-// TRADINGVIEW CHART
-// ═══════════════════════════════════════════════════════
-let _tvWidget = null;
-const TV_INTERVAL_MAP = {'15m':'15','30m':'30','1h':'60','4h':'240','1d':'D','1w':'W'};
-let _tvSym = null, _tvTf = null;
-
-function _tvShowLoading(sym) {
-  const el = document.getElementById('tv-loading');
-  const msg = document.getElementById('tv-loading-msg');
-  if (el) { el.style.display = 'flex'; }
-  if (msg) msg.textContent = `Loading ${sym.replace('USDT','')} chart...`;
-}
-function _tvHideLoading() {
-  const el = document.getElementById('tv-loading');
-  if (el) el.style.display = 'none';
-}
-
-function initTVChart(symbol, interval) {
-  const tvInterval = TV_INTERVAL_MAP[interval] || '240';
-
-  // Try the fast path: use the widget's own API to change symbol/interval
-  // (works on the TradingView widget when the chart is already loaded)
-  if (_tvWidget && _tvSym !== null) {
-    try {
-      if (_tvSym !== symbol || _tvTf !== interval) {
-        _tvWidget.chart().setSymbol('BINANCE:' + symbol, tvInterval, function() {
-          _tvHideLoading();
-        });
-        _tvShowLoading(symbol);
-        _tvSym = symbol; _tvTf = interval;
-      }
-      return;  // widget already exists, update handled above
-    } catch(e) {
-      // .chart() not available on this widget version — fall through to recreate
-    }
+  function rr(entry, tp, sl) {
+    if (entry == null || tp == null || sl == null) return '—';
+    const risk   = Math.abs(parseFloat(entry) - parseFloat(sl));
+    const reward = Math.abs(parseFloat(tp)    - parseFloat(entry));
+    if (risk === 0) return '—';
+    return (reward / risk).toFixed(1) + 'R';
   }
 
-  // Guard: same symbol+TF, nothing to do
-  if (_tvSym === symbol && _tvTf === interval && _tvWidget) return;
-
-  // Create/recreate widget
-  _tvSym = symbol; _tvTf = interval;
-  _tvShowLoading(symbol);
-  const container = document.getElementById('tv-chart-container');
-  if (!container) return;
-  container.innerHTML = '';
-  if (typeof TradingView === 'undefined') { _tvHideLoading(); return; }
-  _tvWidget = new TradingView.widget({
-    autosize: true,
-    symbol: 'BINANCE:' + symbol,
-    interval: tvInterval,
-    timezone: 'America/New_York',
-    theme: 'dark',
-    style: '1',
-    locale: 'en',
-    toolbar_bg: '#111111',
-    enable_publishing: false,
-    allow_symbol_change: false,
-    hide_side_toolbar: false,
-    withdateranges: true,
-    details: false,
-    hotlist: false,
-    calendar: false,
-    studies: ['RSI@tv-basicstudies'],
-    overrides: {
-      'mainSeriesProperties.candleStyle.upColor':       '#22c55e',
-      'mainSeriesProperties.candleStyle.downColor':      '#ef4444',
-      'mainSeriesProperties.candleStyle.borderUpColor':  '#22c55e',
-      'mainSeriesProperties.candleStyle.borderDownColor':'#ef4444',
-      'mainSeriesProperties.candleStyle.wickUpColor':    '#22c55e',
-      'mainSeriesProperties.candleStyle.wickDownColor':  '#ef4444',
-      'paneProperties.background':        '#080808',
-      'paneProperties.backgroundType':    'solid',
-      'paneProperties.vertGridProperties.color': '#1e1e1e',
-      'paneProperties.horzGridProperties.color': '#1e1e1e',
-      'scalesProperties.textColor':       '#888888',
-    },
-    container_id: 'tv-chart-container',
-  });
-  // Hide loading shimmer once iframe fires its first load event
-  const iframe = container.querySelector('iframe');
-  if (iframe) {
-    iframe.addEventListener('load', _tvHideLoading, { once: true });
-  } else {
-    setTimeout(_tvHideLoading, 3000);  // fallback
-  }
-}
-
-// ═══════════════════════════════════════════════════════
-// DATA LOADING
-// ═══════════════════════════════════════════════════════
-async function loadAnalysis(symbol, forceRefresh = false) {
-  showLoading(`Fetching ${symbol}...`);
-  hideError();
-  try {
-    const tf = currentTF;
-    const endpoint = forceRefresh
-      ? `/api/refresh/${symbol}/${tf}`
-      : `/api/analysis/${symbol}/${tf}`;
-    const resp = await fetch(endpoint);
-    const data = await resp.json();
-    if (data.error) throw new Error(data.error);
-    renderAll(data);
-    _lastClose = data.current_price || null;
-    startLiveWs(symbol, tf);   // connect real-time kline stream
-  } catch(e) {
-    showError(`Failed to load ${symbol}: ${e.message}`);
-  } finally {
-    hideLoading();
-  }
-}
-
-function forceRefresh() { loadAnalysis(currentSymbol, true); }
-
-// ═══════════════════════════════════════════════════════
-// RENDER ALL
-// ═══════════════════════════════════════════════════════
-function renderAll(d) {
-  lastData   = d;
-  lastSignal = d.signal;
-  initTVChart(currentSymbol, currentTF);
-  renderHero(d);
-  renderSignal(d.signal);
-  renderRegime(d.regime);
-  renderStructure(d.structure, d.swings, d.sweeps, d.key_support, d.key_resistance, d.channels, d.interval);
-  renderVolume(d.volume, d.rsi);
-  renderMacd(d.macd);
-  renderVolatility(d.volatility);
-  renderConfluence(d.confluence);
-  renderRisk(d.risk, d.confluence);
-  renderPrediction(d.prediction);
-  setTimestamp(d.fetched_at, d.cache_age);
-  fetchTrades();
-  // Analysis chart — always visible, shows EMA/S&R/VWAP/swings/signal
-  renderAnalysisChart(d);
-  // Market regime type (trending/ranging/transitioning) — async, non-blocking
-  fetchRegimeType();
-  // Auto-trigger Claude AI analysis when symbol or TF changes
-  if (_aiChartSym !== currentSymbol || _aiChartTf !== currentTF) {
-    fetchAiChart();
-  }
-}
-
-// ═══════════════════════════════════════════════════════
-// HERO BAR
-// ═══════════════════════════════════════════════════════
-function renderHero(d) {
-  const sym = d.symbol.replace('USDT','');
-  const r   = d.regime;
-  const c   = d.confluence;
-  const rsk = d.risk;
-
-  set('h-symbol', sym, regimeColor(r.regime));
-  set('h-price',  '$' + fmt(d.current_price));
-  set('h-regime', r.regime, regimeColor(r.regime));
-
-  const sc = c.score;
-  const scColor = sc >= 7 ? '#22c55e' : sc >= 5 ? '#f59e0b' : '#ef4444';
-  set('h-score', `${sc}/10`, scColor);
-
-  const rsiC = d.rsi.range === 'Bullish' ? '#22c55e' : d.rsi.range === 'Bearish' ? '#ef4444' : '#888888';
-  set('h-rsi', `${d.rsi.value} (${d.rsi.range})`, rsiC);
-
-  let biasText = 'No BOS';
-  let biasColor = '#888888';
-  if (d.structure) {
-    if (d.structure.bullish_bos) { biasText = 'Bullish BOS'; biasColor = '#22c55e'; }
-    else if (d.structure.bearish_bos) { biasText = 'Bearish BOS'; biasColor = '#ef4444'; }
-    else if (d.structure.hh_hl) { biasText = 'HH/HL'; biasColor = '#22c55e'; }
-    else if (d.structure.lh_ll) { biasText = 'LH/LL'; biasColor = '#ef4444'; }
-  }
-  set('h-struct', biasText, biasColor);
-  set('h-rr', rsk.rr + ':1', rsk.favorable ? '#22c55e' : '#f59e0b');
-  set('h-atr', '$' + fmt(d.volatility.current), d.volatility.expanding ? '#22c55e' : '#f59e0b');
-  set('h-ema', '$' + fmt(r.ema200), r.above_200 ? '#22c55e' : '#ef4444');
-}
-
-// ═══════════════════════════════════════════════════════
-// SECTION 1: REGIME
-// ═══════════════════════════════════════════════════════
-function renderRegime(r) {
-  const color = regimeColor(r.regime);
-  const patt = r.hh_hl ? 'HH / HL' : r.lh_ll ? 'LH / LL' : 'Mixed / Unclear';
-  const pattC = r.hh_hl ? '#3fb950' : r.lh_ll ? '#f85149' : '#d29922';
-
-  document.getElementById('card-regime').innerHTML = `
-    <div class="badge-regime" style="background:${color}22;color:${color};border:1px solid ${color}44">
-      ${r.regime}
-    </div>
-    ${row('Price vs 200 EMA (Daily)',
-      `${yn(r.above_200,'Above','Below')} &nbsp;<span class="text-dim">($${fmt(r.ema200)})</span>`)}
-    ${row('Price Structure', `<span style="color:${pattC}">${patt}</span>`)}
-    ${row('Daily ATR', `$${fmt(r.atr)} — ${r.atr_expanding
-      ? '<span class="text-g">Expanding</span>'
-      : '<span class="text-y">Contracting</span>'}`)}
-    ${row('Trend Filter', r.above_200
-      ? '<span class="text-g">Bullish context (above 200 EMA)</span>'
-      : '<span class="text-r">Bearish context (below 200 EMA)</span>')}
-  `;
-}
-
-// ═══════════════════════════════════════════════════════
-// SECTION 2: STRUCTURE
-// ═══════════════════════════════════════════════════════
-function renderStructure(s, swings, sweeps, support, resistance, channels, interval) {
-  const tfLabel = (interval || '4H').toUpperCase();
-  let bosHtml = '<span class="text-dim">No confirmed BOS</span>';
-  if (s) {
-    if (s.bullish_bos) bosHtml = '<span class="text-g fw-bold">Bullish BOS — price closed above last swing high</span>';
-    else if (s.bearish_bos) bosHtml = '<span class="text-r fw-bold">Bearish BOS — price closed below last swing low</span>';
+  function calcPnlR(trade) {
+    const { direction, entry, sl, close_price } = trade;
+    if (!close_price || !entry || !sl) return null;
+    const risk = Math.abs(parseFloat(entry) - parseFloat(sl));
+    if (risk === 0) return null;
+    const dir  = (direction || '').toUpperCase();
+    const gain = dir === 'LONG'
+      ? parseFloat(close_price) - parseFloat(entry)
+      : parseFloat(entry)       - parseFloat(close_price);
+    return gain / risk;
   }
 
-  const shList = (swings.highs || []).slice(-3).reverse().map((x,i) =>
-    `<div class="swing-item">
-      <span class="text-dim">SH${i===0?'(last)':''}</span>
-      <span class="text-r fw-bold">$${fmt(x[1])}</span>
-      <span class="text-dim" style="font-size:10px">${fmtDate(x[0])}</span>
-    </div>`).join('');
-
-  const slList = (swings.lows || []).slice(-3).reverse().map((x,i) =>
-    `<div class="swing-item">
-      <span class="text-dim">SL${i===0?'(last)':''}</span>
-      <span class="text-g fw-bold">$${fmt(x[1])}</span>
-      <span class="text-dim" style="font-size:10px">${fmtDate(x[0])}</span>
-    </div>`).join('');
-
-  const sweepHtml = sweeps && sweeps.length
-    ? sweeps.slice(0,3).map(sw =>
-        `<span class="sweep-pill" style="background:${sw.type.includes('bull')?'#3fb95022':'#f8514922'};color:${sw.type.includes('bull')?'#3fb950':'#f85149'};border:1px solid ${sw.type.includes('bull')?'#3fb95044':'#f8514944'}">
-          ${sw.type === 'bullish_sweep' ? '↑' : '↓'} $${fmt(sw.level)}
-        </span>`).join('')
-    : '<span class="text-dim" style="font-size:12px">None detected</span>';
-
-  const supHtml = support.length
-    ? support.map(p => `<span class="level-pill" style="background:#3fb95022;color:#3fb950;border:1px solid #3fb95044">$${fmt(p)}</span>`).join('')
-    : '<span class="text-dim">—</span>';
-  const resHtml = resistance.length
-    ? resistance.map(p => `<span class="level-pill" style="background:#f8514922;color:#f85149;border:1px solid #f8514944">$${fmt(p)}</span>`).join('')
-    : '<span class="text-dim">—</span>';
-
-  let channelHtml = '<span class="text-dim">None detected</span>';
-  if (channels && channels.channel_type) {
-    const cColor = channels.bias === 'Bullish' ? '#3fb950' : channels.bias === 'Bearish' ? '#f85149' : '#8b949e';
-    channelHtml = `<span style="color:${cColor};font-weight:600">${channels.channel_type}</span>`
-      + `<span class="text-dim" style="font-size:11px;margin-left:6px">${channels.note}</span>`;
-  }
-
-  document.getElementById('card-structure').innerHTML = `
-    ${row('Break of Structure', bosHtml)}
-    ${row('Pattern', s ? (s.hh_hl ? '<span class="text-g">Higher Highs / Higher Lows</span>' : s.lh_ll ? '<span class="text-r">Lower Highs / Lower Lows</span>' : '<span class="text-y">Mixed</span>') : '<span class="text-dim">—</span>')}
-    ${row('Channel', channelHtml)}
-    ${row('Liquidity Sweeps', sweepHtml)}
-    ${row('Key Support', supHtml)}
-    ${row('Key Resistance', resHtml)}
-    <div style="margin-top:10px">
-      <div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Swing Highs (${tfLabel})</div>
-      <div class="swing-list">${shList || '<span class="text-dim" style="font-size:12px">Insufficient data</span>'}</div>
-    </div>
-    <div style="margin-top:8px">
-      <div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Swing Lows (${tfLabel})</div>
-      <div class="swing-list">${slList || '<span class="text-dim" style="font-size:12px">Insufficient data</span>'}</div>
-    </div>
-  `;
-}
-
-// ═══════════════════════════════════════════════════════
-// SECTION 3: VOLUME & RSI
-// ═══════════════════════════════════════════════════════
-function renderVolume(v, r) {
-  const divHtml = v.bullish_obv_div
-    ? '<span class="text-g">Bullish OBV divergence — price lower, OBV higher</span>'
-    : v.bearish_obv_div
-    ? '<span class="text-r">Bearish OBV divergence — price higher, OBV lower</span>'
-    : '<span class="text-dim">No divergence</span>';
-
-  const rsiDivHtml = r.bullish_div
-    ? '<span class="text-g">Bullish RSI divergence detected</span>'
-    : r.bearish_div
-    ? '<span class="text-r">Bearish RSI divergence detected</span>'
-    : '<span class="text-dim">None</span>';
-
-  const rsiResetHtml = r.reset_oversold
-    ? '<span class="text-g">Reset from oversold (&lt;30)</span>'
-    : r.reset_overbought
-    ? '<span class="text-y">Reset from overbought (&gt;70)</span>'
-    : '<span class="text-dim">No recent extreme</span>';
-
-  const rsiColor = r.range === 'Bullish' ? '#3fb950' : r.range === 'Bearish' ? '#f85149' : '#8b949e';
-  const rsiExtreme = r.overbought ? ' <span style="color:#f85149;font-size:11px">OVERBOUGHT</span>'
-                   : r.oversold   ? ' <span style="color:#3fb950;font-size:11px">OVERSOLD</span>' : '';
-
-  document.getElementById('card-volume').innerHTML = `
-    <div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Volume</div>
-    ${row('Trend', v.expanding
-      ? '<span class="text-g">Expanding — participation increasing</span>'
-      : '<span class="text-y">Declining — weak participation</span>')}
-    ${row('Recent Spike', yn(v.recent_spike, '2x+ avg in last 10 bars', 'No spike'))}
-    ${row('OBV Direction', v.obv_bullish
-      ? '<span class="text-g">Bullish — OBV trending up</span>'
-      : '<span class="text-r">Bearish — OBV trending down</span>')}
-    ${row('OBV Divergence', divHtml)}
-    <div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em;margin:10px 0 6px">RSI (14) — 4H</div>
-    ${row('Value', `<span style="color:${rsiColor};font-weight:700;font-size:16px">${r.value}</span>${rsiExtreme}`)}
-    ${row('Range', `<span style="color:${rsiColor}">${r.range}</span>`)}
-    ${row('Divergence', rsiDivHtml)}
-    ${row('Extreme Reset', rsiResetHtml)}
-  `;
-}
-
-// ═══════════════════════════════════════════════════════
-// SECTION 4: MACD MOMENTUM
-// ═══════════════════════════════════════════════════════
-function renderMacd(m) {
-  const el = document.getElementById('card-macd');
-  if (!el) return;
-  if (!m) {
-    el.innerHTML = '<span class="text-dim" style="font-size:13px">MACD data unavailable.</span>';
-    return;
-  }
-  const bullish = m.bullish;
-  const dirColor = bullish ? '#3fb950' : '#f85149';
-  const dirLabel = bullish ? 'Bullish' : 'Bearish';
-  const crossLabel = m.bullish_cross ? '<span class="text-g"> · Bullish Crossover!</span>'
-                   : m.bearish_cross ? '<span class="text-r"> · Bearish Crossover!</span>'
-                   : '';
-  const histColor = m.hist >= 0 ? '#3fb950' : '#f85149';
-  el.innerHTML = `
-    ${row('Direction', `<span style="color:${dirColor};font-weight:700">${dirLabel}</span>${crossLabel}`)}
-    ${row('MACD Line', `<span style="color:#58a6ff">${m.macd > 0 ? '+' : ''}${m.macd.toFixed(4)}</span>`)}
-    ${row('Signal Line', `<span style="color:#f0883e">${m.signal > 0 ? '+' : ''}${m.signal.toFixed(4)}</span>`)}
-    ${row('Histogram', `<span style="color:${histColor}">${m.hist > 0 ? '+' : ''}${m.hist.toFixed(4)}</span>`)}
-    ${row('Momentum', bullish
-      ? '<span class="text-g">MACD above signal — upside momentum</span>'
-      : '<span class="text-r">MACD below signal — downside momentum</span>')}
-    ${row('Confluence', m.bullish && m.bullish_cross ? '<span class="text-g">Strong — fresh bullish cross</span>'
-      : m.bearish && m.bearish_cross ? '<span class="text-r">Strong — fresh bearish cross</span>'
-      : bullish ? '<span class="text-y">Moderate — bullish trend, no cross</span>'
-      : '<span class="text-y">Moderate — bearish trend, no cross</span>')}
-  `;
-}
-
-// ═══════════════════════════════════════════════════════
-// SECTION 5: VOLATILITY
-// ═══════════════════════════════════════════════════════
-function renderVolatility(v) {
-  const ratio = (v.current / v.avg).toFixed(2);
-  document.getElementById('card-vol2').innerHTML = `
-    ${row('ATR (4H)', `$${fmt(v.current)}`)}
-    ${row('ATR 20-bar avg', `$${fmt(v.avg)}`)}
-    ${row('ATR Ratio', `${ratio}x avg — ${v.expanding
-      ? '<span class="text-g">Expanding — breakout potential</span>'
-      : v.compressing
-      ? '<span class="text-r">Compressed — fakeout risk elevated</span>'
-      : '<span class="text-y">Normal range</span>'}`)}
-    ${row('Breakout Risk', v.compressing
-      ? '<span class="text-r">High fakeout risk — wait for expansion</span>'
-      : v.expanding
-      ? '<span class="text-g">Low fakeout risk — expansion underway</span>'
-      : '<span class="text-dim">Moderate</span>')}
-  `;
-}
-
-// ═══════════════════════════════════════════════════════
-// SECTION 6: CONFLUENCE
-// ═══════════════════════════════════════════════════════
-function renderConfluence(c) {
-  const pct      = (c.score / c.max) * 100;
-  const color    = c.score >= 7 ? '#22c55e' : c.score >= 5 ? '#f59e0b' : '#ef4444';
-  const strLabel = c.score >= 7 ? 'HIGH' : c.score >= 5 ? 'MODERATE' : 'LOW';
-
-  const reasonsHtml = c.reasons.map(r => `
-    <div class="conf-reason">
-      <div class="conf-dot" style="background:${r.earned ? '#22c55e' : '#282828'};border:1px solid ${r.earned ? '#22c55e' : '#333'}"></div>
-      <div>
-        <span style="color:${r.earned ? '#22c55e' : '#555'};font-weight:${r.earned ? '600' : '400'}">${r.earned ? '+' : ''}${r.pts}</span>
-        <span style="color:${r.earned ? '#e0e0e0' : '#444'};margin-left:5px">${r.text}</span>
-      </div>
-    </div>`).join('');
-
-  const improveHtml = c.improve && c.improve.length
-    ? c.improve.map(t => `<div style="font-size:10px;color:var(--muted);padding:2px 0">→ ${t}</div>`).join('')
-    : '<div style="font-size:10px;color:var(--green)">All factors satisfied</div>';
-
-  document.getElementById('card-confluence').innerHTML = `
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
-      <div>
-        <div class="score-badge" style="color:${color}">${c.score}<span style="font-size:14px;color:var(--dim)">/${c.max}</span></div>
-        <div class="score-label" style="color:${color}">${strLabel}</div>
-      </div>
-      <div style="flex:1">
-        <div class="conf-bar-wrap"><div class="conf-bar-fill" style="width:${pct}%;background:${color}"></div></div>
-        <div style="font-size:10px;color:var(--muted);margin-top:3px">${c.strength}</div>
-      </div>
-    </div>
-    <div>${reasonsHtml}</div>
-    ${c.improve && c.score < 10 ? `
-    <div style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px">
-      <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Would improve</div>
-      ${improveHtml}
-    </div>` : ''}
-  `;
-}
-
-// ═══════════════════════════════════════════════════════
-// SECTION 7: RISK
-// ═══════════════════════════════════════════════════════
-function renderRisk(rsk, c) {
-  const biasColor = rsk.bias === 'Long' ? '#22c55e' : rsk.bias === 'Short' ? '#ef4444' : '#888888';
-  const rrColor   = rsk.favorable ? '#22c55e' : '#f59e0b';
-
-  document.getElementById('card-risk').innerHTML = `
-    ${row('Bias',   `<span style="color:${biasColor};font-weight:700">${rsk.bias}</span>`)}
-    ${row('Price',  `$${fmt(rsk.current)}`)}
-    ${row('Target', `<span style="color:#22c55e;font-weight:700">$${fmt(rsk.target)}</span>`)}
-    ${row('Stop',   `<span style="color:#ef4444;font-weight:700">$${fmt(rsk.invalidation)}</span>`)}
-    ${row('R:R',    `<span style="color:${rrColor};font-weight:700;font-size:13px">${rsk.rr}:1</span> ${rsk.favorable ? '<span style="color:#22c55e;font-size:10px">✓</span>' : '<span style="color:#f59e0b;font-size:10px">⚠ &lt;2:1</span>'}`)}
-    <div style="margin-top:8px;font-size:10px;color:var(--muted);background:var(--surface2);padding:6px 8px;border-radius:3px;border-left:2px solid rgba(239,68,68,.5);line-height:1.5">
-      ${rsk.invalidation_note}
-    </div>
-  `;
-}
-
-// ═══════════════════════════════════════════════════════
-// SIGNAL BAR (horizontal strip below chart)
-// ═══════════════════════════════════════════════════════
-function renderSignal(sig) {
-  const bar    = document.getElementById('signal-bar');
-  const cardEl = document.getElementById('card-signal');
-  const cardTf = document.getElementById('signal-card-tf');
-  if (cardTf) cardTf.textContent = currentTF.toUpperCase();
-
-  if (!sig) {
-    if (bar) {
-      bar.style.borderColor = 'var(--border)';
-      bar.innerHTML = `
-        <span style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-right:4px">Signal</span>
-        <span style="font-size:11px;color:var(--dim);font-style:italic">No high-confluence setup on this timeframe</span>`;
-    }
-    if (cardEl) cardEl.innerHTML = `<span style="color:var(--dim);font-style:italic;font-size:11px">No signal — score below threshold or no confirmed BOS</span>`;
-    return;
-  }
-
-  const isLong  = sig.direction === 'LONG';
-  const colorHex = isLong ? '#22c55e' : '#ef4444';
-  const color   = isLong ? 'var(--green)' : 'var(--red)';
-  const arrow   = isLong ? '▲' : '▼';
-  const rr      = calcRR(sig.entry, sig.target, sig.stop, sig.direction);
-  const rrColor = rr.rr >= 3 ? 'var(--green)' : rr.rr >= 2 ? 'var(--amber)' : 'var(--red)';
-
-  // ── Compact signal bar (below chart) ──
-  if (bar) {
-    bar.style.borderColor = colorHex + '44';
-    bar.innerHTML = `
-      <span style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Signal</span>
-      <span style="color:var(--border2)">│</span>
-      <span class="sig-dir" style="color:${color}">${arrow} ${sig.direction}</span>
-      <span style="background:${colorHex}18;color:${color};border:1px solid ${colorHex}30;border-radius:2px;padding:1px 7px;font-size:10px;font-weight:700">${sig.score}/10</span>
-      <span style="color:var(--border2)">│</span>
-      <span><span class="sig-label">Entry </span><span class="sig-val">$${fmt(sig.entry)}</span></span>
-      <span><span class="sig-label">TP </span><span class="sig-val" style="color:var(--green)">$${fmt(sig.target)}</span><span class="sig-dim"> +${rr.gainPct}%</span></span>
-      <span><span class="sig-label">SL </span><span class="sig-val" style="color:var(--red)">$${fmt(sig.stop)}</span><span class="sig-dim"> -${rr.lossPct}%</span></span>
-      <span><span class="sig-label">R:R </span><span class="sig-val" style="color:${rrColor}">${rr.rr}:1</span></span>
-    `;
-  }
-
-  // ── Detailed signal card (col 1 grid) ──
-  if (!cardEl) return;
-  cardEl.innerHTML = `
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-      <span style="font-size:16px;font-weight:800;color:${color};background:${colorHex}12;border:1px solid ${colorHex}28;border-radius:3px;padding:3px 12px">${arrow} ${sig.direction}</span>
-      <span style="font-size:20px;font-weight:800;color:${color}">${sig.score}<span style="font-size:11px;color:var(--dim)">/10</span></span>
-    </div>
-    ${row('Entry',  `<b>$${fmt(sig.entry)}</b>`)}
-    ${row('Target', `<span style="color:var(--green);font-weight:700">$${fmt(sig.target)}</span> <span style="color:var(--dim);font-size:10px">+${rr.gainPct}%</span>`)}
-    ${row('Stop',   `<span style="color:var(--red);font-weight:700">$${fmt(sig.stop)}</span> <span style="color:var(--dim);font-size:10px">-${rr.lossPct}%</span>`)}
-    ${row('R:R',    `<span style="color:${rrColor};font-weight:700;font-size:13px">${rr.rr}:1</span>`)}
-    ${row('P&L',    `<span style="color:var(--green)">+$${rr.dollarGain.toLocaleString()}</span> <span style="color:var(--dim)"> / </span><span style="color:var(--red)">-$${rr.dollarLoss.toLocaleString()}</span>`)}
-    ${sig.reason ? `<div style="margin-top:7px;font-size:10px;color:var(--muted);line-height:1.5;border-top:1px solid var(--border);padding-top:5px">${sig.reason}</div>` : ''}
-  `;
-}
-
-// ═══════════════════════════════════════════════════════
-// TRADE LEVELS STRIP — open trades for current symbol+TF
-// ═══════════════════════════════════════════════════════
-function renderTradeLevels(trades) {
-  const el = document.getElementById('trade-levels');
-  if (!el) return;
-  const open = (trades || []).filter(t =>
-    t.symbol === currentSymbol && t.interval === currentTF && t.status === 'open');
-  if (!open.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
-
-  el.style.display = 'flex';
-  el.innerHTML = open.map(t => {
-    const isLong = t.direction === 'LONG';
-    const dc = isLong ? '#22c55e' : '#ef4444';
-    const rr = calcRR(t.entry, t.tp, t.sl, t.direction);
-    return `
-      <span class="tl-item">
-        <span class="tl-badge" style="background:${dc}18;color:${dc};border:1px solid ${dc}30">${t.direction}</span>
-        <span style="color:var(--muted);font-size:10px">${t.interval.toUpperCase()}</span>
-        <span style="color:var(--orange)">▶ <b>$${fmt(t.entry)}</b></span>
-        <span style="color:var(--green)">TP <b>$${fmt(t.tp)}</b></span>
-        <span style="color:var(--red)">SL <b>$${fmt(t.sl)}</b></span>
-        <span style="color:var(--muted)">R:R <b style="color:${rr.rr>=3?'#22c55e':'#f59e0b'}">${rr.rr}:1</b></span>
-        <span style="color:var(--amber);font-size:10px">${t.score}/10</span>
-      </span>
-      ${open.indexOf(t) < open.length-1 ? '<span style="color:#30363d;margin:0 4px">│</span>' : ''}
-    `;
-  }).join('');
-}
-
-
-
-// ═══════════════════════════════════════════════════════
-// ANALYSIS CHART (LightweightCharts — always visible)
-// Shows candles + EMA50/200 + S/R + VWAP + swing markers
-// + signal Entry/TP/SL when a signal is active
-// Uses data already loaded in lastData (no extra API call)
-// ═══════════════════════════════════════════════════════
-let _sigChart = null;
-let _sigSeries = null;
-let _sigRo = null;  // ResizeObserver
-
-function renderAnalysisChart(data) {
-  const wrap = document.getElementById('signal-chart-wrap');
-  const container = document.getElementById('signal-chart');
-  if (!wrap || !container || !data) return;
-
-  // Always show the chart
-  wrap.style.display = 'block';
-
-  // Destroy previous instance
-  if (_sigChart) { _sigChart.remove(); _sigChart = null; _sigSeries = null; }
-  if (_sigRo) { _sigRo.disconnect(); _sigRo = null; }
-
-  if (typeof LightweightCharts === 'undefined') return;
-
-  const chart = LightweightCharts.createChart(container, {
-    width:  container.clientWidth || 800,
-    height: 280,
-    layout:         { background: { color: '#111111' }, textColor: '#888888' },
-    grid:           { vertLines: { color: '#1e1e1e' }, horzLines: { color: '#1e1e1e' } },
-    rightPriceScale:{ borderColor: '#282828' },
-    timeScale:      { borderColor: '#282828', timeVisible: true, secondsVisible: false },
-    crosshair:      { mode: 1 },
-    handleScroll: true, handleScale: true,
-  });
-  _sigChart = chart;
-
-  // ── Candles ──────────────────────────────────────────
-  const candles = chart.addCandlestickSeries({
-    upColor: '#26a69a', downColor: '#ef5350',
-    borderUpColor: '#26a69a', borderDownColor: '#ef5350',
-    wickUpColor: '#26a69a', wickDownColor: '#ef5350',
-    priceLineVisible: false,
-  });
-  _sigSeries = candles;
-  const cd = data.chart && data.chart.candles;
-  if (cd && cd.length) candles.setData(cd);
-
-  // ── EMA 50 (blue) ────────────────────────────────────
-  const e50d = data.chart && data.chart.ema50;
-  if (e50d && e50d.length) {
-    const e50 = chart.addLineSeries({ color: '#3b82f6', lineWidth: 1, priceLineVisible: false, lastValueVisible: true, title: 'EMA50' });
-    e50.setData(e50d);
-  }
-
-  // ── EMA 200 (orange) ─────────────────────────────────
-  const e200d = data.chart && data.chart.ema200;
-  if (e200d && e200d.length) {
-    const e200 = chart.addLineSeries({ color: '#f0883e', lineWidth: 1, priceLineVisible: false, lastValueVisible: true, title: 'EMA200' });
-    e200.setData(e200d);
-  }
-
-  const Dashed = LightweightCharts.LineStyle.Dashed;
-
-  // ── Key Support (green dashed) ───────────────────────
-  if (data.key_support) {
-    data.key_support.forEach(p => {
-      candles.createPriceLine({ price: p, color: '#22c55e88', lineWidth: 1, lineStyle: Dashed, axisLabelVisible: true, title: 'S' });
+  function fmtTime(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (isNaN(d)) return '—';
+    return d.toLocaleString([], {
+      month: '2-digit', day: '2-digit',
+      hour: '2-digit',  minute: '2-digit',
+      hour12: false
     });
   }
 
-  // ── Key Resistance (red dashed) ──────────────────────
-  if (data.key_resistance) {
-    data.key_resistance.forEach(p => {
-      candles.createPriceLine({ price: p, color: '#ef444488', lineWidth: 1, lineStyle: Dashed, axisLabelVisible: true, title: 'R' });
-    });
-  }
+  // ─── render ────────────────────────────────────────────────────────────────
 
-  // ── VWAP (purple dashed) ─────────────────────────────
-  if (data.vwap) {
-    candles.createPriceLine({ price: data.vwap, color: '#bc8cff', lineWidth: 1, lineStyle: Dashed, axisLabelVisible: true, title: 'VWAP' });
-  }
+  function renderSummary(trades) {
+    const closed = trades.filter(t => t.status === 'win' || t.status === 'loss');
+    const wins   = trades.filter(t => t.status === 'win');
+    const open   = trades.filter(t => t.status === 'open');
+    const wr     = closed.length ? (wins.length / closed.length * 100) : null;
 
-  // ── Signal Entry / TP / SL ───────────────────────────
-  if (data.signal) {
-    const sig = data.signal;
-    const Solid = LightweightCharts.LineStyle.Solid;
-    candles.createPriceLine({ price: sig.entry,  color: '#f0883e', lineWidth: 2, lineStyle: Solid,  axisLabelVisible: true, title: '▶ Entry' });
-    candles.createPriceLine({ price: sig.target, color: '#22c55e', lineWidth: 1, lineStyle: Dashed, axisLabelVisible: true, title: '✓ TP' });
-    candles.createPriceLine({ price: sig.stop,   color: '#ef4444', lineWidth: 1, lineStyle: Dashed, axisLabelVisible: true, title: '✕ SL' });
-  }
-
-  // ── Swing high / low markers ─────────────────────────
-  const markers = [];
-  if (data.swings) {
-    (data.swings.highs || []).forEach(([ts]) => {
-      try { const t = new Date(ts).getTime() / 1000; if (t > 0) markers.push({ time: t, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: '' }); } catch(e) {}
-    });
-    (data.swings.lows || []).forEach(([ts]) => {
-      try { const t = new Date(ts).getTime() / 1000; if (t > 0) markers.push({ time: t, position: 'belowBar', color: '#22c55e', shape: 'arrowUp', text: '' }); } catch(e) {}
-    });
-    if (markers.length) {
-      markers.sort((a, b) => a.time - b.time);
-      candles.setMarkers(markers);
+    let totalR = 0, counted = 0;
+    for (const t of closed) {
+      const r = calcPnlR(t);
+      if (r !== null) { totalR += r; counted++; }
     }
-  }
+    const avgR = counted ? totalR / counted : null;
 
-  // ── Historical trade markers ─────────────────────────
-  // Green triangle up = entry, Green/Red circle = TP hit / SL hit
-  addTradeMarkersToChart(candles, data.symbol, data.interval);
+    const el = id => document.getElementById(id);
 
-  chart.timeScale().fitContent();
+    el('stat-total').textContent = trades.length;
 
-  // Resize with container
-  _sigRo = new ResizeObserver(() => {
-    if (_sigChart) _sigChart.applyOptions({ width: container.clientWidth });
-  });
-  _sigRo.observe(container);
-}
-
-function addTradeMarkersToChart(series, symbol, interval) {
-  // allSignalsData is the global trades array already loaded by fetchTrades()
-  if (!allSignalsData || !allSignalsData.length) return;
-  const trades = allSignalsData.filter(t =>
-    t.symbol === symbol && t.interval === interval &&
-    t.status !== 'open' && t.opened_at
-  );
-  if (!trades.length) return;
-
-  const markers = [];
-  trades.forEach(t => {
-    // Entry marker — green (long) or red (short) arrow on open candle
-    try {
-      const openTs = new Date(t.opened_at).getTime() / 1000;
-      if (openTs > 0) {
-        const isLong = t.direction === 'LONG';
-        markers.push({
-          time:     openTs,
-          position: isLong ? 'belowBar' : 'aboveBar',
-          color:    isLong ? '#22c55e' : '#ef4444',
-          shape:    isLong ? 'arrowUp'  : 'arrowDown',
-          text:     `${t.direction} ${t.score}/10`,
-        });
-      }
-    } catch(e) {}
-
-    // Close marker — green circle = win, red circle = loss
-    if (t.closed_at) {
-      try {
-        const closeTs = new Date(t.closed_at).getTime() / 1000;
-        if (closeTs > 0) {
-          const won = t.status === 'win';
-          markers.push({
-            time:     closeTs,
-            position: won ? 'aboveBar' : 'belowBar',
-            color:    won ? '#3fb950'  : '#f85149',
-            shape:    'circle',
-            text:     won ? `+${(t.roi_pct||0).toFixed(1)}%` : `${(t.roi_pct||0).toFixed(1)}%`,
-          });
-        }
-      } catch(e) {}
+    if (wr !== null) {
+      el('stat-wr').textContent = wr.toFixed(1) + '%';
+      el('stat-wr').className   = 'stat-value ' + (wr >= 50 ? 'positive' : 'negative');
+    } else {
+      el('stat-wr').textContent = '—';
+      el('stat-wr').className   = 'stat-value';
     }
-  });
 
-  if (!markers.length) return;
-  // Merge with any existing swing markers already set
-  markers.sort((a, b) => a.time - b.time);
-  series.setMarkers(markers);
-}
-
-// ═══════════════════════════════════════════════════════
-// PRICE PREDICTION CARD
-// ═══════════════════════════════════════════════════════
-function renderPrediction(pred) {
-  const el = document.getElementById('card-prediction');
-  if (!pred) {
-    el.innerHTML = '<span class="text-dim" style="font-size:13px">No prediction available.</span>';
-    return;
-  }
-
-  const biasColor = pred.bias === 'Long' ? '#3fb950' : pred.bias === 'Short' ? '#f85149' : '#8b949e';
-  const confColor = pred.confidence === 'High' ? '#3fb950' : pred.confidence === 'Medium' ? '#d29922' : '#f85149';
-  const nt  = pred.near_term;
-  const sw  = pred.swing;
-  const sc  = pred.scenarios;
-
-  const ntBullHtml = pred.bias === 'Short'
-    ? `<span class="text-dim">$${fmt(nt.bull_target)}</span>`
-    : `<span class="text-g fw-bold">$${fmt(nt.bull_target)}</span>`;
-  const ntBearHtml = pred.bias === 'Long'
-    ? `<span class="text-dim">$${fmt(nt.bear_target)}</span>`
-    : `<span class="text-r fw-bold">$${fmt(nt.bear_target)}</span>`;
-
-  el.innerHTML = `
-    <div class="row g-3">
-      <div class="col-lg-8">
-        <div style="font-size:13px;color:#8b949e;line-height:1.7;border-left:3px solid ${biasColor}44;padding-left:12px">
-          ${pred.narrative}
-        </div>
-      </div>
-      <div class="col-lg-4">
-        <div style="background:#21262d;border-radius:6px;padding:10px 12px;margin-bottom:8px">
-          <div style="font-size:10px;color:#484f58;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">
-            Near-Term (${nt.timeframe})
-          </div>
-          ${row('Bull target', ntBullHtml)}
-          ${row('Bear target', ntBearHtml)}
-          ${row('4H ATR', `$${fmt(nt.atr)}`)}
-          <div style="font-size:10px;color:#484f58;margin-top:4px">${nt.method}</div>
-        </div>
-        <div style="background:#21262d;border-radius:6px;padding:10px 12px">
-          <div style="font-size:10px;color:#484f58;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">
-            Swing Structure
-          </div>
-          ${row('Target', `<span class="text-g fw-bold">$${fmt(sw.target)}</span>`)}
-          ${row('Invalidation', `<span class="text-r fw-bold">$${fmt(sw.invalidation)}</span>`)}
-          ${sw.extended_target ? row('Extended', `<span style="color:#bc8cff;font-weight:600">$${fmt(sw.extended_target)}</span>`) : ''}
-        </div>
-      </div>
-    </div>
-
-    <div style="margin-top:14px;border-top:1px solid #21262d;padding-top:12px">
-      <div style="font-size:10px;color:#484f58;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Scenarios</div>
-      <div class="row g-2">
-        <div class="col-md-4">
-          <div class="pred-scenario" style="background:#3fb95011;border:1px solid #3fb95033">
-            <div style="font-size:10px;color:#3fb950;font-weight:700;margin-bottom:4px">BULL</div>
-            <div style="font-size:14px;font-weight:700;color:#3fb950">$${fmt(sc.bull.price)}</div>
-            <div style="font-size:11px;color:#8b949e;margin-top:3px;line-height:1.4">${sc.bull.condition}</div>
-          </div>
-        </div>
-        <div class="col-md-4">
-          <div class="pred-scenario" style="background:#58a6ff11;border:1px solid #58a6ff33">
-            <div style="font-size:10px;color:#58a6ff;font-weight:700;margin-bottom:4px">BASE</div>
-            <div style="font-size:14px;font-weight:700;color:#58a6ff">$${fmt(sc.base.price)}</div>
-            <div style="font-size:11px;color:#8b949e;margin-top:3px;line-height:1.4">${sc.base.condition}</div>
-          </div>
-        </div>
-        <div class="col-md-4">
-          <div class="pred-scenario" style="background:#f8514911;border:1px solid #f8514933">
-            <div style="font-size:10px;color:#f85149;font-weight:700;margin-bottom:4px">BEAR</div>
-            <div style="font-size:14px;font-weight:700;color:#f85149">$${fmt(sc.bear.price)}</div>
-            <div style="font-size:11px;color:#8b949e;margin-top:3px;line-height:1.4">${sc.bear.condition}</div>
-          </div>
-        </div>
-      </div>
-    </div>
-    <div style="margin-top:8px;font-size:11px;color:#484f58">
-      Prediction confidence: <span style="color:${confColor};font-weight:700">${pred.confidence}</span>
-      — based on confluence score ${pred.bias !== 'Neutral' ? '+ structural BOS confirmation' : '(no directional BOS)'}
-    </div>
-  `;
-}
-
-// ═══════════════════════════════════════════════════════
-// SYMBOL MANAGEMENT
-// ═══════════════════════════════════════════════════════
-function renderSymbolBar() {
-  const bar = document.getElementById('symbol-bar');
-  bar.innerHTML = symbolList.map(s => {
-    const ticker = s.replace('USDT','');
-    const isActive = s === currentSymbol;
-    const isDefault = ['BTCUSDT','ETHUSDT','XRPUSDT','DOGEUSDT'].includes(s);
-    return `
-      <div style="display:inline-flex;align-items:center;gap:2px">
-        <button class="sym-btn ${isActive?'active':''}" onclick="switchSymbol('${s}')">${ticker}</button>
-        ${!isDefault ? `<button class="sym-btn remove" onclick="removeSymbol('${s}')" title="Remove">✕</button>` : ''}
-      </div>`;
-  }).join('');
-}
-
-function switchSymbol(sym) {
-  if (sym === currentSymbol) return;
-  currentSymbol = sym;
-  // Preserve current TF — don't reset to 4h just because symbol changed
-  _lastClose  = null;
-  _candleOpen = _candleTime = _candleHigh = _candleLow = _candleVol = null;
-  if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
-  const priceEl = document.getElementById('h-price');
-  if (priceEl) priceEl.style.color = '#e6edf3';
-  renderSymbolBar();
-  loadAnalysis(sym);
-}
-
-function removeSymbol(sym) {
-  symbolList = symbolList.filter(s => s !== sym);
-  localStorage.setItem('cryptoDashSymbols', JSON.stringify(symbolList));
-  if (currentSymbol === sym) currentSymbol = symbolList[0] || 'BTCUSDT';
-  renderSymbolBar();
-  if (currentSymbol !== sym) return;
-  loadAnalysis(currentSymbol);
-}
-
-function openAddSymbol() {
-  document.getElementById('add-input').value = '';
-  document.getElementById('add-error').style.display = 'none';
-  addModal.show();
-  setTimeout(() => document.getElementById('add-input').focus(), 300);
-}
-
-async function confirmAdd() {
-  const val = document.getElementById('add-input').value.trim().toUpperCase();
-  if (!val) return;
-  const sym = val.endsWith('USDT') ? val : val + 'USDT';
-  const errEl = document.getElementById('add-error');
-  errEl.style.display = 'none';
-
-  // Quick validity check
-  try {
-    const r = await fetch(`/api/analysis/${sym}`);
-    const d = await r.json();
-    if (d.error) throw new Error(d.error);
-    if (!symbolList.includes(sym)) {
-      symbolList.push(sym);
-      localStorage.setItem('cryptoDashSymbols', JSON.stringify(symbolList));
+    if (counted) {
+      el('stat-r').textContent     = (totalR >= 0 ? '+' : '') + totalR.toFixed(1) + 'R';
+      el('stat-r').className       = 'stat-value ' + (totalR >= 0 ? 'positive' : 'negative');
+      el('stat-avg-r').textContent = (avgR >= 0 ? '+' : '') + avgR.toFixed(2) + 'R';
+      el('stat-avg-r').className   = 'stat-value ' + (avgR >= 0 ? 'positive' : 'negative');
+    } else {
+      el('stat-r').textContent     = '—';
+      el('stat-r').className       = 'stat-value';
+      el('stat-avg-r').textContent = '—';
+      el('stat-avg-r').className   = 'stat-value';
     }
-    addModal.hide();
-    switchSymbol(sym);
-    renderSymbolBar();
-  } catch(e) {
-    errEl.textContent = `Symbol not found or fetch failed: ${e.message}`;
-    errEl.style.display = 'block';
+
+    el('stat-open').textContent = open.length;
   }
-}
 
-document.getElementById('add-input').addEventListener('keydown', e => { if(e.key==='Enter') confirmAdd(); });
-
-// ═══════════════════════════════════════════════════════
-// TIMEFRAME SWITCHER
-// ═══════════════════════════════════════════════════════
-let currentTF = '4h';
-
-async function switchTF(tf, btn) {
-  if (tf === currentTF) return;
-  currentTF = tf;
-
-  // Update button states
-  document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
-  if (btn) btn.classList.add('active');
-
-  // Update label
-  const label = document.getElementById('tf-label');
-  if (label) label.textContent = `Analysis: ${tf.toUpperCase()}`;
-
-  // Full re-analysis on the new timeframe
-  await loadAnalysis(currentSymbol);
-}
-
-// ═══════════════════════════════════════════════════════
-// METHODOLOGY MODAL NAV
-// ═══════════════════════════════════════════════════════
-function methodNav(el) {
-  document.querySelectorAll('.method-nav a').forEach(a => a.classList.remove('active'));
-  el.classList.add('active');
-}
-
-// Highlight nav item on scroll
-document.addEventListener('DOMContentLoaded', () => {
-  const contentEl = document.getElementById('method-content');
-  if (contentEl) {
-    contentEl.addEventListener('scroll', () => {
-      const sections = contentEl.querySelectorAll('.method-section');
-      let current = null;
-      sections.forEach(s => {
-        if (s.offsetTop - contentEl.scrollTop <= 60) current = s.id;
-      });
-      if (current) {
-        document.querySelectorAll('.method-nav a').forEach(a => {
-          a.classList.toggle('active', a.getAttribute('href') === '#' + current);
-        });
-      }
-    });
-  }
-});
-
-// ═══════════════════════════════════════════════════════
-// ═══════════════════════════════════════════════════════
-// ALL SIGNALS GLOBAL FEED
-// ═══════════════════════════════════════════════════════
-async function fetchAllSignals() {
-  try {
-    const resp = await fetch('/api/trades');
-    allSignalsData = await resp.json();
-    renderAllSignals();
-    asfCountdown = 60;
-  } catch(e) { /* silent */ }
-  fetchScannerStatus();
-}
-
-async function fetchScannerStatus() {
-  try {
-    const resp = await fetch('/api/scanner-status');
-    const s    = await resp.json();
-    const el   = document.getElementById('asf-scanner-status');
-    if (!el) return;
-    if (!s.running) {
-      el.textContent = '· scanner starting...';
+  function renderTrades(trades) {
+    const tbody = document.getElementById('trades-body');
+    if (!trades.length) {
+      tbody.innerHTML = '<tr><td colspan="13" class="empty">No trades yet.</td></tr>';
       return;
     }
-    if (s.last_scan_at) {
-      const ago = s.last_scan_ago_s;
-      const agoStr = ago < 60 ? `${ago}s ago`
-                   : ago < 3600 ? `${Math.round(ago/60)}m ago`
-                   : `${Math.round(ago/3600)}h ago`;
-      el.textContent = `· scanner ✓ — last scan ${agoStr} · ${s.scans_completed} sweeps · ${s.signals_logged} signals found`;
-    } else {
-      el.textContent = '· first scan in progress...';
-    }
-  } catch(e) { /* silent */ }
-}
 
-function startAsfCountdown() {
-  asfCountdownTimer = setInterval(() => {
-    asfCountdown--;
-    const el = document.getElementById('asf-timer');
-    if (el) el.textContent = `↻ ${asfCountdown}s`;
-    if (asfCountdown <= 0) {
-      fetchAllSignals();
-      asfCountdown = 60;
-    }
-  }, 1000);
-}
+    tbody.innerHTML = trades.map(t => {
+      const dir = (t.direction || '').toUpperCase();
+      const st  = (t.status    || '').toLowerCase();
+      const r   = calcPnlR(t);
 
-function updateTradeSize(val) {
-  tradeSize = parseFloat(val) || 1000;
-  localStorage.setItem('tradeSize', tradeSize);
-  renderAllSignals();
-  // Also refresh chart overlay if a signal is active
-  if (lastSignal) renderSignal(lastSignal);
-}
+      const dirBadge = dir === 'LONG'
+        ? '<span class="badge badge-long">LONG</span>'
+        : '<span class="badge badge-short">SHORT</span>';
 
-// Returns { gainPct, lossPct, rr, dollarGain, dollarLoss, rrClass }
-function calcRR(entry, tp, sl, direction) {
-  const isLong  = direction === 'LONG';
-  const gainPct = isLong ? (tp - entry) / entry * 100 : (entry - tp) / entry * 100;
-  const lossPct = isLong ? (entry - sl) / entry * 100 : (sl - entry) / entry * 100;
-  const rr      = lossPct > 0 ? gainPct / lossPct : 0;
-  const dollarGain = tradeSize * gainPct / 100;
-  const dollarLoss = tradeSize * lossPct / 100;
-  const rrClass = rr >= 2 ? 'rr-good' : rr >= 1.5 ? 'rr-ok' : 'rr-poor';
-  return {
-    gainPct:    parseFloat(gainPct.toFixed(2)),
-    lossPct:    parseFloat(lossPct.toFixed(2)),
-    rr:         parseFloat(rr.toFixed(2)),
-    dollarGain: parseFloat(dollarGain.toFixed(0)),
-    dollarLoss: parseFloat(dollarLoss.toFixed(0)),
-    rrClass,
-  };
-}
+      let statusBadge;
+      if (st === 'open')           statusBadge = '<span class="badge badge-open">OPEN</span>';
+      else if (st === 'win' || st === 'loss') statusBadge = '<span class="badge badge-closed">CLOSED</span>';
+      else                         statusBadge = '<span class="badge badge-cancelled">CANCELLED</span>';
 
-function filterAllSignals(f) {
-  allSignalsFilter = f;
-  ['all','open','win','loss'].forEach(k => {
-    const btn = document.getElementById('asf-btn-' + k);
-    if (btn) btn.classList.toggle('active', k === f);
-  });
-  renderAllSignals();
-}
+      let resBadge;
+      if (st === 'win')  resBadge = '<span class="badge badge-win">WIN</span>';
+      else if (st === 'loss') resBadge = '<span class="badge badge-loss">LOSS</span>';
+      else               resBadge = '<span class="pnl-nil">—</span>';
 
-function toggleAllSignals() {
-  allSignalsCollapsed = !allSignalsCollapsed;
-  const sec = document.getElementById('all-signals-section');
-  const btn = document.getElementById('asf-collapse-btn');
-  if (sec) sec.classList.toggle('collapsed', allSignalsCollapsed);
-  if (btn) btn.textContent = allSignalsCollapsed ? '▼' : '▲';
-}
+      let pnlCell;
+      if (r !== null) {
+        pnlCell = `<span class="${r >= 0 ? 'pnl-pos' : 'pnl-neg'}">${r >= 0 ? '+' : ''}${r.toFixed(1)}R</span>`;
+      } else if (st === 'open') {
+        pnlCell = '<span class="pnl-nil">open</span>';
+      } else {
+        pnlCell = '<span class="pnl-nil">—</span>';
+      }
 
-// Navigate to symbol + timeframe chart when clicking a trade row
-function openTradeChart(symbol, interval) {
-  const sym = symbol.endsWith('USDT') ? symbol : symbol + 'USDT';
-  if (!symbolList.includes(sym)) {
-    symbolList.push(sym);
-    localStorage.setItem('cryptoDashSymbols', JSON.stringify(symbolList));
-  }
-  currentSymbol = sym;
-  currentTF     = interval;
-  document.querySelectorAll('.tf-btn').forEach(b => b.classList.toggle('active', b.dataset.tf === interval));
-  const label = document.getElementById('tf-label');
-  if (label) label.textContent = `Analysis: ${interval.toUpperCase()}`;
-  renderSymbolBar();
-  loadAnalysis(sym);
-  const chartEl = document.getElementById('chart-wrap');
-  if (chartEl) chartEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
-}
+      const tpSrc = (t.tp_source || 'unknown').replace(/_/g, ' ');
 
-function toggleClosedTrades() {
-  const section = document.getElementById('closed-trades-section');
-  const arrow   = document.getElementById('closed-trades-arrow');
-  if (!section) return;
-  const hidden = section.style.display === 'none';
-  section.style.display = hidden ? '' : 'none';
-  if (arrow) arrow.textContent = hidden ? '▼' : '▶';
-  const hdr = arrow ? arrow.parentElement.querySelector('span:last-child') : null;
-  if (hdr) hdr.textContent = hidden ? 'click to collapse' : 'click to expand';
-}
-
-function toggleLearningCard() {
-  const body   = document.getElementById('learning-body');
-  const toggle = document.getElementById('learning-toggle');
-  if (!body) return;
-  const hidden = body.style.display === 'none';
-  body.style.display = hidden ? '' : 'none';
-  if (toggle) toggle.textContent = hidden ? '▼' : '▶';
-  if (hidden) fetchLearning();
-}
-
-
-// Analysis panel toggle — no-op in new layout (panel is always visible)
-function toggleAnalysisPanel() {}
-
-function renderAllSignals() {
-  const el = document.getElementById('all-signals-body');
-  if (!el) return;
-
-  const trades = allSignalsData || [];
-
-  // Update open badge
-  const openCount = trades.filter(t => t.status === 'open').length;
-  const badge = document.getElementById('asf-open-badge');
-  if (badge) {
-    badge.innerHTML = openCount > 0
-      ? `<span class="asf-open-dot"></span><span style="font-size:11px;color:#d29922;font-weight:700">${openCount} open</span>`
-      : `<span style="font-size:11px;color:#484f58">no open signals</span>`;
-  }
-
-  if (trades.length === 0) {
-    el.innerHTML = '<span style="font-size:13px;color:var(--text-dim)">No signals yet — scanner fires when score ≥ threshold + BOS confirmed + R:R ≥ 2:1.</span>';
-    return;
-  }
-
-  // Stats bar
-  const wins     = trades.filter(t => t.status === 'win').length;
-  const losses   = trades.filter(t => t.status === 'loss').length;
-  const closed   = wins + losses;
-  const wrPct    = closed > 0 ? Math.round(wins / closed * 100) : null;
-  const wrColor  = wrPct !== null ? (wrPct >= 50 ? '#3fb950' : '#f85149') : '#8b949e';
-  const allRois  = trades.filter(t => t.roi_pct !== null).map(t => t.roi_pct);
-  const totalRoi = allRois.length > 0 ? allRois.reduce((a,b) => a+b, 0).toFixed(1) : null;
-  const roiColor = totalRoi !== null && parseFloat(totalRoi) >= 0 ? '#3fb950' : '#f85149';
-
-  const statsHtml = `<div class="calls-stats-bar" style="padding-top:0;margin-bottom:10px">
-    <span><span class="text-dim">Signals:</span> <b>${trades.length}</b></span>
-    <span><span class="text-dim">Open:</span> <b style="color:#d29922">${openCount}</b></span>
-    <span><span class="text-dim">Won:</span> <b style="color:#3fb950">${wins}</b></span>
-    <span><span class="text-dim">Lost:</span> <b style="color:#f85149">${losses}</b></span>
-    <span><span class="text-dim">Win Rate:</span> <b style="color:${wrColor}">${wrPct !== null ? wrPct + '%' : '—'}</b></span>
-    <span><span class="text-dim">Total P&amp;L:</span> <b style="color:${roiColor}">${totalRoi !== null ? (parseFloat(totalRoi) >= 0 ? '+' : '') + totalRoi + '%' : '—'}</b></span>
-  </div>`;
-
-  // Apply filter
-  const filtered = allSignalsFilter === 'all'
-    ? trades
-    : trades.filter(t => t.status === allSignalsFilter);
-
-  if (filtered.length === 0) {
-    el.innerHTML = statsHtml + `<span style="font-size:13px;color:var(--text-dim)">No ${allSignalsFilter} signals.</span>`;
-    return;
-  }
-
-  // Split into groups — open first, then closed sorted newest first
-  const openTrades   = filtered.filter(t => t.status === 'open')
-                                .sort((a,b) => new Date(b.opened_at) - new Date(a.opened_at));
-  const closedTrades = filtered.filter(t => t.status !== 'open')
-                                .sort((a,b) => new Date(b.opened_at) - new Date(a.opened_at));
-
-  const TABLE_HDR = `<thead><tr>
-    <th style="min-width:72px">Symbol ↗</th>
-    <th title="Day (15m) or Swing (4h) trade tier">Tier</th>
-    <th>TF</th><th>Dir</th><th>Entry</th>
-    <th>Target (+%)</th><th>Stop (-%)</th>
-    <th title="Max loss % of trade size">Risk%</th>
-    <th>R:R</th><th>Score</th>
-    <th style="min-width:80px">Date</th>
-    <th>ROI</th><th>Action</th>
-  </tr></thead>`;
-
-  function buildTradeRows(list, idxOffset) {
-    return list.map((t, i) => {
-      const idx        = i + idxOffset;
-      const sym        = t.symbol.replace('USDT', '');
-      const dirColor   = t.direction === 'SHORT' ? '#f85149' : '#3fb950';
-      const dirArrow   = t.direction === 'SHORT' ? '▼' : '▲';
-      const stColor    = {open:'#d29922',win:'#3fb950',loss:'#f85149',cancelled:'#484f58'}[t.status] || '#8b949e';
-      const scoreColor = t.score >= 9 ? '#3fb950' : t.score >= 7 ? '#d29922' : '#8b949e';
-      const roiStr     = t.roi_pct !== null ? (t.roi_pct >= 0 ? '+' : '') + t.roi_pct + '%' : '—';
-      const roiColor   = t.roi_pct !== null ? (t.roi_pct >= 0 ? '#3fb950' : '#f85149') : '#8b949e';
-      const isOpen     = t.status === 'open';
-      const dt         = t.opened_at ? new Date(t.opened_at) : null;
-      const dtStr      = dt
-        ? dt.toLocaleDateString([], {month:'short',day:'numeric'}) + ' ' + dt.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})
-        : '—';
-      const ptaId      = `asf-pta-${idx}`;
-      const pta        = t.post_trade_analysis;
-      const rr         = calcRR(t.entry, t.tp, t.sl, t.direction);
-      const riskClass  = rr.lossPct > 20 ? 'risk-high' : rr.lossPct > 10 ? 'risk-mid' : 'risk-low';
-
-      const actions = isOpen
-        ? `<button class="calls-btn win-btn"    onclick="event.stopPropagation();closeTrade('${t.id}','win')">✓</button>`
-          + `<button class="calls-btn loss-btn"   onclick="event.stopPropagation();closeTrade('${t.id}','loss')">✗</button>`
-          + `<button class="calls-btn cancel-btn" onclick="event.stopPropagation();closeTrade('${t.id}','cancelled')">—</button>`
-        : `<span style="color:${stColor};font-size:11px;text-transform:uppercase">${t.status}</span>`;
-
-      const snap   = t.factors_snapshot || {};
-      const chips  = Object.entries(snap).map(([f,v]) => `<span class="pta-chip ${v?'on':'off'}">${f}</span>`).join('');
-      const reason = t.reason || '';
-      const tbasis = t.target_basis ? ` · <span style="color:#484f58">TP: ${t.target_basis}</span>` : '';
-
-      const tier      = ['15m','30m','1h'].includes(t.interval) ? 'Day' : 'Swing';
-      const tierColor = tier === 'Day' ? '#bc8cff' : '#58a6ff';
-
-      const mainRow = `<tr class="trade-row-clickable ${isOpen ? 'asf-row-open' : ''}"
-          onclick="openTradeChart('${t.symbol}','${t.interval}')">
-        <td>
-          <span style="font-weight:700;color:#e6edf3">${sym}</span>
-          <span style="font-size:10px;color:#484f58;margin-left:2px">↗</span>
-        </td>
-        <td><span style="font-size:10px;font-weight:700;color:${tierColor};background:${tierColor}18;border-radius:3px;padding:1px 5px">${tier}</span></td>
-        <td><span style="background:#21262d;border-radius:3px;padding:1px 5px;font-size:11px;color:#8b949e">${t.interval.toUpperCase()}</span></td>
-        <td><span style="color:${dirColor};font-weight:700">${dirArrow} ${t.direction}</span></td>
-        <td style="font-weight:600">$${fmt(t.entry)}</td>
-        <td>
-          <span style="color:#3fb950;font-weight:600">$${fmt(t.tp)}</span>
-          <span class="pct-gain">+${rr.gainPct}%</span>
-        </td>
-        <td>
-          <span style="color:#f85149;font-weight:600">$${fmt(t.sl)}</span>
-          <span class="pct-loss">-${rr.lossPct}%</span>
-        </td>
-        <td><span class="${riskClass}">${rr.lossPct}%</span></td>
-        <td><span class="rr-badge ${rr.rrClass}">${rr.rr}:1</span></td>
-        <td style="color:${scoreColor}">${t.score}/10</td>
-        <td style="color:#8b949e;font-size:10px;white-space:nowrap">${dtStr}</td>
-        <td style="color:${roiColor};font-weight:700">${roiStr}</td>
-        <td onclick="event.stopPropagation()">${actions}</td>
+      return `<tr>
+        <td class="symbol">${t.symbol || '—'}</td>
+        <td class="tf">${t.interval || '—'}</td>
+        <td>${dirBadge}</td>
+        <td class="price">${fmt(t.entry)}</td>
+        <td class="price">${fmt(t.sl)}</td>
+        <td class="price">${fmt(t.tp)}</td>
+        <td class="price">${rr(t.entry, t.tp, t.sl)}</td>
+        <td class="tp-src" title="${tpSrc}">${tpSrc}</td>
+        <td>${statusBadge}</td>
+        <td>${resBadge}</td>
+        <td>${pnlCell}</td>
+        <td class="ts">${fmtTime(t.opened_at)}</td>
+        <td class="ts">${fmtTime(t.closed_at)}</td>
       </tr>`;
-
-      const reasonRow = `<tr class="${isOpen ? 'asf-row-open' : ''}" style="cursor:default">
-        <td colspan="13" style="padding:0 6px 4px !important;border-bottom:1px solid var(--border)">
-          <div style="display:flex;align-items:center;flex-wrap:wrap;gap:5px;font-size:10px;color:var(--muted);padding:2px 0">
-            ${reason ? `<span style="color:var(--text)">${reason}</span>${tbasis}` : '<span style="color:var(--dim);font-style:italic">No reason recorded</span>'}
-            <span style="color:var(--dim);margin:0 2px">·</span>
-            <span style="color:var(--green)">+$${rr.dollarGain.toLocaleString()}</span>
-            <span style="color:var(--dim)">/</span>
-            <span style="color:var(--red)">-$${rr.dollarLoss.toLocaleString()}</span>
-            <span style="color:var(--dim);font-size:9px">@$${tradeSize.toLocaleString()}</span>
-            ${chips ? `<span style="display:flex;gap:3px;flex-wrap:wrap;margin-left:4px">${chips}</span>` : ''}
-            ${pta ? `<span class="analysis-toggle" style="margin-left:6px" onclick="event.stopPropagation();togglePTA('${ptaId}')">▸ Post-trade</span>` : ''}
-            ${(() => {
-              const ai = t.ai_analysis;
-              if (!ai || !ai.recommendation) return '';
-              const recMap = { strong_take: ['ai-rec-strong','🔥'], take: ['ai-rec-take','✅'], skip: ['ai-rec-skip','⛔'] };
-              const [cls, em] = recMap[ai.recommendation] || ['ai-rec-take','🤖'];
-              return `<span class="ai-rec-badge ${cls}" style="margin-left:6px" title="${ai.reasoning||''}">${em} ${ai.recommendation.replace('_',' ')} ${ai.confidence||''}%</span>`;
-            })()}
-          </div>
-        </td>
-      </tr>`;
-
-      if (!pta) return mainRow + reasonRow;
-
-      const ptaClass = pta.status === 'win' ? 'win' : pta.status === 'loss' ? 'loss' : '';
-      const present  = (pta.factors_present||[]).map(f=>`<span class="pta-chip on">${f}</span>`).join('');
-      const absent   = (pta.factors_absent ||[]).map(f=>`<span class="pta-chip off">${f}</span>`).join('');
-      const ptaRow = `<tr id="${ptaId}" class="pta-row" style="display:none">
-        <td colspan="13">
-          <div class="pta-inner ${ptaClass}">
-            <div class="pta-summary">${pta.summary||''}</div>
-            ${pta.detail ? `<div class="pta-detail">${pta.detail}</div>` : ''}
-            ${pta.key_lesson ? `<div class="pta-lesson">Key lesson: ${pta.key_lesson}</div>` : ''}
-            <div class="pta-chips">${present}${absent}</div>
-          </div>
-        </td>
-      </tr>`;
-      return mainRow + reasonRow + ptaRow;
     }).join('');
   }
 
-  let sectionsHtml = '';
+  // ─── fetch & auto-refresh ──────────────────────────────────────────────────
 
-  // ── Open trades section ────────────────────────────────────────────────────
-  if (openTrades.length > 0) {
-    sectionsHtml += `
-      <div class="trade-group-hdr" style="color:var(--amber)">
-        <span class="asf-open-dot"></span>
-        Open Signals (${openTrades.length}) — click any row to open chart
-      </div>
-      <div style="overflow-x:auto;margin-bottom:14px">
-        <table class="calls-table">
-          ${TABLE_HDR}
-          <tbody>${buildTradeRows(openTrades, 0)}</tbody>
-        </table>
-      </div>`;
-  }
-
-  // ── Closed trades section (collapsible) ───────────────────────────────────
-  if (closedTrades.length > 0 && allSignalsFilter === 'all') {
-    sectionsHtml += `
-      <div class="trade-group-hdr trade-group-closed" onclick="toggleClosedTrades()">
-        <span id="closed-trades-arrow">▼</span>
-        Closed History (${closedTrades.length})
-        <span style="font-size:10px;font-weight:400;color:#484f58">click to collapse</span>
-      </div>
-      <div id="closed-trades-section" style="overflow-x:auto">
-        <table class="calls-table">
-          ${TABLE_HDR}
-          <tbody>${buildTradeRows(closedTrades, openTrades.length)}</tbody>
-        </table>
-      </div>`;
-  } else if (closedTrades.length > 0) {
-    sectionsHtml += `<div style="overflow-x:auto">
-      <table class="calls-table">${TABLE_HDR}
-        <tbody>${buildTradeRows(closedTrades, 0)}</tbody>
-      </table></div>`;
-  }
-
-  el.innerHTML = statsHtml + sectionsHtml;
-}
-
-// ═══════════════════════════════════════════════════════
-async function fetchTrades() {
-  try {
-    const resp = await fetch('/api/trades');
-    allSignalsData = await resp.json();
-    renderAllSignals();
-    renderTradeLevels(allSignalsData);
-    // Refresh trade markers on the analysis chart with newly loaded trades
-    if (_sigSeries && lastData) {
-      addTradeMarkersToChart(_sigSeries, lastData.symbol, lastData.interval);
+  async function load() {
+    const ind = document.getElementById('refresh-indicator');
+    ind.className = 'refreshing';
+    ind.textContent = 'refreshing…';
+    try {
+      const res    = await fetch('/api/trades');
+      const trades = await res.json();
+      renderSummary(trades);
+      renderTrades(trades);
+    } catch (e) {
+      console.error('fetch error', e);
     }
-  } catch(e) { /* silent — non-critical */ }
-  fetchLearning();
-}
-
-async function fetchLearning() {
-  try {
-    const resp = await fetch('/api/learning');
-    const data = await resp.json();
-    renderLearning(data);
-  } catch(e) { /* silent */ }
-}
-
-async function closeTrade(id, status) {
-  let price = lastData ? lastData.current_price : null;
-  if (status !== 'cancelled') {
-    const sym   = lastData ? lastData.symbol.replace('USDT','') : '';
-    const label = status === 'win' ? '✓ WIN' : '✗ LOSS';
-    const hint  = price ? ` (current: $${fmt(price)})` : '';
-    const input = prompt(`${sym} ${label} — exit price?${hint}\nLeave blank to use current price.`, '');
-    if (input === null) return; // user pressed Cancel
-    if (input.trim()) price = parseFloat(input) || price;
-  }
-  try {
-    await fetch(`/api/trades/${id}/close`, {
-      method:  'POST',
-      headers: {'Content-Type': 'application/json'},
-      body:    JSON.stringify({ status, price }),
-    });
-    fetchTrades();       // refreshes per-symbol card + global feed + learning
-  } catch(e) { showError('Close trade failed: ' + e.message); }
-}
-
-function togglePTA(id) {
-  const row = document.getElementById(id);
-  if (!row) return;
-  const hidden = row.style.display === 'none';
-  row.style.display = hidden ? '' : 'none';
-  // Update toggle text
-  const toggle = row.previousElementSibling &&
-    row.previousElementSibling.querySelector('.analysis-toggle');
-  if (toggle) toggle.textContent = hidden ? '▾ Analysis' : '▸ Analysis';
-}
-
-// ═══════════════════════════════════════════════════════
-// ADAPTIVE LEARNING DISPLAY
-// ═══════════════════════════════════════════════════════
-function renderLearning(data) {
-  const el = document.getElementById('card-learning');
-  if (!el || !data) return;
-
-  const { weights, signal_threshold, default_threshold, stop_multiplier,
-          default_stop_mult, overall_win_rate, total_closed, adaptation_log } = data;
-
-  // Factor weights table
-  const factorRows = Object.entries(weights).map(([name, info]) => {
-    const pct     = Math.min(100, Math.round(info.ratio * 100));
-    const barColor= info.status === 'reduced' ? '#ef4444'
-                  : info.status === 'boosted' ? '#22c55e' : '#3b82f6';
-    const statusBadge = info.status !== 'normal'
-      ? `<span style="font-size:9px;color:${barColor};margin-left:3px">(${info.status})</span>`
-      : '';
-    return `<div class="adapt-factor">
-      <span style="width:52px;color:var(--text);font-weight:600;text-transform:capitalize;font-size:10px">${name}</span>
-      <div class="adapt-bar-track">
-        <div class="adapt-bar-fill" style="width:${pct}%;background:${barColor}"></div>
-      </div>
-      <span style="width:72px;text-align:right;color:${barColor}">
-        ${info.current.toFixed(2)} <span style="color:#484f58">/ ${info.default.toFixed(1)}</span>
-      </span>
-      ${statusBadge}
-    </div>`;
-  }).join('');
-
-  // Global params
-  const threshColor  = signal_threshold > default_threshold ? '#f59e0b' : '#22c55e';
-  const stopColor    = stop_multiplier  > default_stop_mult  ? '#f59e0b' : '#22c55e';
-  const wrColor      = overall_win_rate !== null
-    ? (overall_win_rate >= 50 ? '#22c55e' : '#ef4444') : '#888888';
-
-  // Adaptation log
-  const logHtml = adaptation_log && adaptation_log.length > 0
-    ? adaptation_log.map(entry => {
-        const ts = new Date(entry.timestamp).toLocaleString([], {
-          month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'
-        });
-        return `<div class="adapt-log-entry">
-          <div class="adapt-log-ts">${ts}</div>
-          ${entry.changes.map(c => `<div>${c}</div>`).join('')}
-        </div>`;
-      }).join('')
-    : '<div style="font-size:10px;color:var(--dim)">No adaptations yet — needs ≥3 closed trades to begin learning.</div>';
-
-  el.innerHTML = `
-    <div style="font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.07em;margin-bottom:6px">Factor Weights</div>
-    ${factorRows}
-    <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">
-      <div style="font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.07em;margin-bottom:6px">Parameters</div>
-      ${row('Threshold', `<span style="color:${threshColor}">${signal_threshold.toFixed(1)}</span> <span style="color:var(--dim);font-size:9px">/ ${default_threshold.toFixed(1)}</span>`)}
-      ${row('Stop ×ATR', `<span style="color:${stopColor}">${stop_multiplier.toFixed(1)}×</span>`)}
-      ${row('Win Rate',  `<span style="color:${wrColor}">${overall_win_rate !== null ? overall_win_rate + '%' : '—'}</span>`)}
-      ${row('Closed',    `${total_closed}`)}
-    </div>
-    <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">
-      <div style="font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.07em;margin-bottom:6px">Adaptation Log</div>
-      <div style="max-height:160px;overflow-y:auto">${logHtml}</div>
-    </div>`;
-}
-
-// ═══════════════════════════════════════════════════════
-// AUTO REFRESH
-// ═══════════════════════════════════════════════════════
-function toggleAuto() {
-  autoRefreshOn = !autoRefreshOn;
-  const btn = document.getElementById('auto-btn');
-  if (autoRefreshOn) {
-    btn.textContent = 'Auto ▶ 5m';
-    btn.style.color = '#22c55e';
-    autoTimer = setInterval(() => forceRefresh(), 5 * 60 * 1000);
-  } else {
-    btn.textContent = 'Auto ⏸';
-    btn.style.color = '';
-    clearInterval(autoTimer);
-  }
-}
-
-// ═══════════════════════════════════════════════════════
-// HELPERS
-// ═══════════════════════════════════════════════════════
-function set(id, html, color) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  el.innerHTML = html;
-  if (color) el.style.color = color;
-}
-
-function row(label, valueHtml) {
-  return `<div class="info-row">
-    <span class="info-label">${label}</span>
-    <span class="info-val">${valueHtml}</span>
-  </div>`;
-}
-
-function yn(v, trueLabel='Yes', falseLabel='No') {
-  return v
-    ? `<span class="text-g">${trueLabel}</span>`
-    : `<span class="text-r">${falseLabel}</span>`;
-}
-
-function fmt(v) {
-  if (v == null) return '—';
-  const n = Number(v);
-  if (isNaN(n)) return '—';
-  if (n >= 10000) return n.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
-  if (n >= 100)   return n.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:3});
-  if (n >= 1)     return n.toLocaleString('en-US', {minimumFractionDigits:3, maximumFractionDigits:4});
-  if (n >= 0.01)  return n.toLocaleString('en-US', {minimumFractionDigits:4, maximumFractionDigits:5});
-  return n.toLocaleString('en-US', {minimumFractionDigits:5, maximumFractionDigits:6});
-}
-
-function fmtDate(ts) {
-  if (!ts) return '';
-  const d = new Date(ts);
-  return d.toLocaleDateString('en-US', {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
-}
-
-function regimeColor(regime) {
-  if (!regime) return '#888888';
-  if (regime.includes('Strong Up'))   return '#22c55e';
-  if (regime.includes('Weak Up'))     return '#16a34a';
-  if (regime.includes('Strong Down')) return '#ef4444';
-  if (regime.includes('Weak Down'))   return '#dc2626';
-  return '#f59e0b';
-}
-
-function setTimestamp(iso, age) {
-  const d = new Date(iso);
-  const ageStr = age < 60 ? 'just fetched' : `cached ${Math.floor(age/60)}m ago`;
-  const utcTime = d.toLocaleTimeString('en-US', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit' });
-  document.getElementById('timestamp').textContent =
-    `Last: ${utcTime} UTC — ${ageStr}`;
-}
-
-// ═══════════════════════════════════════════════════════
-// CLAUDE AI CHART ANALYSIS
-// ═══════════════════════════════════════════════════════
-let _aiChartSym = null, _aiChartTf = null;  // track what was last analyzed
-
-async function fetchAiChart() {
-  const el  = document.getElementById('card-ai-chart');
-  const btn = document.getElementById('ai-chart-btn');
-  if (!el) return;
-  el.innerHTML = '<div style="display:flex;align-items:center;gap:8px;color:var(--muted);font-size:11px"><div class="spinner" style="width:14px;height:14px;border-width:2px"></div>Asking Claude...</div>';
-  if (btn) btn.disabled = true;
-  try {
-    const resp = await fetch(`/api/ai-chart/${currentSymbol}/${currentTF}`);
-    const data = await resp.json();
-    if (data.error) {
-      el.innerHTML = `<span style="color:var(--red);font-size:11px">⚠ ${data.error}</span>`;
-    } else {
-      renderAiChart(data);
-      _aiChartSym = currentSymbol;
-      _aiChartTf  = currentTF;
-    }
-  } catch(e) {
-    el.innerHTML = `<span style="color:var(--red);font-size:11px">⚠ Request failed: ${e.message}</span>`;
-  } finally {
-    if (btn) btn.disabled = false;
-  }
-}
-
-function renderAiChart(r) {
-  const el = document.getElementById('card-ai-chart');
-  if (!el || !r) return;
-  const bias      = (r.bias || 'NEUTRAL').toUpperCase();
-  const biasClass = bias === 'LONG' ? 'ai-bias-long' : bias === 'SHORT' ? 'ai-bias-short' : 'ai-bias-neutral';
-  const conf      = r.confidence || 0;
-  const confColor = conf >= 70 ? '#22c55e' : conf >= 45 ? '#f59e0b' : '#ef4444';
-  const levels    = (r.key_levels || []).map(l => `<div class="ai-level">${l}</div>`).join('');
-  const risks     = (r.risks     || []).map(rv => `<div class="ai-risk">⚠ ${rv}</div>`).join('');
-
-  el.innerHTML = `
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;flex-wrap:wrap">
-      <span class="ai-bias-pill ${biasClass}">${bias}</span>
-      <div style="flex:1;min-width:120px">
-        <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-bottom:2px">
-          <span>Confidence</span><span style="color:${confColor};font-weight:700">${conf}/100</span>
-        </div>
-        <div class="ai-conf-bar"><div class="ai-conf-fill" style="width:${conf}%;background:${confColor}"></div></div>
-      </div>
-    </div>
-    <div style="font-size:12px;color:var(--text);line-height:1.6;margin-bottom:10px">${r.summary || ''}</div>
-    ${r.watch_for ? `<div style="font-size:11px;color:var(--blue);margin-bottom:10px"><b>Watch for:</b> ${r.watch_for}</div>` : ''}
-    ${levels ? `<div style="margin-bottom:8px"><div style="font-size:9px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.07em;margin-bottom:4px">Key Levels</div>${levels}</div>` : ''}
-    ${risks  ? `<div><div style="font-size:9px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.07em;margin-bottom:4px">Risks</div>${risks}</div>` : ''}
-    <div style="font-size:9px;color:var(--dim);margin-top:10px;padding-top:6px;border-top:1px solid var(--border)">Claude Haiku · ${currentSymbol.replace('USDT','')} ${currentTF.toUpperCase()} · ${new Date().toLocaleTimeString('en-US',{timeZone:'UTC',hour:'2-digit',minute:'2-digit'})} UTC</div>
-  `;
-}
-
-// ═══════════════════════════════════════════════════════
-// MARKET REGIME TYPE (trending / ranging / transitioning)
-// ═══════════════════════════════════════════════════════
-async function fetchRegimeType() {
-  const el = document.getElementById('h-mkttype');
-  if (!el) return;
-  try {
-    const resp = await fetch(`/api/regime/${currentSymbol}`);
-    const d    = await resp.json();
-    if (d.error) { el.textContent = '—'; return; }
-    const r = d.regime || 'unknown';
-    const color = r === 'trending'      ? '#22c55e'
-                : r === 'ranging'       ? '#f59e0b'
-                : r === 'transitioning' ? '#888888' : '#888888';
-    el.textContent = r;
-    el.style.color = color;
-  } catch(e) {
-    el.textContent = '—';
-  }
-}
-
-// ═══════════════════════════════════════════════════════
-// WEEKLY REVIEW
-// ═══════════════════════════════════════════════════════
-async function runWeeklyReview() {
-  const btn = document.getElementById('weekly-review-btn');
-  const el  = document.getElementById('card-ai-chart');
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ Reviewing...'; }
-  if (el)  el.innerHTML = '<div style="display:flex;align-items:center;gap:8px;color:var(--muted);font-size:11px"><div class="spinner" style="width:14px;height:14px;border-width:2px"></div>Running weekly strategy review — this may take 30–60s…</div>';
-  try {
-    const resp = await fetch('/api/weekly-review');
-    const d    = await resp.json();
-    if (el) renderWeeklyReview(d, el);
-  } catch(e) {
-    if (el) el.innerHTML = `<span style="color:var(--red);font-size:11px">⚠ Weekly review failed: ${e.message}</span>`;
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '📅 Weekly Review'; }
-  }
-}
-
-function renderWeeklyReview(d, el) {
-  if (d.error || d.status === 'error') {
-    el.innerHTML = `<span style="color:var(--red);font-size:11px">⚠ ${d.error || d.reason}</span>`;
-    return;
-  }
-  if (d.status === 'skipped') {
-    el.innerHTML = `<span style="color:var(--amber);font-size:11px">⚠ ${d.reason}</span>`;
-    return;
-  }
-  const rev      = d.review || {};
-  const baseline = d.baseline || {};
-  const deployed = d.deployed_params || [];
-
-  const baselineHtml = baseline.win_rate !== undefined
-    ? `<div style="font-size:10px;color:var(--dim);margin-bottom:8px">Backtest baseline (BTCUSDT 4H, 1yr): <b style="color:var(--text)">${(baseline.win_rate*100).toFixed(0)}%</b> win rate · <b style="color:var(--text)">${baseline.total_trades}</b> trades · drawdown <b style="color:var(--amber)">${baseline.max_drawdown?.toFixed(1)}R</b></div>`
-    : '';
-
-  const patternsHtml = (rev.patterns || []).map(p => `<div style="font-size:11px;padding:3px 0;border-bottom:1px solid var(--border);color:var(--muted)">• ${p}</div>`).join('');
-  const proposalsHtml = (rev.parameter_proposals || []).map(p => {
-    const arrow = parseFloat(p.proposed) > parseFloat(p.current) ? '⬆' : '⬇';
-    const dep   = deployed.some(x => x.param === p.param) ? ' <span style="color:var(--green);font-size:9px">✓ deployed</span>' : ' <span style="color:var(--dim);font-size:9px">skipped</span>';
-    return `<div style="font-size:11px;padding:3px 0;border-bottom:1px solid var(--border)">${arrow} <b>${p.param}</b>: ${p.current} → <span style="color:var(--amber)">${p.proposed}</span>${dep}</div>`;
-  }).join('');
-  const recsHtml = (rev.recommendations || []).map(r => `<div style="font-size:11px;padding:2px 0;color:var(--muted)">→ ${r}</div>`).join('');
-  const watchHtml = (rev.watch_out || []).map(w => `<div style="font-size:11px;padding:2px 0;color:var(--amber)">⚠ ${w}</div>`).join('');
-
-  el.innerHTML = `
-    <div style="font-size:10px;font-weight:700;color:var(--amber);text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px">Weekly Strategy Review — Claude Sonnet</div>
-    ${baselineHtml}
-    ${rev.overall_assessment ? `<div style="font-size:12px;color:var(--text);margin-bottom:10px;line-height:1.6">${rev.overall_assessment}</div>` : ''}
-    ${patternsHtml ? `<div style="font-size:9px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.07em;margin:8px 0 4px">Patterns</div>${patternsHtml}` : ''}
-    ${proposalsHtml ? `<div style="font-size:9px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.07em;margin:10px 0 4px">Parameter Proposals (${d.deployed} deployed)</div>${proposalsHtml}` : ''}
-    ${recsHtml ? `<div style="font-size:9px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.07em;margin:10px 0 4px">Recommendations</div>${recsHtml}` : ''}
-    ${watchHtml ? `<div style="font-size:9px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.07em;margin:10px 0 4px">Watch Out</div>${watchHtml}` : ''}
-    <div style="font-size:9px;color:var(--dim);margin-top:10px;padding-top:6px;border-top:1px solid var(--border)">Claude Sonnet · Weekly Review · ${new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</div>
-  `;
-}
-
-// ═══════════════════════════════════════════════════════
-// BACKTESTER
-// ═══════════════════════════════════════════════════════
-let _btJobId     = null;
-let _btPollTimer = null;
-
-function toggleBacktest() {
-  const body   = document.getElementById('backtest-body');
-  const toggle = document.getElementById('backtest-toggle');
-  const open   = body.style.display === 'none';
-  body.style.display   = open ? 'block' : 'none';
-  toggle.textContent   = open ? '▼ collapse' : '▶ expand';
-  // Sync symbol dropdown to whatever is currently on screen
-  if (open && currentSymbol) {
-    const sel = document.getElementById('bt-symbol');
-    if (sel) {
-      for (let opt of sel.options) {
-        if (opt.value === currentSymbol) { sel.value = currentSymbol; break; }
-      }
-    }
-  }
-}
-
-async function runBacktest() {
-  const sym      = document.getElementById('bt-symbol').value;
-  const interval = document.getElementById('bt-interval').value;
-  const years    = parseInt(document.getElementById('bt-years').value, 10);
-  const mode     = document.getElementById('bt-mode').value;
-  const btn      = document.getElementById('bt-run-btn');
-  const resultsEl= document.getElementById('bt-results');
-
-  btn.disabled = true;
-  btn.textContent = '⏳ Starting...';
-  resultsEl.innerHTML = '<div class="bt-progress"><div class="spinner" style="width:14px;height:14px;border-width:2px"></div>Fetching historical data and replaying signals…</div>';
-
-  // Clear any existing poll
-  if (_btPollTimer) { clearInterval(_btPollTimer); _btPollTimer = null; }
-
-  const body = { symbol: sym, interval, years };
-  if (mode === 'grid') {
-    body.param_grid = {
-      adx_threshold:   [20, 25, 30],
-      body_ratio_min:  [0.25, 0.30, 0.35],
-      score_threshold: [6.5, 7.0, 7.5, 8.0],
-      min_rr:          [2.5, 3.0, 3.5],
-    };
+    seconds = 30;
+    ind.className = '';
+    ind.innerHTML = 'refreshing in <span id="countdown">30</span>s';
   }
 
-  try {
-    const resp = await fetch('/api/backtest/run', {
-      method:  'POST',
-      headers: {'Content-Type': 'application/json'},
-      body:    JSON.stringify(body),
-    });
-    const d = await resp.json();
-    if (d.error) { resultsEl.innerHTML = `<span style="color:var(--red);font-size:11px">⚠ ${d.error}</span>`; return; }
-    _btJobId = d.job_id;
-    btn.textContent = '⏳ Running…';
-    _btPollTimer = setInterval(() => pollBacktest(resultsEl, btn, mode), 3000);
-  } catch(e) {
-    resultsEl.innerHTML = `<span style="color:var(--red);font-size:11px">⚠ ${e.message}</span>`;
-    btn.disabled = false;
-    btn.textContent = '▶ Run';
-  }
-}
+  let seconds = 30;
+  setInterval(() => {
+    seconds--;
+    if (seconds <= 0) { load(); return; }
+    const cd = document.getElementById('countdown');
+    if (cd) cd.textContent = seconds;
+  }, 1000);
 
-async function pollBacktest(resultsEl, btn, mode) {
-  if (!_btJobId) return;
-  try {
-    const sr = await fetch(`/api/backtest/status/${_btJobId}`);
-    const sd = await sr.json();
-    if (sd.status !== 'done' && sd.status !== 'error') return;
-
-    clearInterval(_btPollTimer);
-    _btPollTimer = null;
-    btn.disabled = false;
-    btn.textContent = '▶ Run';
-
-    if (sd.status === 'error') {
-      resultsEl.innerHTML = `<span style="color:var(--red);font-size:11px">⚠ Backtest error</span>`;
-      return;
-    }
-
-    const rr = await fetch(`/api/backtest/results/${_btJobId}`);
-    const rd = await rr.json();
-    renderBacktestResults(rd.results || [], resultsEl, mode);
-  } catch(e) {
-    clearInterval(_btPollTimer);
-    _btPollTimer = null;
-    btn.disabled = false;
-    btn.textContent = '▶ Run';
-    resultsEl.innerHTML = `<span style="color:var(--red);font-size:11px">⚠ Poll failed: ${e.message}</span>`;
-  }
-}
-
-function renderBacktestResults(results, el, mode) {
-  if (!results || !results.length) {
-    el.innerHTML = '<span style="color:var(--dim);font-size:11px">No results returned.</span>';
-    return;
-  }
-
-  // Filter out error rows
-  const valid = results.filter(r => !r.error);
-  if (!valid.length) {
-    el.innerHTML = `<span style="color:var(--red);font-size:11px">⚠ ${results[0]?.error || 'Unknown error'}</span>`;
-    return;
-  }
-
-  const fmt1 = n => (n == null ? '—' : Number(n).toFixed(1));
-  const fmt2 = n => (n == null ? '—' : Number(n).toFixed(2));
-  const pct  = n => (n == null ? '—' : (Number(n) * 100).toFixed(1) + '%');
-
-  const modeLabel = mode === 'grid'
-    ? `Grid search — ${valid.length} combinations (best first)`
-    : `Single run — ${valid[0].symbol} ${valid[0].interval}`;
-
-  const rows = valid.map((r, i) => {
-    const wr   = Number(r.win_rate || 0);
-    const wrCl = wr >= 0.55 ? 'bt-stat-win' : wr >= 0.40 ? 'bt-stat-ok' : 'bt-stat-loss';
-    const pf   = Number(r.profit_factor || 0);
-    const pfCl = pf >= 1.5  ? 'bt-stat-win' : pf >= 1.0  ? 'bt-stat-ok' : 'bt-stat-loss';
-    const best = i === 0 && mode === 'grid' ? 'bt-best' : '';
-
-    const paramsSnip = mode === 'grid'
-      ? `<div style="font-size:9px;color:var(--dim);margin-top:2px">ADX:${r.params?.adx_threshold} · Body:${r.params?.body_ratio_min} · Thr:${r.params?.score_threshold} · R:R:${r.params?.min_rr}</div>`
-      : '';
-
-    return `<tr class="${best}">
-      <td>${r.symbol?.replace('USDT','') || '—'} ${r.interval || ''}${paramsSnip}</td>
-      <td>${r.total_trades ?? '—'}</td>
-      <td class="${wrCl}">${pct(r.win_rate)}</td>
-      <td>${fmt2(r.avg_rr)}</td>
-      <td class="${pfCl}">${fmt2(r.profit_factor)}</td>
-      <td style="color:var(--amber)">${fmt2(r.max_drawdown)}R</td>
-    </tr>`;
-  }).join('');
-
-  el.innerHTML = `
-    <div style="font-size:9px;color:var(--dim);margin-bottom:8px;text-transform:uppercase;letter-spacing:.07em">${modeLabel}</div>
-    <table class="bt-table">
-      <thead><tr>
-        <th>Symbol / Params</th><th>Trades</th><th>Win %</th><th>Avg R:R</th><th>P.Factor</th><th>Drawdown</th>
-      </tr></thead>
-      <tbody>${rows}</tbody>
-    </table>
-  `;
-}
-
-// ═══════════════════════════════════════════════════════
-// RESEARCH CAMPAIGN
-// ═══════════════════════════════════════════════════════
-const CAMP_SYMBOLS   = ['BTCUSDT','ETHUSDT','XRPUSDT','DOGEUSDT'];
-const CAMP_INTERVALS = ['15m','4h'];
-let _campId       = null;
-let _campPollTimer= null;
-let _campApplied  = {};  // tracks which rows have been applied: key → true
-
-async function runCampaign() {
-  const btn     = document.getElementById('bt-campaign-btn');
-  const results = document.getElementById('bt-results');
-  btn.disabled  = true;
-  btn.textContent = '⏳ Launching…';
-
-  // Clear previous poll
-  if (_campPollTimer) { clearInterval(_campPollTimer); _campPollTimer = null; }
-  _campApplied = {};
-
-  // Initial progress grid
-  results.innerHTML = buildCampGrid({});
-
-  try {
-    const resp = await fetch('/api/backtest/campaign', {
-      method:  'POST',
-      headers: {'Content-Type': 'application/json'},
-      body:    JSON.stringify({
-        symbols:   CAMP_SYMBOLS,
-        intervals: CAMP_INTERVALS,
-      }),
-    });
-    const d = await resp.json();
-    if (d.error) throw new Error(d.error);
-    _campId = d.campaign_id;
-    btn.textContent = '⏳ Running…';
-    results.innerHTML = buildCampGrid(d.jobs || {});
-    _campPollTimer = setInterval(() => pollCampaign(results, btn), 5000);
-  } catch(e) {
-    results.innerHTML = `<span style="color:var(--red);font-size:11px">⚠ ${e.message}</span>`;
-    btn.disabled = false;
-    btn.textContent = '🔬 Run Research Campaign';
-  }
-}
-
-function buildCampGrid(jobs) {
-  const cells = CAMP_SYMBOLS.flatMap(sym => CAMP_INTERVALS.map(iv => {
-    const key  = `${sym}_${iv}`;
-    const job  = jobs[key] || {};
-    const st   = job.status || 'queued';
-    const dot  = st === 'done'    ? '<span style="color:var(--green)">✓</span>'
-               : st === 'error'   ? '<span style="color:var(--red)">✗</span>'
-               : st === 'running' ? '<span style="color:var(--amber)">⏳</span>'
-               :                    '<span style="color:var(--dim)">—</span>';
-    return `<div class="camp-cell ${st}" id="camp-cell-${key}">
-      <div class="camp-cell-sym">${sym.replace('USDT','')} <span class="camp-cell-tf">${iv.toUpperCase()}</span></div>
-      <div class="camp-cell-stat">${dot} ${st}</div>
-    </div>`;
-  }));
-  return `
-    <div style="font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px">
-      Campaign progress — 27 param combos × 8 jobs · runs in background
-    </div>
-    <div class="camp-grid">${cells.join('')}</div>
-    <div id="camp-results-table"></div>
-  `;
-}
-
-async function pollCampaign(resultsEl, btn) {
-  if (!_campId) return;
-  try {
-    const sr = await fetch(`/api/backtest/campaign/status/${_campId}`);
-    const sd = await sr.json();
-
-    // Update progress cells
-    for (const [key, job] of Object.entries(sd.jobs || {})) {
-      const cell = document.getElementById(`camp-cell-${key}`);
-      if (!cell) continue;
-      const st = job.status;
-      cell.className = `camp-cell ${st}`;
-      const dot = st === 'done'    ? '<span style="color:var(--green)">✓</span>'
-                : st === 'error'   ? '<span style="color:var(--red)">✗</span>'
-                : st === 'running' ? '<span style="color:var(--amber)">⏳</span>'
-                :                    '<span style="color:var(--dim)">—</span>';
-      cell.querySelector('.camp-cell-stat').innerHTML = `${dot} ${st}`;
-    }
-
-    if (sd.status !== 'done') return;  // still running
-
-    // All done — fetch and render results
-    clearInterval(_campPollTimer);
-    _campPollTimer = null;
-    btn.disabled   = false;
-    btn.textContent = '🔬 Run Research Campaign';
-
-    const rr = await fetch(`/api/backtest/campaign/results/${_campId}`);
-    const rd = await rr.json();
-    renderCampaignResults(rd.results || {});
-  } catch(e) {
-    // transient poll error — keep polling
-  }
-}
-
-function renderCampaignResults(results) {
-  const tbl = document.getElementById('camp-results-table');
-  if (!tbl) return;
-
-  const pct  = n => n == null ? '—' : (Number(n)*100).toFixed(1)+'%';
-  const fmt2 = n => n == null ? '—' : Number(n).toFixed(2);
-
-  const rows = Object.entries(results).map(([key, r]) => {
-    const sym = (r.symbol || key.split('_')[0]).replace('USDT','');
-    const iv  = r.interval || key.split('_')[1] || '';
-
-    if (r.status === 'error') {
-      return `<tr>
-        <td><b>${sym}</b></td><td>${iv.toUpperCase()}</td>
-        <td colspan="5" style="color:var(--red)">Error: ${r.error}</td>
-        <td>—</td>
-      </tr>`;
-    }
-    if (r.status !== 'done' || !r.best) {
-      return `<tr>
-        <td><b>${sym}</b></td><td>${iv.toUpperCase()}</td>
-        <td colspan="5" style="color:var(--dim)">No results</td>
-        <td>—</td>
-      </tr>`;
-    }
-
-    const b    = r.best;
-    const wr   = Number(b.win_rate || 0);
-    const wrCl = wr >= 0.55 ? 'bt-stat-win' : wr >= 0.40 ? 'bt-stat-ok' : 'bt-stat-loss';
-    const pf   = Number(b.profit_factor || 0);
-    const pfCl = pf >= 1.5  ? 'bt-stat-win' : pf >= 1.0  ? 'bt-stat-ok' : 'bt-stat-loss';
-    const p    = b.params || {};
-    const applied = _campApplied[key];
-    const btnHtml = applied
-      ? `<span class="camp-applied">✓ applied</span>`
-      : `<button class="camp-apply-btn" id="apply-btn-${key}"
-           onclick="applySymbolParams('${r.symbol}','${iv}',${JSON.stringify(JSON.stringify(p))},'${key}')">
-           Apply to scanner
-         </button>`;
-
-    return `<tr class="camp-best-row" id="camp-row-${key}">
-      <td><b>${sym}</b></td>
-      <td>${iv.toUpperCase()}</td>
-      <td>${b.total_trades ?? '—'} trades</td>
-      <td class="${wrCl}">${pct(b.win_rate)}</td>
-      <td class="${pfCl}">${fmt2(b.profit_factor)}</td>
-      <td style="color:var(--amber)">${fmt2(b.max_drawdown)}R</td>
-      <td style="font-size:10px;color:var(--dim)">ADX:${p.adx_threshold} Thr:${p.score_threshold} R:R:${p.min_rr}</td>
-      <td>${btnHtml}</td>
-    </tr>`;
-  });
-
-  tbl.innerHTML = `
-    <div style="font-size:9px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.07em;margin:12px 0 6px">
-      Best params per symbol — click Apply to activate for live scanner
-    </div>
-    <table class="camp-table">
-      <thead><tr>
-        <th>Symbol</th><th>TF</th><th>Trades</th><th>Win %</th><th>P.Factor</th><th>Drawdown</th><th>Best Params</th><th>Action</th>
-      </tr></thead>
-      <tbody>${rows.join('')}</tbody>
-    </table>
-  `;
-}
-
-async function applySymbolParams(symbol, interval, paramsJson, key) {
-  const btn = document.getElementById(`apply-btn-${key}`);
-  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
-  try {
-    const params = JSON.parse(paramsJson);
-    const resp = await fetch('/api/apply-symbol-params', {
-      method:  'POST',
-      headers: {'Content-Type': 'application/json'},
-      body:    JSON.stringify({symbol, interval, params}),
-    });
-    const d = await resp.json();
-    if (d.error) throw new Error(d.error);
-    _campApplied[key] = true;
-    if (btn) btn.parentElement.innerHTML = '<span class="camp-applied">✓ applied</span>';
-  } catch(e) {
-    if (btn) { btn.disabled = false; btn.textContent = 'Apply to scanner'; }
-    alert(`Failed to apply: ${e.message}`);
-  }
-}
-
-function showLoading(msg) {
-  const el = document.getElementById('loading-overlay');
-  document.getElementById('loading-msg').textContent = msg || 'Loading...';
-  el.style.display = 'flex';
-}
-function hideLoading() { document.getElementById('loading-overlay').style.display = 'none'; }
-function showError(msg) {
-  const el = document.getElementById('error-banner');
-  el.textContent = '⚠ ' + msg;
-  el.style.display = 'block';
-}
-function hideError() { document.getElementById('error-banner').style.display = 'none'; }
+  load();
 </script>
 </body>
 </html>

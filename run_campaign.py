@@ -35,11 +35,12 @@ def dim(t):    return _color(t, 2)
 
 
 def run_job(sym, interval, results_store, lock):
-    years = backtester.MAX_HISTORY_YEARS.get(interval, 2)
+    years = backtester.CAMPAIGN_MAX_HISTORY_YEARS.get(interval, 2)
     label = f"{sym.replace('USDT','')} {interval.upper()}"
-    print(f"  ⏳ {label} — fetching {years}yr of data…")
+    print(f"  ⏳ {label} — fetching {years}yr of data (step={backtester.CAMPAIGN_STEP})…")
     try:
-        all_results = backtester.grid_search(sym, interval, GRID, years=years)
+        all_results = backtester.grid_search(sym, interval, GRID, years=years,
+                                             step=backtester.CAMPAIGN_STEP)
         valid = [r for r in all_results if not r.get("error")]
         with lock:
             results_store[f"{sym}_{interval}"] = {

@@ -22,16 +22,20 @@ _lock     = threading.Lock()
 # ─────────────────────────────────────────────
 # DEFAULT CONFIGURATION
 # ─────────────────────────────────────────────
-FACTOR_NAMES    = ["regime", "bos", "sweep", "volume", "obv", "rsi", "adx"]
+FACTOR_NAMES    = ["regime", "bos", "sweep", "volume", "obv", "rsi", "adx",
+                   "fvg", "fib", "liquidity"]
 DEFAULT_WEIGHTS = {
-    "regime": 2.0,   # trending regime aligned (2 pts by default)
-    "bos":    2.0,   # confirmed BOS
-    "sweep":  2.0,   # liquidity sweep
-    "volume": 1.0,   # volume expansion / spike
-    "obv":    1.0,   # OBV confirmation / divergence
-    "rsi":    1.0,   # RSI confirmation
-    "adx":    1.0,   # ADX trend strength
-    # Max = 10 pts
+    "regime":    2.0,   # trending regime aligned (2 pts by default)
+    "bos":       2.0,   # confirmed BOS
+    "sweep":     2.0,   # liquidity sweep
+    "volume":    1.0,   # volume expansion / spike
+    "obv":       1.0,   # OBV confirmation / divergence
+    "rsi":       1.0,   # RSI confirmation
+    "adx":       1.0,   # ADX trend strength
+    "fvg":       1.5,   # Fair Value Gap aligned with setup
+    "fib":       1.5,   # Fibonacci golden pocket retracement
+    "liquidity": 1.0,   # Equal highs / equal lows liquidity pool
+    # Core max ≈ 10 pts; FVG + FIB + liquidity are bonus precision factors
 }
 DEFAULT_THRESHOLD = 7.0    # minimum score to fire a signal
 DEFAULT_STOP_MULT = 0.1    # ATR wick buffer on structural stop (was 0.5 main stop)
@@ -107,6 +111,7 @@ def _init_db():
             ("ai_analysis",         "TEXT"),
             ("partial_tp",          "REAL"),
             ("partial_hit",         "INTEGER DEFAULT 0"),
+            ("tp_source",           "TEXT DEFAULT 'unknown'"),
         ]:
             try:
                 db.execute(f"ALTER TABLE trades ADD COLUMN {col} {defn}")
@@ -189,10 +194,9 @@ def _close_internal(db, trade_id: str, close_price: float, status: str) -> None:
 # ─────────────────────────────────────────────
 def log_trade(trade: dict) -> bool:
     """
-    Insert a new open trade. Returns False if skipped (duplicate direction).
+    Insert a new open trade. Returns False if skipped (already open on this tier).
     Tier rules (enforced per symbol):
-      - Same tier, same direction already open → skip.
-      - Same tier, opposite direction open     → close existing, open new.
+      - Same tier, any direction already open → skip (let existing trade run to SL/TP).
     """
     sym, intv, dirn = trade["symbol"], trade["interval"], trade["direction"]
     tier         = _get_tier(intv)
@@ -204,33 +208,42 @@ def log_trade(trade: dict) -> bool:
         try:
             existing = db.execute(
                 f"SELECT id, direction FROM trades "
-                f"WHERE symbol=? AND interval IN ({placeholders}) AND status IN ('open','pending')",
+                f"WHERE symbol=? AND interval IN ({placeholders}) AND status='open'",
                 (sym, *tier_intervals)
             ).fetchall()
 
             for ex in existing:
-                if ex["direction"] == dirn:
-                    return False   # already in this direction on this tier (open or pending)
-                else:
-                    # Opposing signal — exit the current position before opening new one
-                    _close_internal(db, ex["id"], trade["entry"], "cancelled")
-                    _adapt(db)
+                # Any open trade on this tier — skip the new signal, let it run to SL/TP
+                return False
 
             entry_f   = float(trade["entry"])
             sl_f      = float(trade["sl"])
             risk_dist = abs(entry_f - sl_f)
+
+            # Hard gate: enforce minimum 3:1 R:R using actual entry/sl before insert.
+            # This catches any mismatch between risk_context's TP projection and the
+            # structural SL (e.g. swing-high stop wider than the ATR-based stop that
+            # was used when computing the TP inside risk_context).
+            _MIN_RR = 3.0
+            tp_f    = float(trade["tp"])
+            if risk_dist > 0 and abs(tp_f - entry_f) / risk_dist < _MIN_RR:
+                tp_f = (round(entry_f + _MIN_RR * risk_dist, 8) if dirn == "LONG"
+                        else round(entry_f - _MIN_RR * risk_dist, 8))
+                trade = dict(trade, tp=tp_f,
+                             target_basis="3:1 R:R enforced at log-time (sl wider than TP projection)",
+                             tp_source="forced_3r")
+
             partial_tp = (round(entry_f + 1.5 * risk_dist, 8) if dirn == "LONG"
                           else round(entry_f - 1.5 * risk_dist, 8))
 
-            # Trades with a retest entry price lower/higher than current price
-            # start as 'pending' — activated when price reaches the entry level.
-            initial_status = trade.get("status", "pending")
+            # Market order: all trades open immediately at signal time.
+            initial_status = trade.get("status", "open")
 
             db.execute("""
                 INSERT INTO trades
                 (id, symbol, interval, direction, entry, tp, sl, score, effective_score,
-                 reason, factors_snapshot, target_basis, opened_at, partial_tp, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 reason, factors_snapshot, target_basis, tp_source, opened_at, partial_tp, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 trade["id"], sym, intv, dirn,
                 trade["entry"], trade["tp"], trade["sl"],
@@ -238,6 +251,7 @@ def log_trade(trade: dict) -> bool:
                 trade.get("reason", ""),
                 json.dumps(trade.get("factors_snapshot", {})),
                 trade.get("target_basis", ""),
+                trade.get("tp_source", "unknown"),
                 trade["opened_at"],
                 partial_tp,
                 initial_status,
@@ -300,50 +314,10 @@ def auto_close(symbol: str, interval: str, current_price: float) -> tuple:
     partials = []
     tier      = "day" if interval in ("15m", "30m", "1h") else "swing"
     max_hours = _DAY_MAX_HOURS if tier == "day" else _SWING_MAX_HOURS
-    # Pending trades expire faster — if no retest within this window, miss the trade
-    _PENDING_MAX_HOURS = {"day": 6, "swing": 48}
-    pending_max = _PENDING_MAX_HOURS.get(tier, 24)
 
     with _lock:
         db = _conn()
         try:
-            # ── Activate or expire pending (retest-entry) trades ──────────────
-            pending_rows = db.execute(
-                "SELECT * FROM trades WHERE symbol=? AND interval=? AND status='pending'",
-                (symbol, interval)
-            ).fetchall()
-            for row in pending_rows:
-                t = dict(row)
-                entry_px  = float(t["entry"])
-                direction = t["direction"]
-                # Check if retest level has been reached
-                activated = (
-                    (direction == "LONG"  and current_price <= entry_px) or
-                    (direction == "SHORT" and current_price >= entry_px)
-                )
-                if activated:
-                    db.execute("UPDATE trades SET status='open' WHERE id=?", (t["id"],))
-                    continue
-                # Check pending timeout — price never pulled back, miss the trade
-                try:
-                    opened = datetime.fromisoformat(t["opened_at"].replace("Z", "+00:00"))
-                    age_h  = (datetime.now(timezone.utc) - opened).total_seconds() / 3600
-                    if age_h > pending_max:
-                        now_ts = datetime.now(timezone.utc).isoformat()
-                        db.execute(
-                            "UPDATE trades SET status='cancelled', closed_at=?, "
-                            "close_price=?, roi_pct=0 WHERE id=?",
-                            (now_ts, entry_px, t["id"])
-                        )
-                        closed.append({
-                            "id": t["id"], "symbol": t["symbol"],
-                            "interval": t["interval"], "direction": t["direction"],
-                            "entry": entry_px, "close_price": entry_px,
-                            "roi_pct": 0.0, "status": "cancelled",
-                        })
-                except Exception:
-                    pass
-            db.commit()
 
             rows = db.execute(
                 "SELECT * FROM trades WHERE symbol=? AND interval=? AND status='open'",
@@ -369,41 +343,12 @@ def auto_close(symbol: str, interval: str, current_price: float) -> tuple:
                 # ── Effective SL: entry (breakeven) or original SL ────────
                 eff_sl = float(t["entry"]) if be_active else float(t["sl"])
 
-                # ── Partial TP: lock in 50% at 1.5R, activate breakeven ────
-                partial_tp_val = t.get("partial_tp")
-                partial_hit_db = bool(t.get("partial_hit", 0))
-                if partial_tp_val and not partial_hit_db:
-                    hit_partial = (
-                        (t["direction"] == "LONG"  and current_price >= float(partial_tp_val)) or
-                        (t["direction"] == "SHORT" and current_price <= float(partial_tp_val))
-                    )
-                    if hit_partial:
-                        db.execute(
-                            "UPDATE trades SET partial_hit=1, breakeven_activated=1 WHERE id=?",
-                            (t["id"],)
-                        )
-                        partial_hit_db = True
-                        be_active      = True
-                        eff_sl         = float(t["entry"])
-                        partials.append({
-                            "id":            t["id"],
-                            "symbol":        t["symbol"],
-                            "interval":      t["interval"],
-                            "direction":     t["direction"],
-                            "entry":         t["entry"],
-                            "partial_price": float(partial_tp_val),
-                        })
-
-                # ── TP / SL checks ────────────────────────────────────────
+                # ── SL check only — fixed TP removed, trailing stop lets winners run ──
                 if t["direction"] == "LONG":
-                    if current_price >= t["tp"]:
-                        hit = "win"
-                    elif current_price <= eff_sl:
+                    if current_price <= eff_sl:
                         hit = "loss" if not be_active else "cancelled"
                 elif t["direction"] == "SHORT":
-                    if current_price <= t["tp"]:
-                        hit = "win"
-                    elif current_price >= eff_sl:
+                    if current_price >= eff_sl:
                         hit = "loss" if not be_active else "cancelled"
 
                 # ── Time-based stop ───────────────────────────────────────
@@ -434,27 +379,11 @@ def auto_close(symbol: str, interval: str, current_price: float) -> tuple:
 
                 if hit:
                     close_px = round(current_price, 8)
-                    # ── Blended ROI when partial TP was already booked ───────
-                    if partial_hit_db and partial_tp_val:
-                        p_roi = _calc_roi(t["direction"], float(t["entry"]), float(partial_tp_val))
-                        if hit == "win":
-                            # 50% booked at partial_tp + 50% at full TP
-                            tp_roi = _calc_roi(t["direction"], float(t["entry"]), float(t["tp"]))
-                            roi = round(0.5 * p_roi + 0.5 * tp_roi, 2)
-                        else:
-                            # cancelled (breakeven) or edge-case loss:
-                            # 50% at partial_tp + 50% at close price
-                            remainder = (0.0 if hit == "cancelled"
-                                         else _calc_roi(t["direction"], float(t["entry"]), close_px))
-                            roi = round(0.5 * p_roi + 0.5 * remainder, 2)
-                            if roi > 0:
-                                hit = "win"   # net profitable — count as win
-                            if hit == "cancelled":
-                                close_px = float(t["entry"])
-                    else:
-                        if hit == "cancelled":
-                            close_px = float(t["entry"])   # 0% ROI on breakeven/time exits
-                        roi = _calc_roi(t["direction"], float(t["entry"]), close_px)
+                    if hit == "cancelled":
+                        close_px = float(t["entry"])   # 0% ROI on breakeven/time exits
+                    roi = _calc_roi(t["direction"], float(t["entry"]), close_px)
+                    if hit == "cancelled" and roi > 0:
+                        hit = "win"
                     analysis = _generate_analysis(t, close_px, hit, roi)
                     now      = datetime.now(timezone.utc).isoformat()
                     db.execute("""
@@ -527,7 +456,7 @@ def update_trailing_stops(symbol: str, interval: str, current_price: float,
                 if risk_d <= 0:
                     continue
 
-                # Only trail once 2R in profit
+                # Trail once 2R in profit (give trade room to breathe)
                 profit_r = (
                     (current_price - entry) / risk_d if direction == "LONG"
                     else (entry - current_price) / risk_d
@@ -564,12 +493,16 @@ def update_trailing_stops(symbol: str, interval: str, current_price: float,
     return updated
 
 
+COMMISSION_RT = 0.20  # 0.10% entry + 0.10% exit = 0.20 percentage-point round-trip cost
+
 def _calc_roi(direction: str, entry: float, close_price: float) -> float:
     if not entry or entry == 0:
         return 0.0
     if direction == "LONG":
-        return round((close_price - entry) / entry * 100, 2)
-    return round((entry - close_price) / entry * 100, 2)
+        raw = (close_price - entry) / entry * 100
+    else:
+        raw = (entry - close_price) / entry * 100
+    return round(raw - COMMISSION_RT, 2)
 
 
 # ─────────────────────────────────────────────
@@ -886,6 +819,27 @@ def get_trades() -> list:
         t["factors_snapshot"]    = json.loads(t.get("factors_snapshot") or "{}")
         t["post_trade_analysis"] = json.loads(t.get("post_trade_analysis") or "null")
         t["ai_analysis"]         = json.loads(t.get("ai_analysis") or "null")
+        result.append(t)
+    return result
+
+
+def get_open_trades(symbol: str | None = None, interval: str | None = None) -> list:
+    """Return all open trades, optionally filtered by symbol and/or interval."""
+    db   = _conn()
+    q    = "SELECT * FROM trades WHERE status='open'"
+    args: list = []
+    if symbol:
+        q += " AND symbol=?";   args.append(symbol)
+    if interval:
+        q += " AND interval=?"; args.append(interval)
+    q += " ORDER BY opened_at ASC"
+    rows = db.execute(q, args).fetchall()
+    db.close()
+    result = []
+    for r in rows:
+        t = dict(r)
+        t["factors_snapshot"] = json.loads(t.get("factors_snapshot") or "{}")
+        t["ai_analysis"]      = json.loads(t.get("ai_analysis") or "null")
         result.append(t)
     return result
 

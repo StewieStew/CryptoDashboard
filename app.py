@@ -9,6 +9,15 @@ import time
 import threading
 import uuid
 import os
+import json
+import pandas as pd
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"), override=False)
+except ImportError:
+    pass
+import analysis
 import learning
 import notifications
 import ai_analysis
@@ -32,9 +41,12 @@ DEFAULT_SYMBOLS  = [
     "LINKUSDT","LTCUSDT", "DOTUSDT",  "NEARUSDT", "ATOMUSDT",
 ]
 
-# Two-tier scanning: Day entries (15m) + Swing entries (4h) only.
-# This keeps max 1 open trade per symbol per tier and eliminates stacking.
-SCAN_INTERVALS   = ["15m", "4h"]
+# Paper-trade mode: only these coins on 4H using discovery-validated params.
+PAPER_SYMBOLS   = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "DOGEUSDT"]
+PAPER_INTERVALS = ["15m", "1h", "4h"]
+
+# Three-tier scanning: 15m (scalp), 1h (day trade — MACD primary), 4h (swing).
+SCAN_INTERVALS   = ["15m", "1h", "4h"]
 
 # Grows as users view additional coins — persists for the life of the server process
 _known_symbols   = set(DEFAULT_SYMBOLS)
@@ -56,6 +68,199 @@ _bt_lock = threading.Lock()
 # Research campaigns — keyed by campaign_id (uuid)
 _campaigns: dict = {}
 _camp_lock = threading.Lock()
+
+
+# ── Apply walk-forward validated 4H params from discovery checkpoint ──────────
+def _apply_discovery_params() -> None:
+    """
+    Saves the best per-coin strategy params+weights from the discovery checkpoint
+    into the DB so the scanner picks them up automatically.
+    Called once at startup.
+    """
+    # RSI ranges: widened to [35, 85] long / [20, 65] short — original [35,70] blocked all
+    # signals during bull trends where RSI sustains above 70. Body-ratio gate handles
+    # conviction filtering; direction-candle gate removed (was checking current candle
+    # instead of the actual BOS candle, blocking valid retest entries).
+    # BTC/1h excluded — zero profitable configs found in discovery campaign
+    best = {
+        ("BTCUSDT", "4h"): {
+            "config":           "Structure + Volume",
+            "score_threshold":  6.5,
+            "min_rr":           3.0,
+            "adx_threshold":    30,
+            "body_ratio_min":   0.30,
+            "level_touch_min":  1,
+            "rsi_long_min":     35.0, "rsi_long_max": 85.0,
+            "rsi_short_min":    20.0, "rsi_short_max": 65.0,
+            "weights": {
+                "bos": 2.0, "sweep": 2.0, "rsi": 0.0, "adx": 0.0,
+                "volume": 2.0, "obv": 1.0, "regime": 1.0,
+                "fvg": 0.0, "fib": 0.0, "liquidity": 0.0,
+            },
+        },
+        ("ETHUSDT", "4h"): {
+            "config":           "Trend + S/R + RSI",
+            "score_threshold":  7.0,
+            "min_rr":           3.0,
+            "adx_threshold":    30,
+            "body_ratio_min":   0.10,
+            "level_touch_min":  1,
+            "rsi_long_min":     35.0, "rsi_long_max": 85.0,
+            "rsi_short_min":    20.0, "rsi_short_max": 65.0,
+            "weights": {
+                "bos": 2.5, "sweep": 2.0, "rsi": 2.0, "adx": 0.0,
+                "volume": 0.0, "obv": 0.0, "regime": 2.5,
+                "fvg": 0.0, "fib": 0.0, "liquidity": 0.0,
+            },
+        },
+        ("XRPUSDT", "4h"): {
+            "config":           "Full Precision",
+            "score_threshold":  7.0,
+            "min_rr":           3.0,
+            "adx_threshold":    15,
+            "body_ratio_min":   0.10,
+            "level_touch_min":  1,
+            "rsi_long_min":     35.0, "rsi_long_max": 85.0,
+            "rsi_short_min":    20.0, "rsi_short_max": 65.0,
+            "weights": {
+                "bos": 1.5, "sweep": 1.5, "fib": 1.5, "fvg": 1.5,
+                "volume": 1.0, "regime": 1.0, "liquidity": 1.0,
+                "rsi": 0.0, "adx": 0.0, "obv": 0.0,
+            },
+        },
+        # DOGEUSDT/4h: Full Confluence — WR=34.3%, PF=1.54, 35 trades
+        ("DOGEUSDT", "4h"): {
+            "config":           "Full Confluence",
+            "score_threshold":  7.5,
+            "min_rr":           3.0,
+            "adx_threshold":    30,
+            "body_ratio_min":   0.10,
+            "level_touch_min":  1,
+            "rsi_long_min":     35.0, "rsi_long_max": 85.0,
+            "rsi_short_min":    20.0, "rsi_short_max": 65.0,
+            "weights": {
+                "bos": 2.0, "sweep": 2.0, "rsi": 1.0, "adx": 1.0,
+                "volume": 1.0, "obv": 1.0, "regime": 2.0,
+                "fvg": 0.0, "fib": 0.0, "liquidity": 0.0,
+            },
+        },
+        # ETHUSDT/1h: Full Confluence — WR=31.6%, PF=1.37, 98 trades
+        ("ETHUSDT", "1h"): {
+            "config":           "Full Confluence",
+            "score_threshold":  7.5,
+            "min_rr":           3.0,
+            "adx_threshold":    15,
+            "body_ratio_min":   0.30,
+            "level_touch_min":  1,
+            "rsi_long_min":     35.0, "rsi_long_max": 85.0,
+            "rsi_short_min":    20.0, "rsi_short_max": 65.0,
+            "weights": {
+                "bos": 2.0, "sweep": 2.0, "rsi": 1.0, "adx": 1.0,
+                "volume": 1.0, "obv": 1.0, "regime": 2.0,
+                "fvg": 0.0, "fib": 0.0, "liquidity": 0.0,
+            },
+        },
+        # XRPUSDT/1h: BOS + FVG — WR=29.9%, PF=1.22, 97 trades
+        ("XRPUSDT", "1h"): {
+            "config":           "BOS + FVG",
+            "score_threshold":  5.5,
+            "min_rr":           3.0,
+            "adx_threshold":    25,
+            "body_ratio_min":   0.20,
+            "level_touch_min":  1,
+            "rsi_long_min":     35.0, "rsi_long_max": 85.0,
+            "rsi_short_min":    20.0, "rsi_short_max": 65.0,
+            "weights": {
+                "bos": 2.5, "fvg": 2.5, "sweep": 1.0,
+                "rsi": 0.0, "adx": 0.0, "volume": 0.0, "obv": 0.0,
+                "regime": 0.0, "fib": 0.0, "liquidity": 0.0,
+            },
+        },
+        # DOGEUSDT/1h: Trend + Structure + RSI — WR=33.3%, PF=1.58, 48 trades
+        ("DOGEUSDT", "1h"): {
+            "config":           "Trend + Structure + RSI",
+            "score_threshold":  6.5,
+            "min_rr":           3.0,
+            "adx_threshold":    30,
+            "body_ratio_min":   0.20,
+            "level_touch_min":  1,
+            "rsi_long_min":     35.0, "rsi_long_max": 85.0,
+            "rsi_short_min":    20.0, "rsi_short_max": 65.0,
+            "weights": {
+                "bos": 2.0, "sweep": 1.0, "rsi": 2.0, "regime": 2.0,
+                "adx": 0.0, "volume": 0.0, "obv": 0.0,
+                "fvg": 0.0, "fib": 0.0, "liquidity": 0.0,
+            },
+        },
+        # ── 15m configs: derived from 4h equivalents (score -0.5, ADX -5) ────────
+        # BTCUSDT/15m: Structure + Volume (4h: score=6.5→6.0, adx=30→25)
+        ("BTCUSDT", "15m"): {
+            "config":           "Structure + Volume",
+            "score_threshold":  6.0,
+            "min_rr":           3.0,
+            "adx_threshold":    25,
+            "body_ratio_min":   0.30,
+            "level_touch_min":  1,
+            "rsi_long_min":     35.0, "rsi_long_max": 85.0,
+            "rsi_short_min":    20.0, "rsi_short_max": 65.0,
+            "weights": {
+                "bos": 2.0, "sweep": 2.0, "rsi": 0.0, "adx": 0.0,
+                "volume": 2.0, "obv": 1.0, "regime": 1.0,
+                "fvg": 0.0, "fib": 0.0, "liquidity": 0.0,
+            },
+        },
+        # ETHUSDT/15m: Structure + Volume — WR=30.9%, PF=1.22, 110 trades (15m checkpoint)
+        ("ETHUSDT", "15m"): {
+            "config":           "Structure + Volume",
+            "score_threshold":  7.5,
+            "min_rr":           3.0,
+            "adx_threshold":    30,
+            "body_ratio_min":   0.10,
+            "level_touch_min":  1,
+            "rsi_long_min":     35.0, "rsi_long_max": 85.0,
+            "rsi_short_min":    20.0, "rsi_short_max": 65.0,
+            "weights": {
+                "bos": 2.0, "sweep": 2.0, "volume": 2.0, "obv": 1.0, "regime": 1.0,
+                "rsi": 0.0, "adx": 0.0, "fvg": 0.0, "fib": 0.0, "liquidity": 0.0,
+            },
+        },
+        # XRPUSDT/15m: Trend + S/R + RSI — WR=27.5%, PF=1.05, 335 trades (15m checkpoint)
+        ("XRPUSDT", "15m"): {
+            "config":           "Trend + S/R + RSI",
+            "score_threshold":  7.0,
+            "min_rr":           3.0,
+            "adx_threshold":    15,
+            "body_ratio_min":   0.20,
+            "level_touch_min":  1,
+            "rsi_long_min":     35.0, "rsi_long_max": 85.0,
+            "rsi_short_min":    20.0, "rsi_short_max": 65.0,
+            "weights": {
+                "bos": 2.5, "sweep": 2.0, "rsi": 2.0, "regime": 2.5,
+                "adx": 0.0, "volume": 0.0, "obv": 0.0,
+                "fvg": 0.0, "fib": 0.0, "liquidity": 0.0,
+            },
+        },
+        # DOGEUSDT/15m: Trend + Structure + RSI — WR=26.4%, PF=1.22, 220 trades (15m checkpoint)
+        ("DOGEUSDT", "15m"): {
+            "config":           "Trend + Structure + RSI",
+            "score_threshold":  5.5,
+            "min_rr":           3.0,
+            "adx_threshold":    20,
+            "body_ratio_min":   0.30,
+            "level_touch_min":  1,
+            "rsi_long_min":     35.0, "rsi_long_max": 85.0,
+            "rsi_short_min":    20.0, "rsi_short_max": 65.0,
+            "weights": {
+                "bos": 2.0, "sweep": 1.0, "rsi": 2.0, "regime": 2.0,
+                "adx": 0.0, "volume": 0.0, "obv": 0.0,
+                "fvg": 0.0, "fib": 0.0, "liquidity": 0.0,
+            },
+        },
+    }
+    for (sym, interval), params in best.items():
+        learning.save_symbol_params(sym, interval, params)
+
+_apply_discovery_params()
 
 
 # ── Session filter ────────────────────────────────────────────────────────────
@@ -87,21 +292,98 @@ def _bias_agrees(signal_dir: str, htf_data: dict) -> bool:
     Swing (4h) signals filtered by 1d context.
 
     Agreement = HTF price above 200 EMA (for LONG) or below (for SHORT),
-                OR a confirmed BOS on the HTF in the same direction.
+                OR a confirmed BOS on the HTF in the same direction,
+                OR the HTF is already in a matching trend structure (HH/HL or LH/LL).
     """
     regime    = htf_data.get("regime", {})
     structure = htf_data.get("structure", {})
     above_200 = regime.get("above_200", False)
     bull_bos  = structure.get("bullish_bos", False) if structure else False
     bear_bos  = structure.get("bearish_bos", False) if structure else False
+    hh_hl     = structure.get("hh_hl", False)       if structure else False
+    lh_ll     = structure.get("lh_ll", False)       if structure else False
 
     if signal_dir == "LONG":
-        return above_200 or bull_bos
+        return above_200 or bull_bos or hh_hl
     else:  # SHORT
-        return (not above_200) or bear_bos
+        return (not above_200) or bear_bos or lh_ll
 
 
 # ── Background scanner ────────────────────────────────────────────────────────
+def _resolve_open_trades(sym: str, interval: str) -> int:
+    """
+    Fetch recent OHLCV bars and check every open trade's TP/SL against bar highs/lows.
+
+    More accurate than spot-price polling: catches TP/SL hits that occurred between
+    two 5-minute scan cycles (e.g. a wick that touched SL and recovered before next scan).
+
+    Returns the number of trades resolved.
+    """
+    open_trades = learning.get_open_trades(sym, interval)
+    if not open_trades:
+        return 0
+
+    # Fetch enough bars to cover any open trade's max lifetime
+    lookback = {"15m": 500, "1h": 220, "4h": 120}.get(interval, 220)
+    try:
+        df = analysis.fetch_ohlcv(sym, interval, lookback)
+    except Exception:
+        return 0
+    if df is None or df.empty:
+        return 0
+
+    resolved = 0
+    for trade in open_trades:
+        trade_id  = trade["id"]
+        direction = trade["direction"]
+        tp        = float(trade["tp"])
+        sl        = float(trade["sl"])
+        try:
+            opened_at = pd.Timestamp(trade["opened_at"])
+        except Exception:
+            continue
+
+        # Only examine bars that opened AFTER the trade was logged
+        future = df[df.index > opened_at]
+        if future.empty:
+            continue
+
+        outcome     = None
+        close_price = None
+        for _, bar in future.iterrows():
+            hi, lo = float(bar["high"]), float(bar["low"])
+            # TP removed — trailing stop lets winners run; only SL closes here
+            if direction == "LONG":
+                if lo <= sl:
+                    outcome = "loss"; close_price = sl;  break
+            else:  # SHORT
+                if hi >= sl:
+                    outcome = "loss"; close_price = sl;  break
+
+        if outcome:
+            try:
+                closed = learning.close_trade(trade_id, close_price, outcome)
+                if closed:
+                    resolved += 1
+                    notifications.send_close_alert(
+                        closed, closed["status"], closed["close_price"], closed["roi_pct"]
+                    )
+            except Exception:
+                pass
+
+    return resolved
+
+
+import math
+
+def _seconds_until_next_candle_close(interval_minutes: int = 15, buffer_seconds: int = 3) -> float:
+    """Return seconds to sleep until the next candle of given interval closes, plus a small buffer."""
+    now = time.time()
+    interval_secs = interval_minutes * 60
+    seconds_into_interval = now % interval_secs
+    return (interval_secs - seconds_into_interval) + buffer_seconds
+
+
 def _background_scanner() -> None:
     """
     Runs forever in a daemon thread.
@@ -116,12 +398,15 @@ def _background_scanner() -> None:
     time.sleep(10)          # short startup pause, then begin immediately
 
     while True:
-        syms = list(_known_symbols)
+        syms = PAPER_SYMBOLS   # paper-trade: locked to discovery-validated coins only
         scan_signals = 0
         scan_closes  = 0
+        num_configs  = len(syms) * len(PAPER_INTERVALS)
+        cycle_ts     = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        print(f"[SCAN CYCLE] {cycle_ts} UTC — scanning {num_configs} configs", flush=True)
 
         for sym in syms:
-            # Fetch bias TFs first (1h = bias for 15m day trades, 1d = bias for 4h swings)
+            # Fetch bias TFs: 1h for confirmation candle check, 1d for 4H bias
             bias_cache: dict[str, dict] = {}
             for bias_tf in ("1h", "1d"):
                 try:
@@ -130,13 +415,22 @@ def _background_scanner() -> None:
                     # Cache the bias data too
                     with _lock:
                         _cache[f"{sym}_{bias_tf}"] = (bias_data, time.time())
-                except Exception:
+                except Exception as e:
+                    print(f"[ERROR] {sym} {bias_tf} bias fetch: {e}", flush=True)
                     bias_cache[bias_tf] = {}
                 time.sleep(1)
 
-            for interval in SCAN_INTERVALS:
+            for interval in PAPER_INTERVALS:
                 try:
-                    data = full_analysis(sym, interval)
+                    # Load per-symbol discovery params (weights + thresholds)
+                    sym_p = learning.get_symbol_params(sym, interval) or {}
+                    sym_weights = sym_p.get("weights") or None
+                    data = full_analysis(
+                        sym, interval,
+                        weights=sym_weights,
+                        body_ratio_min=sym_p.get("body_ratio_min", 0.30),
+                        level_touch_min=sym_p.get("level_touch_min", 1),
+                    )
                     now  = time.time()
                     data["cache_age"] = 0
                     with _lock:
@@ -146,9 +440,7 @@ def _background_scanner() -> None:
                     try:
                         detected_regime = regime.detect_regime_from_data(data)
                         learning.save_regime(sym, detected_regime)
-                        # Use per-symbol params from research campaign if available,
-                        # otherwise fall back to global adaptive defaults.
-                        sym_p = learning.get_symbol_params(sym, interval) or {}
+                        # sym_p already loaded above (has discovery params)
                         base_p = {
                             "score_threshold": sym_p.get("score_threshold", learning.get_threshold()),
                             "min_rr":          sym_p.get("min_rr",          3.0),
@@ -156,23 +448,44 @@ def _background_scanner() -> None:
                             "body_ratio_min":  sym_p.get("body_ratio_min",  0.30),
                         }
                         regime_p = regime.get_regime_params(detected_regime, base_p)
-                    except Exception:
+                    except Exception as e:
+                        print(f"[ERROR] {sym} {interval} regime detect: {e}", flush=True)
                         regime_p = {}
 
                     # Log signal only if all filters pass
-                    sig    = data.get("signal")
+                    raw_sig = data.get("signal")
                     htf    = "1h" if interval == "15m" else "1d"
                     htf_d  = bias_cache.get(htf, {})
-                    is_day = interval in ("15m", "30m", "1h")
-                    session_ok = (not is_day) or _in_active_session()
+                    adx_val = data.get("adx", {}).get("value", 0)
 
-                    if sig:
-                        # ── Regime-adjusted score filter ──────────────────────
+                    # Gate 1: BOS signal present?
+                    if not raw_sig:
+                        print(f"[SCAN] {sym} {interval}: no BOS → BLOCKED", flush=True)
+                        sig = None
+                    else:
+                        sig = raw_sig
+                        # Gate 2: regime-adjusted score filter
                         regime_threshold = regime_p.get("score_threshold")
                         if regime_threshold and sig.get("score", 0) < regime_threshold:
-                            sig = None   # doesn't clear the regime-adjusted bar
+                            print(
+                                f"[SCAN] {sym} {interval}: signal={sig['direction']} "
+                                f"score={sig.get('score', 0):.1f} < regime_threshold={regime_threshold:.1f} → BLOCKED",
+                                flush=True,
+                            )
+                            sig = None
 
-                    if sig and _bias_agrees(sig["direction"], htf_d) and session_ok:
+                    # Gate 3: higher-TF bias
+                    if sig and not _bias_agrees(sig["direction"], htf_d):
+                        print(
+                            f"[SCAN] {sym} {interval}: signal={sig['direction']} "
+                            f"score={sig.get('score', 0):.1f} → HTF BIAS REJECT ({htf} disagrees)",
+                            flush=True,
+                        )
+                        sig = None
+
+                    # MACD fallback disabled — using per-coin discovery-validated BOS strategies only
+
+                    if sig:
                         # ── Medium: 1H confirmation candle for 4H swing signals ──
                         # For 4H entries, the most recent 1H candle must confirm
                         # direction with a real body (not a doji or opposite colour).
@@ -185,21 +498,55 @@ def _background_scanner() -> None:
                                 h1_ratio = h1_body / h1_rng if h1_rng > 0 else 0
                                 h1_bull  = h1["close"] > h1["open"]
                                 h1_bear  = h1["close"] < h1["open"]
-                                if sig["direction"] == "LONG"  and not (h1_bull and h1_ratio >= 0.40):
+                                if sig["direction"] == "LONG"  and not (h1_bull and h1_ratio >= 0.15):
+                                    print(
+                                        f"[SCAN] {sym} {interval}: signal=LONG score={sig.get('score', 0):.1f} "
+                                        f"→ 1H CANDLE REJECT (bull={h1_bull}, body={h1_ratio:.2f})",
+                                        flush=True,
+                                    )
                                     continue  # No 1H bullish confirmation
-                                if sig["direction"] == "SHORT" and not (h1_bear and h1_ratio >= 0.40):
+                                if sig["direction"] == "SHORT" and not (h1_bear and h1_ratio >= 0.15):
+                                    print(
+                                        f"[SCAN] {sym} {interval}: signal=SHORT score={sig.get('score', 0):.1f} "
+                                        f"→ 1H CANDLE REJECT (bear={h1_bear}, body={h1_ratio:.2f})",
+                                        flush=True,
+                                    )
                                     continue  # No 1H bearish confirmation
+                        if interval == "1h":
+                            h1_candles = bias_cache.get("1h", {}).get("chart", {}).get("candles", [])
+                            if h1_candles:
+                                h1 = h1_candles[-1]
+                                h1_rng   = h1["high"] - h1["low"]
+                                h1_body  = abs(h1["close"] - h1["open"])
+                                h1_ratio = h1_body / h1_rng if h1_rng > 0 else 0
+                                h1_bull  = h1["close"] > h1["open"]
+                                h1_bear  = h1["close"] < h1["open"]
+                                if sig["direction"] == "LONG"  and not (h1_bull and h1_ratio >= 0.15):
+                                    print(
+                                        f"[SCAN] {sym} {interval}: signal=LONG score={sig.get('score', 0):.1f} "
+                                        f"→ 1H CANDLE REJECT (bull={h1_bull}, body={h1_ratio:.2f})",
+                                        flush=True,
+                                    )
+                                    continue  # Weak/doji candle on 1H LONG
+                                if sig["direction"] == "SHORT" and not (h1_bear and h1_ratio >= 0.15):
+                                    print(
+                                        f"[SCAN] {sym} {interval}: signal=SHORT score={sig.get('score', 0):.1f} "
+                                        f"→ 1H CANDLE REJECT (bear={h1_bear}, body={h1_ratio:.2f})",
+                                        flush=True,
+                                    )
+                                    continue  # Weak/doji candle on 1H SHORT
 
                         trade_id  = f"{sym}_{interval}_{sig['direction']}_{int(time.time())}"
                         cur_px    = sig.get("current_price", sig["entry"])
                         vwap_val  = data.get("vwap") or 0
+                        # Market order: execute immediately at current price
                         trade_data = {
                             "id":               trade_id,
                             "symbol":           sym,
                             "interval":         interval,
                             "direction":        sig["direction"],
-                            "entry":            sig["entry"],      # structural retest level
-                            "current_price":    cur_px,            # where BOS happened
+                            "entry":            cur_px,
+                            "current_price":    cur_px,
                             "tp":               sig["target"],
                             "sl":               sig["stop"],
                             "score":            sig["score"],
@@ -207,57 +554,46 @@ def _background_scanner() -> None:
                             "reason":           sig.get("reason", ""),
                             "factors_snapshot": sig.get("factors_snapshot", {}),
                             "target_basis":     sig.get("target_basis", ""),
+                            "tp_source":        sig.get("tp_source", "unknown"),
                             "opened_at":        datetime.now(timezone.utc).isoformat(),
-                            "status":           "pending",  # activated when retest level hit
-                            "adx_value":        data.get("adx", {}).get("value", 0),
+                            "status":           "open",
+                            "adx_value":        adx_val,
                             "vwap_side":        ("above" if vwap_val and cur_px > vwap_val
                                                  else "below"),
                         }
-                        # ── Claude AI REQUIRED before logging ─────────────
-                        # Every trade must pass Claude review.
-                        # If API key is set but Claude fails → hold signal (no unreviewed trades).
-                        has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY", ""))
-                        ohlcv = data.get("chart", {}).get("candles", [])[-20:]
-                        try:
-                            ctx       = market_data.get_market_context(sym)
-                            history   = learning.get_trades()
-                            ai_acc    = learning.get_ai_accuracy()
-                            ai_result = ai_analysis.analyze_signal(
-                                trade_data, history, ctx,
-                                ai_accuracy=ai_acc,
-                                ohlcv_candles=ohlcv,
-                                htf_context=htf_d,
+                        logged = learning.log_trade(trade_data)
+                        if logged:
+                            scan_signals += 1
+                            entry_px = cur_px
+                            sl_px    = sig["stop"]
+                            tp_px    = sig["target"]
+                            risk_r   = abs(entry_px - sl_px)
+                            reward_r = abs(tp_px - entry_px)
+                            rr       = reward_r / risk_r if risk_r else 0
+                            print(
+                                f"[TRADE] {sym} {interval} {sig['direction']} @ {entry_px} "
+                                f"| SL={sl_px} | TP={tp_px} | RR={rr:.1f} | score={sig.get('score', 0):.1f}",
+                                flush=True,
                             )
-                        except Exception:
-                            ai_result = {}
+                            notifications.send_signal_alert({
+                                "symbol":        sym,
+                                "interval":      interval,
+                                "direction":     sig["direction"],
+                                "entry":         sig["entry"],
+                                "tp":            sig["target"],
+                                "sl":            sig["stop"],
+                                "score":         sig["score"],
+                                "reason":        sig.get("reason", ""),
+                                "target_basis":  sig.get("target_basis", ""),
+                                "ai_analysis":   {},
+                                "pending":       False,
+                                "current_price": cur_px,
+                            })
 
-                        if has_api_key and not ai_result:
-                            pass  # Claude unavailable — skip this scan cycle
-                        elif ai_result.get("recommendation") == "skip":
-                            pass  # Claude vetoed
-                        else:
-                            logged = learning.log_trade(trade_data)
-                            if logged:
-                                scan_signals += 1
-                                if ai_result:
-                                    learning.update_trade_ai(trade_id, ai_result)
-                                    trade_data["ai_analysis"] = ai_result
-                                notifications.send_signal_alert({
-                                    "symbol":        sym,
-                                    "interval":      interval,
-                                    "direction":     sig["direction"],
-                                    "entry":         sig["entry"],
-                                    "tp":            sig["target"],
-                                    "sl":            sig["stop"],
-                                    "score":         sig["score"],
-                                    "reason":        sig.get("reason", ""),
-                                    "target_basis":  sig.get("target_basis", ""),
-                                    "ai_analysis":   trade_data.get("ai_analysis", {}),
-                                    "pending":       True,
-                                    "current_price": cur_px,
-                                })
+                    # Bar-accurate TP/SL resolution — catches hits between 5-min scans
+                    scan_closes += _resolve_open_trades(sym, interval)
 
-                    # Auto-close trades (TP / SL / time / stagnation)
+                    # Auto-close trades (TP / SL / time / stagnation via spot price)
                     cur_price = data.get("current_price", 0)
                     if cur_price:
                         closed, partials = learning.auto_close(sym, interval, float(cur_price))
@@ -277,8 +613,8 @@ def _background_scanner() -> None:
                             sym, interval, float(cur_price), sw_highs, sw_lows
                         )
 
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[ERROR] {sym} {interval}: {e}", flush=True)
                 time.sleep(1)   # respect Binance public API rate limits
 
         # Update status after each full sweep
@@ -287,8 +623,13 @@ def _background_scanner() -> None:
         _scanner_status["last_scan_at"]    = now_iso
         _scanner_status["signals_logged"]  += scan_signals
         _scanner_status["trades_closed"]   += scan_closes
+        print(
+            f"[SCAN CYCLE] complete — {scan_signals} signal(s), {scan_closes} close(s)",
+            flush=True,
+        )
 
-        time.sleep(300)         # 5 minutes between full sweeps
+        sleep_secs = _seconds_until_next_candle_close(interval_minutes=15, buffer_seconds=3)
+        time.sleep(sleep_secs)
 
 
 threading.Thread(target=_background_scanner, daemon=True).start()
@@ -663,6 +1004,47 @@ def backtest_results(job_id: str):
     return jsonify({"status": "done", "results": job.get("results", [])})
 
 
+# ── MACD walk-forward backtest route ──────────────────────────────────────────
+
+@app.route("/api/backtest/macd", methods=["POST"])
+def backtest_macd():
+    """
+    Start an async MACD walk-forward backtest job.
+    Body: {symbol, interval, years=3}
+    Returns: {job_id, status: "started"}
+    """
+    body     = request.get_json() or {}
+    symbol   = body.get("symbol", "BTCUSDT").upper()
+    if not symbol.endswith("USDT"):
+        symbol += "USDT"
+    interval = body.get("interval", "1h")
+    years    = int(body.get("years", 3))
+
+    if interval not in VALID_INTERVALS:
+        return jsonify({"error": f"Invalid interval. Use: {VALID_INTERVALS}"}), 400
+
+    job_id = str(uuid.uuid4())[:8]
+    with _bt_lock:
+        _backtest_jobs[job_id] = {"status": "running", "started_at": datetime.now(timezone.utc).isoformat()}
+
+    def _run():
+        try:
+            result = backtester.run_macd_backtest(symbol, interval, years)
+            with _bt_lock:
+                _backtest_jobs[job_id] = {
+                    "status":       "done",
+                    "results":      [result],
+                    "macd":         True,
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                }
+        except Exception as e:
+            with _bt_lock:
+                _backtest_jobs[job_id] = {"status": "error", "error": str(e)}
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"job_id": job_id, "status": "started"})
+
+
 # ── Research campaign routes ──────────────────────────────────────────────────
 
 @app.route("/api/backtest/campaign", methods=["POST"])
@@ -860,6 +1242,36 @@ def get_regime(symbol: str):
         return jsonify({"error": str(e)}), 500
 
 
+# ── Discovery progress ────────────────────────────────────────────────────────
+
+@app.route("/api/discovery/progress")
+def discovery_progress():
+    """Read per-job progress files written by run_discovery.py workers."""
+    import glob as _glob
+    progress_dir = "/tmp/discovery_progress"
+    files = _glob.glob(f"{progress_dir}/*.json")
+    jobs = {}
+    for f in files:
+        try:
+            with open(f) as fh:
+                data = json.load(fh)
+            key = os.path.basename(f).replace(".json", "")
+            jobs[key] = data
+        except Exception:
+            pass
+    total_done  = sum(j.get("done", 0)  for j in jobs.values())
+    total_total = sum(j.get("total", 0) for j in jobs.values())
+    all_done    = bool(jobs) and all(j.get("status") in ("done", "error") for j in jobs.values())
+    return jsonify({
+        "jobs":        jobs,
+        "total_done":  total_done,
+        "total_total": total_total,
+        "overall_pct": round(total_done / total_total * 100, 1) if total_total else 0,
+        "all_done":    all_done,
+        "running":     bool(jobs) and not all_done,
+    })
+
+
 # ── Weekly review manual trigger ──────────────────────────────────────────────
 
 @app.route("/api/weekly-review")
@@ -873,7 +1285,7 @@ def weekly_review():
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 5003))
     print("\n" + "="*50)
     print("  Crypto Analysis Dashboard")
     print(f"  http://localhost:{port}")

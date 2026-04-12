@@ -8,7 +8,13 @@ If the env var is missing, all calls silently no-op.
 import os
 import requests
 
-WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
+# Read lazily so a .env-sourced restart picks up the value
+def _get_webhook() -> str:
+    return (os.environ.get("DISCORD_WEBHOOK_TRADING")
+            or os.environ.get("DISCORD_WEBHOOK_URL", ""))
+
+# Module-level alias (used by /api/test-discord route)
+WEBHOOK_URL = _get_webhook()
 
 # ── Color palette (matches dashboard UI) ─────────────────────────────────────
 _COL_LONG_DAY   = 0xBC8CFF   # purple  — Day   LONG
@@ -24,10 +30,11 @@ _COL_CANCEL     = 0x484F58   # grey
 
 def _post(payload: dict) -> None:
     """POST to Discord webhook, silently ignore all errors."""
-    if not WEBHOOK_URL:
+    url = _get_webhook()
+    if not url:
         return
     try:
-        requests.post(WEBHOOK_URL, json=payload, timeout=5)
+        requests.post(url, json=payload, timeout=5)
     except Exception:
         pass
 
@@ -256,6 +263,49 @@ def send_weekly_review_alert(review: dict, deployed: list, baseline: dict) -> No
         "title":  "📅 Weekly Strategy Review — Claude Sonnet",
         "fields": fields,
         "footer": {"text": "Crypto Dashboard · Weekly Auto-Review"},
+    }
+    _post({"embeds": [embed]})
+
+
+def send_polymarket_result(trade: dict, all_trades: list) -> None:
+    """
+    Discord notification when a Polymarket bet resolves (win or loss).
+    """
+    won       = trade.get("status") == "win"
+    coin      = trade.get("coin", "btc").upper()
+    direction = trade.get("direction", "")
+    side      = trade.get("token_side", "")
+    profit    = trade.get("profit_usdc", 0)
+    bet       = trade.get("usdc_bet", 5)
+    price     = trade.get("token_price", 0)
+    is_live   = trade.get("live", False)
+    strategy  = trade.get("strategy", "momentum").upper()
+
+    # Running stats across all closed trades
+    closed     = [t for t in all_trades if t.get("status") in ("win", "loss")]
+    wins       = [t for t in closed if t.get("status") == "win"]
+    total_pnl  = sum(t.get("profit_usdc", 0) for t in closed)
+    win_rate   = len(wins) / len(closed) * 100 if closed else 0
+
+    emoji = "✅" if won else "❌"
+    color = _COL_WIN if won else _COL_LOSS
+    pnl_str = f"+${profit:.2f}" if profit >= 0 else f"-${abs(profit):.2f}"
+    roi_pct = profit / bet * 100 if bet else 0
+    shares  = round(bet / price, 1) if price else 0
+
+    embed = {
+        "color": color,
+        "title": f"{emoji} {'WIN' if won else 'LOSS'} — {coin} {direction}  ({'LIVE' if is_live else 'DRY'})",
+        "description": f"**{side}** @ ${price:.3f}  ·  {shares} shares  ·  {strategy} strategy",
+        "fields": [
+            {"name": "P&L",      "value": f"`{pnl_str}`",            "inline": True},
+            {"name": "ROI",      "value": f"`{roi_pct:+.0f}%`",       "inline": True},
+            {"name": "Bet",      "value": f"`${bet:.2f}`",            "inline": True},
+            {"name": "Win Rate", "value": f"`{win_rate:.0f}%`",       "inline": True},
+            {"name": "Total P&L","value": f"`${total_pnl:+.2f}`",     "inline": True},
+            {"name": "Trades",   "value": f"`{len(closed)}`",         "inline": True},
+        ],
+        "footer": {"text": f"Polymarket Bot · {trade.get('slug', '')}"},
     }
     _post({"embeds": [embed]})
 
