@@ -11,6 +11,9 @@ import os
 import threading
 from datetime import datetime, timezone
 from typing import Optional
+import logging
+
+logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────
 # STORAGE PATH
@@ -162,9 +165,9 @@ def get_stop_multiplier() -> float:
 # ─────────────────────────────────────────────
 # TIER HELPERS
 # ─────────────────────────────────────────────
-# Two trading tiers — max 1 open trade per symbol per tier.
-# Day tier  : 15m entries (intraday, tight SL)
-# Swing tier: 4h entries  (multi-day, wider SL)
+# Two trading tiers — used for max-hold-time / stagnation limits only.
+# Conflict check is per-symbol per-interval (not per-tier), so e.g.
+# a BTC/USDT 4h LONG and BTC/USDT 15m SHORT can coexist.
 _DAY_INTERVALS   = ("15m", "30m", "1h")
 _SWING_INTERVALS = ("4h", "1d", "1w")
 
@@ -194,26 +197,24 @@ def _close_internal(db, trade_id: str, close_price: float, status: str) -> None:
 # ─────────────────────────────────────────────
 def log_trade(trade: dict) -> bool:
     """
-    Insert a new open trade. Returns False if skipped (already open on this tier).
-    Tier rules (enforced per symbol):
-      - Same tier, any direction already open → skip (let existing trade run to SL/TP).
+    Insert a new open trade. Returns False if skipped (already open on same symbol+interval).
+    Conflict rule (enforced per symbol per interval):
+      - Same symbol AND same interval already open → skip (let existing trade run to SL/TP).
+      - Different timeframe on the same symbol is allowed (e.g. 4h LONG + 15m SHORT can coexist).
     """
     sym, intv, dirn = trade["symbol"], trade["interval"], trade["direction"]
-    tier         = _get_tier(intv)
-    tier_intervals = _DAY_INTERVALS if tier == "day" else _SWING_INTERVALS
-    placeholders   = ",".join("?" * len(tier_intervals))
 
     with _lock:
         db = _conn()
         try:
             existing = db.execute(
-                f"SELECT id, direction FROM trades "
-                f"WHERE symbol=? AND interval IN ({placeholders}) AND status='open'",
-                (sym, *tier_intervals)
+                "SELECT id, direction FROM trades "
+                "WHERE symbol=? AND interval=? AND status='open'",
+                (sym, intv)
             ).fetchall()
 
             for ex in existing:
-                # Any open trade on this tier — skip the new signal, let it run to SL/TP
+                # Already open on this exact symbol+interval — skip
                 return False
 
             entry_f   = float(trade["entry"])
@@ -226,9 +227,25 @@ def log_trade(trade: dict) -> bool:
             # was used when computing the TP inside risk_context).
             _MIN_RR = 3.0
             tp_f    = float(trade["tp"])
+
+            # Fix 1: Reject trades where natural R:R < 2.0 — don't inflate bad setups.
+            natural_rr = abs(tp_f - entry_f) / risk_dist if risk_dist > 0 else 0
+            if natural_rr < 2.0:
+                logger.warning(
+                    f"[SKIP] {sym} {intv} {dirn}: natural R:R={natural_rr:.2f} < 2.0 "
+                    f"— rejecting forced_3r trade"
+                )
+                return False
+
             if risk_dist > 0 and abs(tp_f - entry_f) / risk_dist < _MIN_RR:
+                natural_tp = tp_f
                 tp_f = (round(entry_f + _MIN_RR * risk_dist, 8) if dirn == "LONG"
                         else round(entry_f - _MIN_RR * risk_dist, 8))
+                # Fix 7: Log forced_3r inflation as WARNING.
+                logger.warning(
+                    f"[FORCED_3R] {sym} {intv}: natural TP={natural_tp:.4f} "
+                    f"(R:R={natural_rr:.2f}), forcing to {tp_f:.4f} (3R)"
+                )
                 trade = dict(trade, tp=tp_f,
                              target_basis="3:1 R:R enforced at log-time (sl wider than TP projection)",
                              tp_source="forced_3r")
@@ -290,30 +307,21 @@ def close_trade(trade_id: str, close_price: float, status: str) -> Optional[dict
             db.close()
 
 
-_DAY_MAX_HOURS   = 72    # 3 days max for Day (15m) trades
-_SWING_MAX_HOURS = 336   # 14 days max for Swing (4h) trades
 
 
 def auto_close(symbol: str, interval: str, current_price: float) -> tuple:
     """
-    Auto-close open trades whose TP/SL has been hit, or that have expired.
-
-    Partial TP system (1.5R):
-    - When price reaches 1.5× risk distance, 50% of position is booked at that level
-      and the stop loss moves to breakeven (entry).
-    - On final close, ROI is blended: 0.5×partial_roi + 0.5×remainder_roi.
-    - If the 50% remainder hits breakeven, the trade still counts as a WIN
-      (since the partial locked in profit).
+    Auto-close open trades whose SL has been hit.
 
     Breakeven trailing stop:
     - Once price moves 1× risk distance in our favour, SL moves to entry (breakeven).
+
+    Trades close ONLY when price hits SL or TP. No time-based or stagnation exits.
 
     Returns: (closed_list, partials_list)
     """
     closed   = []
     partials = []
-    tier      = "day" if interval in ("15m", "30m", "1h") else "swing"
-    max_hours = _DAY_MAX_HOURS if tier == "day" else _SWING_MAX_HOURS
 
     with _lock:
         db = _conn()
@@ -340,42 +348,27 @@ def auto_close(symbol: str, interval: str, current_price: float) -> tuple:
                         db.execute("UPDATE trades SET breakeven_activated=1 WHERE id=?", (t["id"],))
                         be_active = True
 
-                # ── Effective SL: entry (breakeven) or original SL ────────
-                eff_sl = float(t["entry"]) if be_active else float(t["sl"])
+                # ── Effective SL: always use current SL from DB ──────────
+                # (trailing stop updater writes entry/above to sl column when
+                #  breakeven activates, so t["sl"] is already correct)
+                eff_sl = float(t["sl"])
 
-                # ── SL check only — fixed TP removed, trailing stop lets winners run ──
+                # ── TP check — must run before SL check ──────────────────
                 if t["direction"] == "LONG":
-                    if current_price <= eff_sl:
-                        hit = "loss" if not be_active else "cancelled"
+                    if current_price >= float(t["tp"]):
+                        hit = "win"
                 elif t["direction"] == "SHORT":
-                    if current_price >= eff_sl:
-                        hit = "loss" if not be_active else "cancelled"
+                    if current_price <= float(t["tp"]):
+                        hit = "win"
 
-                # ── Time-based stop ───────────────────────────────────────
+                # ── SL check ──────────────────────────────────────────────
                 if not hit:
-                    try:
-                        opened = datetime.fromisoformat(
-                            t["opened_at"].replace("Z", "+00:00")
-                        )
-                        age_h = (datetime.now(timezone.utc) - opened).total_seconds() / 3600
-                        if age_h > max_hours:
-                            hit = "cancelled"
-                    except Exception:
-                        pass
-
-                # ── Stagnation exit (spec §7/§8: no momentum after 12 candles)
-                # If the trade has been open > N hours AND price has barely moved
-                # (within 30% of risk distance from entry) → dead trade, exit.
-                if not hit:
-                    try:
-                        _STAG_HOURS = {"day": 3.0, "swing": 24.0}   # 12 × candle period
-                        stag_limit  = _STAG_HOURS.get(tier, 6.0)
-                        if age_h > stag_limit and risk_d > 0:
-                            move = abs(current_price - float(t["entry"]))
-                            if move < 0.30 * risk_d:  # price hasn't gone anywhere
-                                hit = "cancelled"
-                    except Exception:
-                        pass
+                    if t["direction"] == "LONG":
+                        if current_price <= eff_sl:
+                            hit = "loss" if not be_active else "cancelled"
+                    elif t["direction"] == "SHORT":
+                        if current_price >= eff_sl:
+                            hit = "loss" if not be_active else "cancelled"
 
                 if hit:
                     close_px = round(current_price, 8)
@@ -456,12 +449,12 @@ def update_trailing_stops(symbol: str, interval: str, current_price: float,
                 if risk_d <= 0:
                     continue
 
-                # Trail once 2R in profit (give trade room to breathe)
+                # Trail once 1.5R in profit (break-even activation point)
                 profit_r = (
                     (current_price - entry) / risk_d if direction == "LONG"
                     else (entry - current_price) / risk_d
                 )
-                if profit_r < 2.0:
+                if profit_r < 1.5:
                     continue
 
                 if direction == "LONG" and swing_lows:
@@ -752,8 +745,8 @@ def _adapt(db) -> list:
                 f"⬆ Signal threshold {old_thresh:.1f}→{threshold:.1f} "
                 f"(last {len(recent)} trades: {overall_wr:.0%} win rate, target >55%)"
             )
-        elif overall_wr > 0.70 and threshold > 6.5:
-            threshold = max(round(threshold - 0.25, 1), 6.5)
+        elif overall_wr > 0.70 and threshold > 8.0:
+            threshold = max(round(threshold - 0.25, 1), 8.0)  # Fix 9: floor at 8.0
             changes.append(
                 f"⬇ Signal threshold {old_thresh:.1f}→{threshold:.1f} "
                 f"(win rate {overall_wr:.0%} — allowing slightly lower bar)"

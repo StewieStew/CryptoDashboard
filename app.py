@@ -2,6 +2,8 @@
 Crypto Analysis Dashboard — Flask Server
 """
 
+from __future__ import annotations
+
 from flask import Flask, jsonify, render_template, request
 from analysis import full_analysis, chart_for_timeframe
 from datetime import datetime, timezone
@@ -11,12 +13,6 @@ import uuid
 import os
 import json
 import pandas as pd
-
-try:
-    from dotenv import load_dotenv
-    load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"), override=False)
-except ImportError:
-    pass
 import analysis
 import learning
 import notifications
@@ -24,6 +20,9 @@ import ai_analysis
 import market_data
 import backtester
 import regime
+
+import logging
+logger = logging.getLogger(__name__)
 
 app          = Flask(__name__)
 _cache       = {}
@@ -42,8 +41,8 @@ DEFAULT_SYMBOLS  = [
 ]
 
 # Paper-trade mode: only these coins on 4H using discovery-validated params.
-PAPER_SYMBOLS   = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "DOGEUSDT"]
-PAPER_INTERVALS = ["15m", "1h", "4h"]
+PAPER_SYMBOLS   = ["BTCUSDT", "ETHUSDT", "XRPUSDT"]
+PAPER_INTERVALS = ["1h", "4h"]
 
 # Three-tier scanning: 15m (scalp), 1h (day trade — MACD primary), 4h (swing).
 SCAN_INTERVALS   = ["15m", "1h", "4h"]
@@ -70,6 +69,361 @@ _campaigns: dict = {}
 _camp_lock = threading.Lock()
 
 
+# ── Risk Engine ───────────────────────────────────────────────────────────────
+import numpy as _np
+
+_risk_state = {
+    "daily_pnl_pct":      0.0,   # running daily P&L as fraction (not %)
+    "peak_equity_pct":    0.0,   # high-water mark
+    "current_equity_pct": 0.0,   # cumulative P&L fraction
+    "daily_reset_date":   None,  # date string of last reset (UTC)
+    "halt_until":         None,  # ISO timestamp — trading halted until
+    "trades_today":       0,
+}
+_risk_lock = threading.Lock()
+
+RISK_PER_TRADE_PCT  = 0.01   # 1% of account per trade
+DAILY_LOSS_HALT_PCT = 0.05   # halt if daily loss exceeds 5%
+DRAWDOWN_REDUCE_PCT = 0.15   # reduce size if drawdown > 15%
+FEE_SLIPPAGE_PCT    = 0.001  # 0.1% fee + slippage per side (each way)
+
+
+def _reset_daily_risk() -> None:
+    """Reset daily P&L counter at start of each new UTC day."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    with _risk_lock:
+        if _risk_state["daily_reset_date"] != today:
+            _risk_state["daily_pnl_pct"]  = 0.0
+            _risk_state["trades_today"]   = 0
+            _risk_state["daily_reset_date"] = today
+            # Clear intra-day halt on new day
+            _risk_state["halt_until"] = None
+
+
+def _risk_gate_open() -> bool:
+    """
+    Returns True when trading is permitted.
+    Blocks on: (a) daily loss ≥ 5%, (b) active halt timer.
+    """
+    _reset_daily_risk()
+    with _risk_lock:
+        if _risk_state["halt_until"]:
+            try:
+                halt_dt = datetime.fromisoformat(_risk_state["halt_until"])
+                if datetime.now(timezone.utc) < halt_dt:
+                    return False
+                _risk_state["halt_until"] = None
+            except Exception:
+                _risk_state["halt_until"] = None
+        if _risk_state["daily_pnl_pct"] <= -DAILY_LOSS_HALT_PCT:
+            return False
+    return True
+
+
+def _record_trade_pnl(roi_pct: float) -> None:
+    """Update risk state after a trade closes (roi_pct is %, e.g. 2.5 = +2.5%)."""
+    from datetime import timedelta
+    frac = roi_pct / 100.0
+    with _risk_lock:
+        _risk_state["daily_pnl_pct"]      += frac
+        _risk_state["current_equity_pct"] += frac
+        _risk_state["trades_today"]       += 1
+        if _risk_state["current_equity_pct"] > _risk_state["peak_equity_pct"]:
+            _risk_state["peak_equity_pct"] = _risk_state["current_equity_pct"]
+        # Trigger halt if daily loss limit breached
+        if _risk_state["daily_pnl_pct"] <= -DAILY_LOSS_HALT_PCT:
+            _risk_state["halt_until"] = (
+                datetime.now(timezone.utc) + timedelta(hours=24)
+            ).isoformat()
+
+
+def _position_size_factor() -> float:
+    """
+    Returns a multiplier (0.25 – 1.0) applied to position sizing.
+    Scales down to 0.50× if drawdown > 10%, 0.25× if > 15%.
+    """
+    with _risk_lock:
+        peak = _risk_state["peak_equity_pct"]
+        cur  = _risk_state["current_equity_pct"]
+    if peak <= 0:
+        return 1.0
+    dd = (peak - cur) / (1.0 + abs(peak)) if peak != 0 else 0
+    if dd >= DRAWDOWN_REDUCE_PCT:
+        return 0.25
+    elif dd >= 0.10:
+        return 0.50
+    return 1.0
+
+
+def _rr_after_fees(entry: float, tp: float, sl: float, direction: str) -> float:
+    """
+    Net R:R after 0.1% entry + 0.1% exit fees and estimated slippage.
+    Returns 0.0 if risk is zero or negative.
+    """
+    fee = FEE_SLIPPAGE_PCT
+    if direction == "LONG":
+        eff_entry  = entry * (1.0 + fee)
+        eff_tp     = tp    * (1.0 - fee)
+        eff_sl     = sl    * (1.0 + fee)
+        reward     = eff_tp - eff_entry
+        risk       = eff_entry - eff_sl
+    else:
+        eff_entry  = entry * (1.0 - fee)
+        eff_tp     = tp    * (1.0 + fee)
+        eff_sl     = sl    * (1.0 - fee)
+        reward     = eff_entry - eff_tp
+        risk       = eff_sl   - eff_entry
+    if risk <= 0:
+        return 0.0
+    return round(reward / risk, 3)
+
+
+# ── Mean Reversion Signal (for RANGING regime) ────────────────────────────────
+def _mean_reversion_signal(sym: str, interval: str, data: dict) -> dict | None:
+    """
+    Bollinger Bands (20, 2σ) + RSI strategy for RANGING markets.
+      LONG : price ≤ lower band AND RSI < 30  → exit at midband
+      SHORT: price ≥ upper band AND RSI > 70  → exit at midband
+    Min R:R 1.5 after fees required.
+    """
+    try:
+        candles = data.get("chart", {}).get("candles", [])
+        if len(candles) < 25:
+            return None
+
+        closes = _np.array([c["close"] for c in candles], dtype=float)
+        highs  = _np.array([c["high"]  for c in candles], dtype=float)
+        lows   = _np.array([c["low"]   for c in candles], dtype=float)
+        cur    = float(closes[-1])
+
+        # Bollinger Bands (20-period, 2 std)
+        bb_period = 20
+        bb_slice  = closes[-bb_period:]
+        mid       = float(_np.mean(bb_slice))
+        std       = float(_np.std( bb_slice))
+        upper_bb  = mid + 2.0 * std
+        lower_bb  = mid - 2.0 * std
+
+        # RSI — prefer value from analysis data, else compute from candles
+        rsi_raw = data.get("rsi", {})
+        if isinstance(rsi_raw, dict):
+            rsi_val = rsi_raw.get("value")
+        else:
+            rsi_val = rsi_raw if isinstance(rsi_raw, (int, float)) else None
+        if rsi_val is None:
+            deltas = _np.diff(closes[-15:])
+            gains  = _np.where(deltas > 0, deltas, 0.0)
+            losses = _np.where(deltas < 0, -deltas, 0.0)
+            avg_g  = float(_np.mean(gains[-14:]))  if len(gains)  >= 14 else float(_np.mean(gains))
+            avg_l  = float(_np.mean(losses[-14:])) if len(losses) >= 14 else float(_np.mean(losses))
+            rsi_val = 100.0 - 100.0 / (1.0 + avg_g / avg_l) if avg_l > 0 else 50.0
+
+        # LONG: price at or below lower BB, RSI oversold
+        if cur <= lower_bb * 1.005 and rsi_val < 30:
+            sl = float(_np.min(lows[-5:])) * 0.9985
+            tp = mid
+            net_rr = _rr_after_fees(cur, tp, sl, "LONG")
+            if net_rr < 1.5 or (cur - sl) <= 0:
+                return None
+            return {
+                "direction":        "LONG",
+                "entry":            round(cur, 8),
+                "target":           round(tp, 8),
+                "stop":             round(sl, 8),
+                "score":            6.5,
+                "signal_type":      "MEAN_REVERSION",
+                "reason":           f"BB lower touch RSI={rsi_val:.0f} → midband exit",
+                "current_price":    cur,
+                "target_basis":     "BB midband",
+                "factors_snapshot": {"bb_lower": round(lower_bb, 8), "rsi": round(rsi_val, 1), "net_rr": net_rr},
+            }
+
+        # SHORT: price at or above upper BB, RSI overbought
+        if cur >= upper_bb * 0.9950 and rsi_val > 70:
+            sl = float(_np.max(highs[-5:])) * 1.0015
+            tp = mid
+            net_rr = _rr_after_fees(cur, tp, sl, "SHORT")
+            if net_rr < 1.5 or (sl - cur) <= 0:
+                return None
+            return {
+                "direction":        "SHORT",
+                "entry":            round(cur, 8),
+                "target":           round(tp, 8),
+                "stop":             round(sl, 8),
+                "score":            6.5,
+                "signal_type":      "MEAN_REVERSION",
+                "reason":           f"BB upper touch RSI={rsi_val:.0f} → midband exit",
+                "current_price":    cur,
+                "target_basis":     "BB midband",
+                "factors_snapshot": {"bb_upper": round(upper_bb, 8), "rsi": round(rsi_val, 1), "net_rr": net_rr},
+            }
+    except Exception:
+        pass
+    return None
+
+
+# ── Volatility Squeeze Entry ──────────────────────────────────────────────────
+def _squeeze_signal(sym: str, interval: str, data: dict) -> dict | None:
+    """
+    Detects Bollinger Band squeeze followed by volume spike + breakout.
+    Squeeze = current BB width < 0.5× its 20-bar rolling average.
+    Breakout = close outside the band on ≥ 1.5× average volume.
+    Enters in direction of the breakout with a 2R target.
+    """
+    try:
+        candles = data.get("chart", {}).get("candles", [])
+        if len(candles) < 45:
+            return None
+
+        closes  = _np.array([c["close"]          for c in candles], dtype=float)
+        highs   = _np.array([c["high"]            for c in candles], dtype=float)
+        lows    = _np.array([c["low"]             for c in candles], dtype=float)
+        volumes = _np.array([c.get("volume", 0.0) for c in candles], dtype=float)
+        cur     = float(closes[-1])
+
+        # Build rolling BB width (as % of midpoint) over last 40 bars
+        bb_period = 20
+        widths = []
+        for i in range(bb_period, len(closes)):
+            chunk = closes[i - bb_period:i]
+            m = float(_np.mean(chunk))
+            w = float(_np.std(chunk)) / m if m > 0 else 0.0
+            widths.append(w)
+        if len(widths) < 20:
+            return None
+
+        avg_width = float(_np.mean(widths[-20:]))
+        cur_width = widths[-1]
+        if cur_width >= avg_width * 0.5:   # not in a squeeze
+            return None
+
+        # Volume must be elevated on the breakout bar
+        avg_vol = float(_np.mean(volumes[-20:]))
+        cur_vol = float(volumes[-1])
+        if avg_vol <= 0 or cur_vol < avg_vol * 1.5:
+            return None
+
+        # Current BB bands
+        bb_slice = closes[-bb_period:]
+        mid      = float(_np.mean(bb_slice))
+        std      = float(_np.std( bb_slice))
+        upper_bb = mid + 2.0 * std
+        lower_bb = mid - 2.0 * std
+        vol_ratio = round(cur_vol / avg_vol, 2) if avg_vol > 0 else 0
+
+        if cur > upper_bb:
+            sl     = lower_bb
+            risk   = cur - sl
+            if risk <= 0:
+                return None
+            tp     = cur + risk * 2.0
+            net_rr = _rr_after_fees(cur, tp, sl, "LONG")
+            if net_rr < 1.8:
+                return None
+            return {
+                "direction":        "LONG",
+                "entry":            round(cur, 8),
+                "target":           round(tp, 8),
+                "stop":             round(sl, 8),
+                "score":            7.0,
+                "signal_type":      "VOL_SQUEEZE",
+                "reason":           f"BB squeeze breakout UP vol={vol_ratio}×avg",
+                "current_price":    cur,
+                "target_basis":     "2R squeeze target",
+                "factors_snapshot": {"bb_width": round(cur_width, 6), "vol_ratio": vol_ratio, "net_rr": net_rr},
+            }
+
+        if cur < lower_bb:
+            sl     = upper_bb
+            risk   = sl - cur
+            if risk <= 0:
+                return None
+            tp     = cur - risk * 2.0
+            net_rr = _rr_after_fees(cur, tp, sl, "SHORT")
+            if net_rr < 1.8:
+                return None
+            return {
+                "direction":        "SHORT",
+                "entry":            round(cur, 8),
+                "target":           round(tp, 8),
+                "stop":             round(sl, 8),
+                "score":            7.0,
+                "signal_type":      "VOL_SQUEEZE",
+                "reason":           f"BB squeeze breakout DOWN vol={vol_ratio}×avg",
+                "current_price":    cur,
+                "target_basis":     "2R squeeze target",
+                "factors_snapshot": {"bb_width": round(cur_width, 6), "vol_ratio": vol_ratio, "net_rr": net_rr},
+            }
+    except Exception:
+        pass
+    return None
+
+
+# ── Per-Config Capital Auto-Weighting ─────────────────────────────────────────
+_config_weights: dict = {}       # {(sym, interval): weight_multiplier}
+_config_weights_lock = threading.Lock()
+
+
+def _update_config_weights() -> None:
+    """
+    Groups closed trades by (symbol, interval). Calculates win rate and profit
+    factor per pair, then assigns a capital-weight multiplier:
+      pf ≥ 2.0 and wr ≥ 60%  → 1.5× (scale up)
+      pf < 1.0 or wr < 35%   → 0.25× (scale down)
+      otherwise               → 1.0× (neutral)
+    Requires ≥ 5 closed trades to change the weight of any config.
+    Results are stored in _config_weights and logged to scanner_status.
+    """
+    try:
+        from collections import defaultdict
+        trades = learning.get_trades()
+        closed = [t for t in trades if t.get("status") in ("win", "loss")]
+        if not closed:
+            return
+
+        groups: dict = defaultdict(list)
+        for t in closed:
+            key = (t.get("symbol", ""), t.get("interval", ""))
+            groups[key].append(t)
+
+        new_weights: dict = {}
+        for (sym, iv), group in groups.items():
+            if len(group) < 5:
+                continue
+            wins       = [t for t in group if t.get("status") == "win"]
+            losses_lst = [t for t in group if t.get("status") == "loss"]
+            wr         = len(wins) / len(group)
+            gross_p    = sum(abs(t.get("roi_pct") or 0) for t in wins)
+            gross_l    = sum(abs(t.get("roi_pct") or 0) for t in losses_lst)
+            pf         = (gross_p / gross_l) if gross_l > 0 else (2.5 if gross_p > 0 else 0.0)
+
+            if pf >= 2.0 and wr >= 0.60:
+                w = 1.5
+            elif pf < 1.0 or wr < 0.35:
+                w = 0.25
+            else:
+                w = 1.0
+            new_weights[(sym, iv)] = w
+
+        with _config_weights_lock:
+            _config_weights.update(new_weights)
+
+        # Persist as symbol-level param adjustment so scanner picks it up
+        for (sym, iv), w in new_weights.items():
+            existing = learning.get_symbol_params(sym, iv) or {}
+            existing["capital_weight"] = w
+            learning.save_symbol_params(sym, iv, existing)
+
+    except Exception:
+        pass
+
+
+def _get_config_weight(sym: str, interval: str) -> float:
+    """Return the stored capital-weight multiplier for a (symbol, interval) pair."""
+    with _config_weights_lock:
+        return _config_weights.get((sym, interval), 1.0)
+
+
 # ── Apply walk-forward validated 4H params from discovery checkpoint ──────────
 def _apply_discovery_params() -> None:
     """
@@ -77,21 +431,14 @@ def _apply_discovery_params() -> None:
     into the DB so the scanner picks them up automatically.
     Called once at startup.
     """
-    # RSI ranges: widened to [35, 85] long / [20, 65] short — original [35,70] blocked all
-    # signals during bull trends where RSI sustains above 70. Body-ratio gate handles
-    # conviction filtering; direction-candle gate removed (was checking current candle
-    # instead of the actual BOS candle, blocking valid retest entries).
-    # BTC/1h excluded — zero profitable configs found in discovery campaign
     best = {
         ("BTCUSDT", "4h"): {
             "config":           "Structure + Volume",
             "score_threshold":  6.5,
-            "min_rr":           3.0,
+            "min_rr":           2.0,
             "adx_threshold":    30,
             "body_ratio_min":   0.30,
             "level_touch_min":  1,
-            "rsi_long_min":     35.0, "rsi_long_max": 85.0,
-            "rsi_short_min":    20.0, "rsi_short_max": 65.0,
             "weights": {
                 "bos": 2.0, "sweep": 2.0, "rsi": 0.0, "adx": 0.0,
                 "volume": 2.0, "obv": 1.0, "regime": 1.0,
@@ -101,12 +448,10 @@ def _apply_discovery_params() -> None:
         ("ETHUSDT", "4h"): {
             "config":           "Trend + S/R + RSI",
             "score_threshold":  7.0,
-            "min_rr":           3.0,
+            "min_rr":           2.0,
             "adx_threshold":    30,
             "body_ratio_min":   0.10,
             "level_touch_min":  1,
-            "rsi_long_min":     35.0, "rsi_long_max": 85.0,
-            "rsi_short_min":    20.0, "rsi_short_max": 65.0,
             "weights": {
                 "bos": 2.5, "sweep": 2.0, "rsi": 2.0, "adx": 0.0,
                 "volume": 0.0, "obv": 0.0, "regime": 2.5,
@@ -116,144 +461,53 @@ def _apply_discovery_params() -> None:
         ("XRPUSDT", "4h"): {
             "config":           "Full Precision",
             "score_threshold":  7.0,
-            "min_rr":           3.0,
+            "min_rr":           2.0,
             "adx_threshold":    15,
             "body_ratio_min":   0.10,
             "level_touch_min":  1,
-            "rsi_long_min":     35.0, "rsi_long_max": 85.0,
-            "rsi_short_min":    20.0, "rsi_short_max": 65.0,
             "weights": {
                 "bos": 1.5, "sweep": 1.5, "fib": 1.5, "fvg": 1.5,
                 "volume": 1.0, "regime": 1.0, "liquidity": 1.0,
                 "rsi": 0.0, "adx": 0.0, "obv": 0.0,
             },
         },
-        # DOGEUSDT/4h: Full Confluence — WR=34.3%, PF=1.54, 35 trades
-        ("DOGEUSDT", "4h"): {
-            "config":           "Full Confluence",
-            "score_threshold":  7.5,
-            "min_rr":           3.0,
-            "adx_threshold":    30,
-            "body_ratio_min":   0.10,
-            "level_touch_min":  1,
-            "rsi_long_min":     35.0, "rsi_long_max": 85.0,
-            "rsi_short_min":    20.0, "rsi_short_max": 65.0,
-            "weights": {
-                "bos": 2.0, "sweep": 2.0, "rsi": 1.0, "adx": 1.0,
-                "volume": 1.0, "obv": 1.0, "regime": 2.0,
-                "fvg": 0.0, "fib": 0.0, "liquidity": 0.0,
-            },
-        },
-        # ETHUSDT/1h: Full Confluence — WR=31.6%, PF=1.37, 98 trades
-        ("ETHUSDT", "1h"): {
-            "config":           "Full Confluence",
-            "score_threshold":  7.5,
-            "min_rr":           3.0,
-            "adx_threshold":    15,
-            "body_ratio_min":   0.30,
-            "level_touch_min":  1,
-            "rsi_long_min":     35.0, "rsi_long_max": 85.0,
-            "rsi_short_min":    20.0, "rsi_short_max": 65.0,
-            "weights": {
-                "bos": 2.0, "sweep": 2.0, "rsi": 1.0, "adx": 1.0,
-                "volume": 1.0, "obv": 1.0, "regime": 2.0,
-                "fvg": 0.0, "fib": 0.0, "liquidity": 0.0,
-            },
-        },
-        # XRPUSDT/1h: BOS + FVG — WR=29.9%, PF=1.22, 97 trades
-        ("XRPUSDT", "1h"): {
-            "config":           "BOS + FVG",
-            "score_threshold":  5.5,
-            "min_rr":           3.0,
-            "adx_threshold":    25,
-            "body_ratio_min":   0.20,
-            "level_touch_min":  1,
-            "rsi_long_min":     35.0, "rsi_long_max": 85.0,
-            "rsi_short_min":    20.0, "rsi_short_max": 65.0,
-            "weights": {
-                "bos": 2.5, "fvg": 2.5, "sweep": 1.0,
-                "rsi": 0.0, "adx": 0.0, "volume": 0.0, "obv": 0.0,
-                "regime": 0.0, "fib": 0.0, "liquidity": 0.0,
-            },
-        },
-        # DOGEUSDT/1h: Trend + Structure + RSI — WR=33.3%, PF=1.58, 48 trades
-        ("DOGEUSDT", "1h"): {
-            "config":           "Trend + Structure + RSI",
-            "score_threshold":  6.5,
-            "min_rr":           3.0,
-            "adx_threshold":    30,
-            "body_ratio_min":   0.20,
-            "level_touch_min":  1,
-            "rsi_long_min":     35.0, "rsi_long_max": 85.0,
-            "rsi_short_min":    20.0, "rsi_short_max": 65.0,
-            "weights": {
-                "bos": 2.0, "sweep": 1.0, "rsi": 2.0, "regime": 2.0,
-                "adx": 0.0, "volume": 0.0, "obv": 0.0,
-                "fvg": 0.0, "fib": 0.0, "liquidity": 0.0,
-            },
-        },
-        # ── 15m configs: derived from 4h equivalents (score -0.5, ADX -5) ────────
-        # BTCUSDT/15m: Structure + Volume (4h: score=6.5→6.0, adx=30→25)
-        ("BTCUSDT", "15m"): {
+        ("BTCUSDT", "1h"): {
             "config":           "Structure + Volume",
-            "score_threshold":  6.0,
-            "min_rr":           3.0,
-            "adx_threshold":    25,
-            "body_ratio_min":   0.30,
-            "level_touch_min":  1,
-            "rsi_long_min":     35.0, "rsi_long_max": 85.0,
-            "rsi_short_min":    20.0, "rsi_short_max": 65.0,
-            "weights": {
-                "bos": 2.0, "sweep": 2.0, "rsi": 0.0, "adx": 0.0,
-                "volume": 2.0, "obv": 1.0, "regime": 1.0,
-                "fvg": 0.0, "fib": 0.0, "liquidity": 0.0,
-            },
-        },
-        # ETHUSDT/15m: Structure + Volume — WR=30.9%, PF=1.22, 110 trades (15m checkpoint)
-        ("ETHUSDT", "15m"): {
-            "config":           "Structure + Volume",
-            "score_threshold":  7.5,
-            "min_rr":           3.0,
-            "adx_threshold":    30,
-            "body_ratio_min":   0.10,
-            "level_touch_min":  1,
-            "rsi_long_min":     35.0, "rsi_long_max": 85.0,
-            "rsi_short_min":    20.0, "rsi_short_max": 65.0,
-            "weights": {
-                "bos": 2.0, "sweep": 2.0, "volume": 2.0, "obv": 1.0, "regime": 1.0,
-                "rsi": 0.0, "adx": 0.0, "fvg": 0.0, "fib": 0.0, "liquidity": 0.0,
-            },
-        },
-        # XRPUSDT/15m: Trend + S/R + RSI — WR=27.5%, PF=1.05, 335 trades (15m checkpoint)
-        ("XRPUSDT", "15m"): {
-            "config":           "Trend + S/R + RSI",
             "score_threshold":  7.0,
-            "min_rr":           3.0,
-            "adx_threshold":    15,
-            "body_ratio_min":   0.20,
+            "min_rr":           2.0,
+            "adx_threshold":    28,
+            "body_ratio_min":   0.30,
             "level_touch_min":  1,
-            "rsi_long_min":     35.0, "rsi_long_max": 85.0,
-            "rsi_short_min":    20.0, "rsi_short_max": 65.0,
             "weights": {
-                "bos": 2.5, "sweep": 2.0, "rsi": 2.0, "regime": 2.5,
-                "adx": 0.0, "volume": 0.0, "obv": 0.0,
+                "bos": 2.0, "sweep": 2.0, "rsi": 0.5, "adx": 0.0,
+                "volume": 2.0, "obv": 1.0, "regime": 1.5,
                 "fvg": 0.0, "fib": 0.0, "liquidity": 0.0,
             },
         },
-        # DOGEUSDT/15m: Trend + Structure + RSI — WR=26.4%, PF=1.22, 220 trades (15m checkpoint)
-        ("DOGEUSDT", "15m"): {
-            "config":           "Trend + Structure + RSI",
-            "score_threshold":  5.5,
-            "min_rr":           3.0,
-            "adx_threshold":    20,
-            "body_ratio_min":   0.30,
+        ("ETHUSDT", "1h"): {
+            "config":           "Trend + S/R + RSI",
+            "score_threshold":  7.5,
+            "min_rr":           2.0,
+            "adx_threshold":    28,
+            "body_ratio_min":   0.15,
             "level_touch_min":  1,
-            "rsi_long_min":     35.0, "rsi_long_max": 85.0,
-            "rsi_short_min":    20.0, "rsi_short_max": 65.0,
             "weights": {
-                "bos": 2.0, "sweep": 1.0, "rsi": 2.0, "regime": 2.0,
-                "adx": 0.0, "volume": 0.0, "obv": 0.0,
-                "fvg": 0.0, "fib": 0.0, "liquidity": 0.0,
+                "bos": 2.5, "sweep": 1.5, "rsi": 2.0, "adx": 0.0,
+                "volume": 0.5, "obv": 0.0, "regime": 2.5,
+                "fvg": 0.5, "fib": 0.0, "liquidity": 0.0,
+            },
+        },
+        ("XRPUSDT", "1h"): {
+            "config":           "Full Precision",
+            "score_threshold":  7.5,
+            "min_rr":           2.0,
+            "adx_threshold":    15,
+            "body_ratio_min":   0.15,
+            "level_touch_min":  1,
+            "weights": {
+                "bos": 1.5, "sweep": 1.5, "fib": 1.5, "fvg": 1.5,
+                "volume": 1.0, "regime": 1.5, "liquidity": 1.0,
+                "rsi": 0.5, "adx": 0.0, "obv": 0.0,
             },
         },
     }
@@ -292,21 +546,18 @@ def _bias_agrees(signal_dir: str, htf_data: dict) -> bool:
     Swing (4h) signals filtered by 1d context.
 
     Agreement = HTF price above 200 EMA (for LONG) or below (for SHORT),
-                OR a confirmed BOS on the HTF in the same direction,
-                OR the HTF is already in a matching trend structure (HH/HL or LH/LL).
+                OR a confirmed BOS on the HTF in the same direction.
     """
     regime    = htf_data.get("regime", {})
     structure = htf_data.get("structure", {})
     above_200 = regime.get("above_200", False)
     bull_bos  = structure.get("bullish_bos", False) if structure else False
     bear_bos  = structure.get("bearish_bos", False) if structure else False
-    hh_hl     = structure.get("hh_hl", False)       if structure else False
-    lh_ll     = structure.get("lh_ll", False)       if structure else False
 
     if signal_dir == "LONG":
-        return above_200 or bull_bos or hh_hl
+        return above_200 or bull_bos
     else:  # SHORT
-        return (not above_200) or bear_bos or lh_ll
+        return (not above_200) or bear_bos
 
 
 # ── Background scanner ────────────────────────────────────────────────────────
@@ -374,25 +625,19 @@ def _resolve_open_trades(sym: str, interval: str) -> int:
     return resolved
 
 
-import math
-
-def _seconds_until_next_candle_close(interval_minutes: int = 15, buffer_seconds: int = 3) -> float:
-    """Return seconds to sleep until the next candle of given interval closes, plus a small buffer."""
-    now = time.time()
-    interval_secs = interval_minutes * 60
-    seconds_into_interval = now % interval_secs
-    return (interval_secs - seconds_into_interval) + buffer_seconds
-
-
 def _background_scanner() -> None:
     """
     Runs forever in a daemon thread.
-    Every 5 minutes scans ALL known symbols × Day (15m) + Swing (4h) tiers.
-    Each signal is filtered by higher-TF bias before logging:
-      - 15m LONG  → only logged if 1h is bullish (above 200 EMA or bullish BOS)
-      - 15m SHORT → only logged if 1h is bearish
-      - 4h  LONG  → only logged if 1d is bullish
-      - 4h  SHORT → only logged if 1d is bearish
+    Every 5 minutes scans ALL paper symbols × PAPER_INTERVALS.
+
+    Upgrade (v2) — per scan cycle:
+      • Risk gate: skip all signals if daily loss ≥ 5% or drawdown halt active
+      • Market regime: TRENDING → BOS strategies only
+                        RANGING   → mean-reversion (BB+RSI) + vol-squeeze
+                        UNCERTAIN → trend signals only (higher score bar)
+      • Fee-adjusted R:R: every signal must clear min_rr AFTER 0.1% fees/slippage
+      • Per-config capital weighting updated after each full sweep
+      • P&L recorded per closed trade to drive drawdown calculations
     """
     _scanner_status["running"] = True
     time.sleep(10)          # short startup pause, then begin immediately
@@ -401,9 +646,9 @@ def _background_scanner() -> None:
         syms = PAPER_SYMBOLS   # paper-trade: locked to discovery-validated coins only
         scan_signals = 0
         scan_closes  = 0
-        num_configs  = len(syms) * len(PAPER_INTERVALS)
-        cycle_ts     = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-        print(f"[SCAN CYCLE] {cycle_ts} UTC — scanning {num_configs} configs", flush=True)
+
+        # ── Daily risk reset ──────────────────────────────────────────────────
+        _reset_daily_risk()
 
         for sym in syms:
             # Fetch bias TFs: 1h for confirmation candle check, 1d for 4H bias
@@ -415,137 +660,201 @@ def _background_scanner() -> None:
                     # Cache the bias data too
                     with _lock:
                         _cache[f"{sym}_{bias_tf}"] = (bias_data, time.time())
-                except Exception as e:
-                    print(f"[ERROR] {sym} {bias_tf} bias fetch: {e}", flush=True)
+                except Exception:
                     bias_cache[bias_tf] = {}
                 time.sleep(1)
 
             for interval in PAPER_INTERVALS:
                 try:
+                    # ── Risk gate: skip new entries if limits breached ────────
+                    if not _risk_gate_open():
+                        # Still resolve open trades even when halted
+                        scan_closes += _resolve_open_trades(sym, interval)
+                        continue
+
                     # Load per-symbol discovery params (weights + thresholds)
                     sym_p = learning.get_symbol_params(sym, interval) or {}
                     sym_weights = sym_p.get("weights") or None
-                    data = full_analysis(
-                        sym, interval,
-                        weights=sym_weights,
-                        body_ratio_min=sym_p.get("body_ratio_min", 0.30),
-                        level_touch_min=sym_p.get("level_touch_min", 1),
-                    )
+                    data = full_analysis(sym, interval, weights=sym_weights)
                     now  = time.time()
                     data["cache_age"] = 0
                     with _lock:
                         _cache[f"{sym}_{interval}"] = (data, now)
 
                     # ── Detect per-symbol market regime from already-computed data ──
+                    regime_label = "UNCERTAIN"
                     try:
                         detected_regime = regime.detect_regime_from_data(data)
+                        regime_label    = detected_regime.get("label", "UNCERTAIN")
                         learning.save_regime(sym, detected_regime)
-                        # sym_p already loaded above (has discovery params)
                         base_p = {
                             "score_threshold": sym_p.get("score_threshold", learning.get_threshold()),
-                            "min_rr":          sym_p.get("min_rr",          3.0),
+                            "min_rr":          sym_p.get("min_rr",          2.0),
                             "adx_threshold":   sym_p.get("adx_threshold",   25),
                             "body_ratio_min":  sym_p.get("body_ratio_min",  0.30),
                         }
                         regime_p = regime.get_regime_params(detected_regime, base_p)
-                    except Exception as e:
-                        print(f"[ERROR] {sym} {interval} regime detect: {e}", flush=True)
+                    except Exception:
                         regime_p = {}
 
-                    # Log signal only if all filters pass
-                    raw_sig = data.get("signal")
-                    htf    = "1h" if interval == "15m" else "1d"
-                    htf_d  = bias_cache.get(htf, {})
-                    adx_val = data.get("adx", {}).get("value", 0)
+                    htf        = "1h" if interval == "15m" else "1d"
+                    htf_d      = bias_cache.get(htf, {})
+                    is_day     = interval in ("15m", "30m", "1h")
+                    session_ok = (not is_day) or _in_active_session()
 
-                    # Gate 1: BOS signal present?
-                    if not raw_sig:
-                        print(f"[SCAN] {sym} {interval}: no BOS → BLOCKED", flush=True)
-                        sig = None
-                    else:
-                        sig = raw_sig
-                        # Gate 2: regime-adjusted score filter
+                    # ── Build candidate signal list based on regime ───────────
+                    # regime_label is TRENDING, RANGING, or UNCERTAIN
+                    candidate_sigs = []
+
+                    # (A) BOS trend-following signal — always check but only keep
+                    #     in TRENDING or UNCERTAIN (with higher bar).
+                    bos_sig = data.get("signal")
+                    if bos_sig:
                         regime_threshold = regime_p.get("score_threshold")
-                        if regime_threshold and sig.get("score", 0) < regime_threshold:
-                            print(
-                                f"[SCAN] {sym} {interval}: signal={sig['direction']} "
-                                f"score={sig.get('score', 0):.1f} < regime_threshold={regime_threshold:.1f} → BLOCKED",
-                                flush=True,
-                            )
-                            sig = None
+                        if regime_threshold and bos_sig.get("score", 0) < regime_threshold:
+                            bos_sig = None
+                    if bos_sig and regime_label in ("TRENDING", "UNCERTAIN"):
+                        candidate_sigs.append(bos_sig)
 
-                    # Gate 3: higher-TF bias
-                    if sig and not _bias_agrees(sig["direction"], htf_d):
-                        print(
-                            f"[SCAN] {sym} {interval}: signal={sig['direction']} "
-                            f"score={sig.get('score', 0):.1f} → HTF BIAS REJECT ({htf} disagrees)",
-                            flush=True,
+                    # (B) Mean-reversion signal — only in RANGING regime
+                    if regime_label == "RANGING":
+                        mr_sig = _mean_reversion_signal(sym, interval, data)
+                        if mr_sig:
+                            candidate_sigs.append(mr_sig)
+
+                    # (C) Volatility squeeze — all regimes (momentum breakout)
+                    sq_sig = _squeeze_signal(sym, interval, data)
+                    if sq_sig:
+                        candidate_sigs.append(sq_sig)
+
+                    # ── Process each candidate signal ─────────────────────────
+                    for sig in candidate_sigs:
+                        if not sig or not session_ok:
+                            continue
+
+                        sig_type = sig.get("signal_type", "")
+                        # Mean-reversion signals skip the HTF bias filter
+                        # (they are counter-trend by design)
+                        if sig_type not in ("MEAN_REVERSION",) and not _bias_agrees(sig["direction"], htf_d):
+                            continue
+
+                        # ── Signal quality gates (Fixes 2, 4, 5, 6) ──────────
+                        factors        = sig.get("factors_snapshot", {})
+                        score          = sig.get("score", 0)
+                        base_threshold = regime_p.get(
+                            "score_threshold",
+                            sym_p.get("score_threshold", learning.get_threshold()),
                         )
-                        sig = None
 
-                    # MACD fallback disabled — using per-coin discovery-validated BOS strategies only
+                        # Fix 2: Regime hard-block for BOS trend signals ───────
+                        if sig_type not in ("MEAN_REVERSION", "VOL_SQUEEZE", "MACD_EMA_VOL"):
+                            if sig["direction"] == "LONG" and not factors.get("regime"):
+                                logger.info(
+                                    f"[REGIME BLOCK] {sym} {interval}: LONG rejected — regime=False"
+                                )
+                                continue
+                            if sig["direction"] == "SHORT" and not factors.get("regime"):
+                                logger.info(
+                                    f"[REGIME BLOCK] {sym} {interval}: SHORT rejected — regime=False"
+                                )
+                                continue
 
-                    if sig:
-                        # ── Medium: 1H confirmation candle for 4H swing signals ──
-                        # For 4H entries, the most recent 1H candle must confirm
-                        # direction with a real body (not a doji or opposite colour).
-                        if interval == "4h":
-                            h1_candles = bias_cache.get("1h", {}).get("chart", {}).get("candles", [])
-                            if h1_candles:
-                                h1 = h1_candles[-1]
-                                h1_rng   = h1["high"] - h1["low"]
-                                h1_body  = abs(h1["close"] - h1["open"])
-                                h1_ratio = h1_body / h1_rng if h1_rng > 0 else 0
-                                h1_bull  = h1["close"] > h1["open"]
-                                h1_bear  = h1["close"] < h1["open"]
-                                if sig["direction"] == "LONG"  and not (h1_bull and h1_ratio >= 0.15):
-                                    print(
-                                        f"[SCAN] {sym} {interval}: signal=LONG score={sig.get('score', 0):.1f} "
-                                        f"→ 1H CANDLE REJECT (bull={h1_bull}, body={h1_ratio:.2f})",
-                                        flush=True,
-                                    )
-                                    continue  # No 1H bullish confirmation
-                                if sig["direction"] == "SHORT" and not (h1_bear and h1_ratio >= 0.15):
-                                    print(
-                                        f"[SCAN] {sym} {interval}: signal=SHORT score={sig.get('score', 0):.1f} "
-                                        f"→ 1H CANDLE REJECT (bear={h1_bear}, body={h1_ratio:.2f})",
-                                        flush=True,
-                                    )
-                                    continue  # No 1H bearish confirmation
-                        if interval == "1h":
-                            h1_candles = bias_cache.get("1h", {}).get("chart", {}).get("candles", [])
-                            if h1_candles:
-                                h1 = h1_candles[-1]
-                                h1_rng   = h1["high"] - h1["low"]
-                                h1_body  = abs(h1["close"] - h1["open"])
-                                h1_ratio = h1_body / h1_rng if h1_rng > 0 else 0
-                                h1_bull  = h1["close"] > h1["open"]
-                                h1_bear  = h1["close"] < h1["open"]
-                                if sig["direction"] == "LONG"  and not (h1_bull and h1_ratio >= 0.15):
-                                    print(
-                                        f"[SCAN] {sym} {interval}: signal=LONG score={sig.get('score', 0):.1f} "
-                                        f"→ 1H CANDLE REJECT (bull={h1_bull}, body={h1_ratio:.2f})",
-                                        flush=True,
-                                    )
-                                    continue  # Weak/doji candle on 1H LONG
-                                if sig["direction"] == "SHORT" and not (h1_bear and h1_ratio >= 0.15):
-                                    print(
-                                        f"[SCAN] {sym} {interval}: signal=SHORT score={sig.get('score', 0):.1f} "
-                                        f"→ 1H CANDLE REJECT (bear={h1_bear}, body={h1_ratio:.2f})",
-                                        flush=True,
-                                    )
-                                    continue  # Weak/doji candle on 1H SHORT
+                        # Fix 5: OBV=False raises effective threshold by 1.0 for LONGs ──
+                        effective_threshold = base_threshold
+                        if sig["direction"] == "LONG" and not factors.get("obv"):
+                            effective_threshold += 1.0
+                            logger.debug(
+                                f"[OBV PENALTY] {sym} {interval}: OBV=False on LONG, "
+                                f"threshold raised to {effective_threshold}"
+                            )
+                        if score < effective_threshold:
+                            logger.info(
+                                f"[THRESHOLD BLOCK] {sym} {interval}: score={score:.1f} "
+                                f"< effective_threshold={effective_threshold:.1f}"
+                            )
+                            continue
 
-                        trade_id  = f"{sym}_{interval}_{sig['direction']}_{int(time.time())}"
-                        cur_px    = sig.get("current_price", sig["entry"])
-                        vwap_val  = data.get("vwap") or 0
-                        # Market order: execute immediately at current price
+                        # Fix 4: Require smart-money factor for sub-threshold signals ──
+                        smart_money_confirmed = (
+                            factors.get("fvg") or factors.get("fib") or factors.get("liquidity")
+                        )
+                        if score < (base_threshold + 1.0) and not smart_money_confirmed:
+                            logger.info(
+                                f"[SMART-MONEY BLOCK] {sym} {interval}: score={score:.1f} "
+                                f"< {base_threshold + 1.0:.1f}, no FVG/FIB/Liquidity — skipping"
+                            )
+                            continue
+
+                        # Fix 6: Skip same-symbol same-direction duplicate ─────
+                        _existing = [
+                            t for t in learning.get_open_trades(sym)
+                            if t["direction"] == sig["direction"]
+                        ]
+                        if _existing:
+                            logger.info(
+                                f"[DUPE BLOCK] {sym} {interval}: {sig['direction']} already "
+                                f"open on {_existing[0].get('interval', '?')} — skipping"
+                            )
+                            continue
+
+                        # ── Fee-adjusted R:R gate ─────────────────────────────
+                        net_rr = _rr_after_fees(
+                            sig["entry"], sig["target"], sig["stop"], sig["direction"]
+                        )
+                        min_rr_required = regime_p.get("min_rr", sym_p.get("min_rr", 1.8))
+                        if net_rr < min_rr_required:
+                            continue   # Skip: spread/fees eat the edge
+
+                        # ── 1H confirmation candle for 4H / 1H swing signals ──
+                        # Mean-reversion and squeeze entries skip this filter
+                        if sig_type not in ("MEAN_REVERSION", "VOL_SQUEEZE"):
+                            if interval == "4h":
+                                h1_candles = bias_cache.get("1h", {}).get("chart", {}).get("candles", [])
+                                if h1_candles:
+                                    h1 = h1_candles[-1]
+                                    h1_rng   = h1["high"] - h1["low"]
+                                    h1_body  = abs(h1["close"] - h1["open"])
+                                    h1_ratio = h1_body / h1_rng if h1_rng > 0 else 0
+                                    h1_bull  = h1["close"] > h1["open"]
+                                    h1_bear  = h1["close"] < h1["open"]
+                                    if sig["direction"] == "LONG"  and not (h1_bull and h1_ratio >= 0.40):
+                                        continue
+                                    if sig["direction"] == "SHORT" and not (h1_bear and h1_ratio >= 0.40):
+                                        continue
+                            if interval == "1h":
+                                h1_candles = bias_cache.get("1h", {}).get("chart", {}).get("candles", [])
+                                if h1_candles:
+                                    h1 = h1_candles[-1]
+                                    h1_rng   = h1["high"] - h1["low"]
+                                    h1_body  = abs(h1["close"] - h1["open"])
+                                    h1_ratio = h1_body / h1_rng if h1_rng > 0 else 0
+                                    h1_bull  = h1["close"] > h1["open"]
+                                    h1_bear  = h1["close"] < h1["open"]
+                                    if sig["direction"] == "LONG"  and not (h1_bull and h1_ratio >= 0.35):
+                                        continue
+                                    if sig["direction"] == "SHORT" and not (h1_bear and h1_ratio >= 0.35):
+                                        continue
+
+                        # ── Capital weight: skip if config is in penalty zone ──
+                        cap_w = _get_config_weight(sym, interval)
+                        if cap_w <= 0.25:
+                            # Still log but flag as reduced-size
+                            sig = dict(sig)
+                            sig["reason"] = f"[size={cap_w:.2f}×] " + sig.get("reason", "")
+
+                        trade_id = f"{sym}_{interval}_{sig['direction']}_{int(time.time())}"
+                        cur_px   = sig.get("current_price", sig["entry"])
+                        vwap_val = data.get("vwap") or 0
+                        is_macd  = sig_type == "MACD_EMA_VOL"
+                        # Mean-reversion and squeeze signals are immediate entries
+                        is_immediate = is_macd or sig_type in ("MEAN_REVERSION", "VOL_SQUEEZE")
+
                         trade_data = {
                             "id":               trade_id,
                             "symbol":           sym,
                             "interval":         interval,
                             "direction":        sig["direction"],
-                            "entry":            cur_px,
+                            "entry":            sig["entry"],
                             "current_price":    cur_px,
                             "tp":               sig["target"],
                             "sl":               sig["stop"],
@@ -554,27 +863,15 @@ def _background_scanner() -> None:
                             "reason":           sig.get("reason", ""),
                             "factors_snapshot": sig.get("factors_snapshot", {}),
                             "target_basis":     sig.get("target_basis", ""),
-                            "tp_source":        sig.get("tp_source", "unknown"),
                             "opened_at":        datetime.now(timezone.utc).isoformat(),
-                            "status":           "open",
-                            "adx_value":        adx_val,
+                            "status":           "open" if is_immediate else "pending",
+                            "adx_value":        data.get("adx", {}).get("value", 0),
                             "vwap_side":        ("above" if vwap_val and cur_px > vwap_val
                                                  else "below"),
                         }
                         logged = learning.log_trade(trade_data)
                         if logged:
                             scan_signals += 1
-                            entry_px = cur_px
-                            sl_px    = sig["stop"]
-                            tp_px    = sig["target"]
-                            risk_r   = abs(entry_px - sl_px)
-                            reward_r = abs(tp_px - entry_px)
-                            rr       = reward_r / risk_r if risk_r else 0
-                            print(
-                                f"[TRADE] {sym} {interval} {sig['direction']} @ {entry_px} "
-                                f"| SL={sl_px} | TP={tp_px} | RR={rr:.1f} | score={sig.get('score', 0):.1f}",
-                                flush=True,
-                            )
                             notifications.send_signal_alert({
                                 "symbol":        sym,
                                 "interval":      interval,
@@ -586,14 +883,14 @@ def _background_scanner() -> None:
                                 "reason":        sig.get("reason", ""),
                                 "target_basis":  sig.get("target_basis", ""),
                                 "ai_analysis":   {},
-                                "pending":       False,
+                                "pending":       not is_immediate,
                                 "current_price": cur_px,
                             })
 
-                    # Bar-accurate TP/SL resolution — catches hits between 5-min scans
+                    # ── Bar-accurate TP/SL resolution ─────────────────────────
                     scan_closes += _resolve_open_trades(sym, interval)
 
-                    # Auto-close trades (TP / SL / time / stagnation via spot price)
+                    # ── Auto-close trades; record P&L for risk engine ─────────
                     cur_price = data.get("current_price", 0)
                     if cur_price:
                         closed, partials = learning.auto_close(sym, interval, float(cur_price))
@@ -603,6 +900,11 @@ def _background_scanner() -> None:
                             notifications.send_close_alert(
                                 c, c["status"], c["close_price"], c["roi_pct"]
                             )
+                            # Feed closed P&L into risk engine
+                            try:
+                                _record_trade_pnl(float(c.get("roi_pct") or 0))
+                            except Exception:
+                                pass
                         scan_closes += len(closed)
 
                         # Trailing stop: after 2R, trail SL to structural swing
@@ -613,23 +915,24 @@ def _background_scanner() -> None:
                             sym, interval, float(cur_price), sw_highs, sw_lows
                         )
 
-                except Exception as e:
-                    print(f"[ERROR] {sym} {interval}: {e}", flush=True)
+                except Exception:
+                    pass
                 time.sleep(1)   # respect Binance public API rate limits
 
-        # Update status after each full sweep
+        # ── Update status and auto-weights after each full sweep ──────────────
         now_iso = datetime.now(timezone.utc).isoformat()
         _scanner_status["scans_completed"] += 1
         _scanner_status["last_scan_at"]    = now_iso
         _scanner_status["signals_logged"]  += scan_signals
         _scanner_status["trades_closed"]   += scan_closes
-        print(
-            f"[SCAN CYCLE] complete — {scan_signals} signal(s), {scan_closes} close(s)",
-            flush=True,
-        )
 
-        sleep_secs = _seconds_until_next_candle_close(interval_minutes=15, buffer_seconds=3)
-        time.sleep(sleep_secs)
+        # Rebalance per-config capital weights every sweep
+        try:
+            _update_config_weights()
+        except Exception:
+            pass
+
+        time.sleep(300)         # 5 minutes between full sweeps
 
 
 threading.Thread(target=_background_scanner, daemon=True).start()
@@ -1284,8 +1587,47 @@ def weekly_review():
         return jsonify({"error": str(e)}), 500
 
 
+# ── Risk Engine status route ───────────────────────────────────────────────────
+
+@app.route("/api/risk-status")
+def risk_status():
+    """Return current risk engine state: daily P&L, drawdown, halt status."""
+    _reset_daily_risk()
+    with _risk_lock:
+        state = dict(_risk_state)
+    state["gate_open"]        = _risk_gate_open()
+    state["position_factor"]  = _position_size_factor()
+    state["daily_pnl_pct"]    = round(state["daily_pnl_pct"]    * 100, 3)
+    state["current_equity_pct"] = round(state["current_equity_pct"] * 100, 3)
+    state["peak_equity_pct"]  = round(state["peak_equity_pct"]  * 100, 3)
+    peak  = _risk_state["peak_equity_pct"]
+    cur   = _risk_state["current_equity_pct"]
+    dd    = (peak - cur) / (1.0 + abs(peak)) if peak > 0 else 0.0
+    state["drawdown_pct"]     = round(dd * 100, 3)
+    state["limits"] = {
+        "daily_loss_halt_pct": DAILY_LOSS_HALT_PCT * 100,
+        "drawdown_reduce_pct": DRAWDOWN_REDUCE_PCT * 100,
+        "risk_per_trade_pct":  RISK_PER_TRADE_PCT  * 100,
+        "fee_slippage_pct":    FEE_SLIPPAGE_PCT    * 100,
+    }
+    return jsonify(state)
+
+
+# ── Config weights route ───────────────────────────────────────────────────────
+
+@app.route("/api/config-weights")
+def config_weights():
+    """Return per-symbol/interval capital weight multipliers."""
+    with _config_weights_lock:
+        weights = {f"{s}_{iv}": w for (s, iv), w in _config_weights.items()}
+    return jsonify({
+        "weights":     weights,
+        "description": "1.5× = outperforming (scale up), 1.0× = neutral, 0.25× = underperforming (scale down)",
+    })
+
+
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5003))
+    port = int(os.environ.get("PORT", 5000))
     print("\n" + "="*50)
     print("  Crypto Analysis Dashboard")
     print(f"  http://localhost:{port}")

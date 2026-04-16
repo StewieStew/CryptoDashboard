@@ -8,6 +8,9 @@ import requests
 import pandas as pd
 import numpy as np
 from datetime import datetime, timezone
+import logging
+
+logger = logging.getLogger(__name__)
 
 try:
     from learning import get_weights, get_threshold, get_stop_multiplier
@@ -942,6 +945,21 @@ def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
     risk_d   = abs(entry_price - inval)
     reward_d = abs(target - entry_price)
 
+    # ── Cap stop loss by timeframe (Fix 8) ───────────────────────────────────
+    _MAX_SL_PCT = {"15m": 0.020, "1h": 0.035, "4h": 0.050}
+    _sl_pct     = risk_d / entry_price if entry_price > 0 else 0
+    _max_sl     = _MAX_SL_PCT.get(interval, 0.05)
+    if bias != "Neutral" and _sl_pct > _max_sl:
+        logger.warning(
+            f"[SL CAP] {interval}: SL distance {_sl_pct:.2%} > max {_max_sl:.2%} — capping"
+        )
+        risk_d = entry_price * _max_sl
+        if bias == "Long":
+            inval = round(entry_price - risk_d, 6)
+        else:
+            inval = round(entry_price + risk_d, 6)
+        reward_d = abs(target - entry_price)
+
     # ── Cap stop loss at 25% of entry price ──────────────────────────────────
     MAX_RISK_PCT = 0.25
     if risk_d > 0 and (risk_d / entry_price) > MAX_RISK_PCT and bias != "Neutral":
@@ -1049,7 +1067,8 @@ def generate_signal(confluence: dict, structure, risk: dict, h4_df,
                     min_rr: float = 3.0,
                     rsi_long_range: tuple = (35.0, 85.0),
                     rsi_short_range: tuple = (20.0, 65.0),
-                    level_touch_min: int = 2) -> dict | None:
+                    level_touch_min: int = 2,
+                    symbol: str = "") -> dict | None:
     """
     Returns a signal dict only when ALL hard gates pass and score >= threshold.
 
@@ -1098,6 +1117,19 @@ def generate_signal(confluence: dict, structure, risk: dict, h4_df,
     if touch_count < level_touch_min:
         return None  # Level not confirmed as key S/R
 
+    # ── Hard gate 4: RSI range filter (Fix 3) ────────────────────────────────
+    # LONG: RSI must be in [rsi_long_min, rsi_long_max) — strict upper bound prevents
+    #       chasing overbought entries. SHORT: strict lower bound filters oversold shorts.
+    rsi_val = snap.get("rsi_value", 50.0)
+    if structure["bullish_bos"]:
+        rsi_lo, rsi_hi = rsi_long_range
+        if not (rsi_lo <= rsi_val < rsi_hi):
+            return None  # RSI outside permitted LONG range
+    elif structure["bearish_bos"]:
+        rsi_lo, rsi_hi = rsi_short_range
+        if not (rsi_lo < rsi_val <= rsi_hi):
+            return None  # RSI outside permitted SHORT range
+
     # ── Hard R:R gate ─────────────────────────────────────────────────────────
     # Historical-range targets with R:R >= 2.0 are analytically grounded and
     # allowed through; all other sources require the full min_rr threshold.
@@ -1107,12 +1139,47 @@ def generate_signal(confluence: dict, structure, risk: dict, h4_df,
     if not _rr_ok:
         return None
 
+    # ── Retest confirmation gate ──────────────────────────────────────────────
+    # Enter only when price has pulled back to the broken level, not at the
+    # moment of the break.  0.8% buffer allows for a minor spike-through retest.
+    current = risk["current"]
     if structure["bullish_bos"]:
-        direction = "LONG"
-        reason    = "Bullish BOS — retest entry at broken resistance (now support)"
+        broken_level = structure.get("last_swing_high")
+        if broken_level and current > broken_level * 1.008:
+            pct = (current - broken_level) / broken_level * 100
+            print(
+                f"[RETEST GATE] {symbol} {interval.upper()} LONG: price {current:.2f} is "
+                f"{pct:.1f}% above broken level {broken_level:.2f} — waiting for retest",
+                flush=True,
+            )
+            return None
     elif structure["bearish_bos"]:
+        broken_level = structure.get("last_swing_low")
+        if broken_level and current < broken_level * 0.992:
+            pct = (broken_level - current) / broken_level * 100
+            print(
+                f"[RETEST GATE] {symbol} {interval.upper()} SHORT: price {current:.2f} is "
+                f"{pct:.1f}% below broken level {broken_level:.2f} — retest window passed",
+                flush=True,
+            )
+            return None
+
+    if structure["bullish_bos"]:
+        broken_level = structure.get("last_swing_high")
+        direction = "LONG"
+        reason    = (
+            f"Bullish BOS — retest confirmed at {broken_level:.2f} (broken resistance now support)"
+            if broken_level else
+            "Bullish BOS — retest entry at broken resistance (now support)"
+        )
+    elif structure["bearish_bos"]:
+        broken_level = structure.get("last_swing_low")
         direction = "SHORT"
-        reason    = "Bearish BOS — retest entry at broken support (now resistance)"
+        reason    = (
+            f"Bearish BOS — retest confirmed at {broken_level:.2f} (broken support now resistance)"
+            if broken_level else
+            "Bearish BOS — retest entry at broken support (now resistance)"
+        )
     else:
         return None
 
@@ -1487,7 +1554,8 @@ def full_analysis(symbol: str, interval: str = "4h", weights: dict | None = None
     # Signal (score >= adaptive threshold + BOS)
     signal = generate_signal(confluence, structure, risk, df, adapt_threshold, interval,
                              body_ratio_min=body_ratio_min, rsi_long_range=rsi_long_range,
-                             rsi_short_range=rsi_short_range, level_touch_min=level_touch_min)
+                             rsi_short_range=rsi_short_range, level_touch_min=level_touch_min,
+                             symbol=symbol)
 
     # Parallel: MACD(5/13)+EMA50+Volume signal (best proven strategy, 1H focus)
     macd_signal = generate_macd_signal(df, interval) if interval in ("1h", "4h") else None
