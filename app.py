@@ -1496,6 +1496,18 @@ def admin_clear_trades():
     return jsonify({"status": "cleared"})
 
 
+@app.route("/api/admin/reset_learning", methods=["POST"])
+def admin_reset_learning():
+    """Reset learning weights and log back to defaults — admin use only."""
+    import learning, json as _json
+    with learning._conn() as db:
+        db.execute("DELETE FROM adaptation_log")
+        db.execute("UPDATE config SET value=? WHERE key='weights'",
+                   (_json.dumps(learning.DEFAULT_WEIGHTS),))
+        db.execute("UPDATE config SET value='7.0' WHERE key='signal_threshold'")
+    return jsonify({"status": "learning reset", "weights": learning.DEFAULT_WEIGHTS})
+
+
 # ── Backtester routes ─────────────────────────────────────────────────────────
 
 @app.route("/api/backtest/run", methods=["POST"])
