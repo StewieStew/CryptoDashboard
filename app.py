@@ -1486,6 +1486,16 @@ def health():
     return jsonify({"status": "ok"})
 
 
+@app.route("/api/admin/clear_trades", methods=["POST"])
+def admin_clear_trades():
+    """Wipe all trades and adaptation log — admin use only."""
+    import learning
+    with learning._conn() as db:
+        db.execute("DELETE FROM trades")
+        db.execute("DELETE FROM adaptation_log")
+    return jsonify({"status": "cleared"})
+
+
 # ── Backtester routes ─────────────────────────────────────────────────────────
 
 @app.route("/api/backtest/run", methods=["POST"])
