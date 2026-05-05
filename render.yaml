@@ -2,7 +2,7 @@ services:
   - type: web
     name: crypto-dashboard
     runtime: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt && mkdir -p /data && [ -f /data/trades.db ] || cp trades.db /data/trades.db
     startCommand: gunicorn app:app --workers 1 --threads 4 --timeout 120 --bind 0.0.0.0:$PORT
     envVars:
       - key: PYTHON_VERSION
@@ -11,6 +11,8 @@ services:
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
+      - key: DB_PATH
+        value: /data/trades.db
     disk:
       name: trade-data
       mountPath: /data

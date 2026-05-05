@@ -9,7 +9,7 @@ import sqlite3
 import json
 import os
 import threading
-from datetime import datetime, timezone
+from datetime import timedelta, datetime, timezone
 from typing import Optional
 import logging
 
@@ -19,7 +19,11 @@ logger = logging.getLogger(__name__)
 # STORAGE PATH
 # ─────────────────────────────────────────────
 _DATA_DIR = "/data"
-DB_PATH   = os.path.join(_DATA_DIR, "trades.db") if os.path.isdir(_DATA_DIR) else "trades.db"
+DB_PATH   = os.environ.get(
+    "DB_PATH",
+    os.path.join(_DATA_DIR, "trades.db") if os.path.isdir(_DATA_DIR)
+    else os.path.expanduser("~/CryptoDashboard/trades.db")
+)
 _lock     = threading.Lock()
 
 # ─────────────────────────────────────────────
@@ -44,7 +48,7 @@ DEFAULT_THRESHOLD = 7.0    # minimum score to fire a signal
 DEFAULT_STOP_MULT = 0.1    # ATR wick buffer on structural stop (was 0.5 main stop)
 ADAPT_WINDOW      = 8      # trades to look back per-factor
 MIN_SAMPLES       = 2      # minimum trades before adapting a factor
-WEIGHT_FLOOR      = 0.30   # minimum factor weight (as fraction of default)
+WEIGHT_FLOOR_ABS  = 1.0    # absolute minimum — no active factor weight can drop below 1.0
 WEIGHT_CEIL       = 1.50   # maximum factor weight (as multiple of default)
 
 
@@ -178,7 +182,7 @@ def _get_tier(interval: str) -> str:
 def _close_internal(db, trade_id: str, close_price: float, status: str) -> None:
     """Close a trade using an existing db connection (caller must hold _lock)."""
     row = db.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
-    if not row or row["status"] != "open":
+    if not row or row["status"] not in ("open", "pending"):
         return
     trade = dict(row)
     if status == "cancelled" or not close_price:
@@ -208,47 +212,77 @@ def log_trade(trade: dict) -> bool:
         db = _conn()
         try:
             existing = db.execute(
-                "SELECT id, direction FROM trades "
-                "WHERE symbol=? AND interval=? AND status='open'",
-                (sym, intv)
-            ).fetchall()
+                "SELECT id FROM trades "
+                "WHERE symbol=? AND interval=? AND direction=? "
+                "AND status IN ('open','pending') LIMIT 1",
+                (sym, intv, dirn)
+            ).fetchone()
 
-            for ex in existing:
-                # Already open on this exact symbol+interval — skip
+            if existing:
+                logger.info(
+                    f"[SKIP] already have open {sym} {intv} {dirn} "
+                    f"(id={existing[0]}) — skipping duplicate"
+                )
                 return False
 
+            # ── Cooldown: skip if same sym+intv+dir closed within last interval ──
+            _INTERVAL_SECS = {
+                "1m":60,"3m":180,"5m":300,"15m":900,"30m":1800,
+                "1h":3600,"2h":7200,"4h":14400,"1d":86400
+            }
+            _cool_secs = _INTERVAL_SECS.get(intv, 900)
+            _last_closed = db.execute(
+                "SELECT closed_at FROM trades "
+                "WHERE symbol=? AND interval=? AND direction=? AND closed_at IS NOT NULL "
+                "ORDER BY closed_at DESC LIMIT 1",
+                (sym, intv, dirn)
+            ).fetchone()
+            if _last_closed:
+                try:
+                    _last_dt = datetime.fromisoformat(_last_closed[0].replace("Z","+00:00"))
+                    _since   = (datetime.now(timezone.utc) - _last_dt).total_seconds()
+                    if _since < _cool_secs:
+                        logger.info(f"[COOLDOWN] {sym} {intv} {dirn} — {_since:.0f}s since last close, need {_cool_secs}s")
+                        return False
+                except Exception:
+                    pass
+
+            # ── BOS dedup: skip if same entry level closed in last 24h ──
             entry_f   = float(trade["entry"])
+            _recent = db.execute(
+                "SELECT entry FROM trades "
+                "WHERE symbol=? AND interval=? AND direction=? AND closed_at IS NOT NULL "
+                "AND closed_at > datetime('now','-24 hours')",
+                (sym, intv, dirn)
+            ).fetchall()
+            for _row in _recent:
+                _prev_entry = float(_row[0])
+                if _prev_entry > 0 and abs(entry_f - _prev_entry) / _prev_entry < 0.001:
+                    logger.info(f"[BOS_DEDUP] {sym} {intv} {dirn} entry {entry_f:.4f} within 0.1% of recent {_prev_entry:.4f}")
+                    return False
             sl_f      = float(trade["sl"])
             risk_dist = abs(entry_f - sl_f)
 
-            # Hard gate: enforce minimum 3:1 R:R using actual entry/sl before insert.
-            # This catches any mismatch between risk_context's TP projection and the
-            # structural SL (e.g. swing-high stop wider than the ATR-based stop that
-            # was used when computing the TP inside risk_context).
-            _MIN_RR = 3.0
-            tp_f    = float(trade["tp"])
+            tp_f = float(trade["tp"])
 
-            # Fix 1: Reject trades where natural R:R < 2.0 — don't inflate bad setups.
-            natural_rr = abs(tp_f - entry_f) / risk_dist if risk_dist > 0 else 0
-            if natural_rr < 2.0:
-                logger.warning(
-                    f"[SKIP] {sym} {intv} {dirn}: natural R:R={natural_rr:.2f} < 2.0 "
-                    f"— rejecting forced_3r trade"
+            # ── Minimum R:R guard: skip trades below 1:1 ────────────────────
+            reward_dist = abs(tp_f - entry_f)
+            _tp_on_right_side = (tp_f > entry_f) if dirn == "LONG" else (tp_f < entry_f)
+            _sl_on_right_side = (sl_f < entry_f) if dirn == "LONG" else (sl_f > entry_f)
+            if not _tp_on_right_side or not _sl_on_right_side:
+                logger.info(
+                    f"[RR_SKIP] {sym} {intv} {dirn} — TP or SL on wrong side of entry "
+                    f"(entry={entry_f}, tp={tp_f}, sl={sl_f})"
                 )
                 return False
-
-            if risk_dist > 0 and abs(tp_f - entry_f) / risk_dist < _MIN_RR:
-                natural_tp = tp_f
-                tp_f = (round(entry_f + _MIN_RR * risk_dist, 8) if dirn == "LONG"
-                        else round(entry_f - _MIN_RR * risk_dist, 8))
-                # Fix 7: Log forced_3r inflation as WARNING.
-                logger.warning(
-                    f"[FORCED_3R] {sym} {intv}: natural TP={natural_tp:.4f} "
-                    f"(R:R={natural_rr:.2f}), forcing to {tp_f:.4f} (3R)"
+            if risk_dist == 0 or reward_dist / risk_dist < 1.0:
+                _rr = 0.0 if risk_dist == 0 else reward_dist / risk_dist
+                logger.info(
+                    f"[RR_SKIP] {sym} {intv} {dirn} — R:R={_rr:.2f} below 1.0 "
+                    f"(entry={entry_f}, tp={tp_f}, sl={sl_f})"
                 )
-                trade = dict(trade, tp=tp_f,
-                             target_basis="3:1 R:R enforced at log-time (sl wider than TP projection)",
-                             tp_source="forced_3r")
+                return False
+            # ── end R:R guard ─────────────────────────────────────────────────
 
             partial_tp = (round(entry_f + 1.5 * risk_dist, 8) if dirn == "LONG"
                           else round(entry_f - 1.5 * risk_dist, 8))
@@ -285,7 +319,7 @@ def close_trade(trade_id: str, close_price: float, status: str) -> Optional[dict
         db = _conn()
         try:
             row = db.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
-            if not row or row["status"] != "open":
+            if not row or row["status"] not in ("open", "pending"):
                 return None
             trade = dict(row)
             # Use entry price as close price for cancelled trades (0% ROI)
@@ -328,7 +362,7 @@ def auto_close(symbol: str, interval: str, current_price: float) -> tuple:
         try:
 
             rows = db.execute(
-                "SELECT * FROM trades WHERE symbol=? AND interval=? AND status='open'",
+                "SELECT * FROM trades WHERE symbol=? AND interval=? AND status IN ('open','pending')",
                 (symbol, interval)
             ).fetchall()
             for row in rows:
@@ -338,20 +372,29 @@ def auto_close(symbol: str, interval: str, current_price: float) -> tuple:
                 # ── Risk distance used for breakeven calculation ──────────
                 risk_d = abs(float(t["entry"]) - float(t["sl"]))
 
-                # ── Activate breakeven once price moves 1R in our favour ──
+                # ── BE is activated structurally by update_trailing_stops()
+                # when the trailing SL crosses above entry (LONG) or below entry (SHORT).
+                # No arbitrary spot-price trigger here.
                 be_active = bool(t.get("breakeven_activated", 0))
-                if not be_active:
-                    if t["direction"] == "LONG" and current_price >= t["entry"] + risk_d:
-                        db.execute("UPDATE trades SET breakeven_activated=1 WHERE id=?", (t["id"],))
-                        be_active = True
-                    elif t["direction"] == "SHORT" and current_price <= t["entry"] - risk_d:
-                        db.execute("UPDATE trades SET breakeven_activated=1 WHERE id=?", (t["id"],))
-                        be_active = True
 
                 # ── Effective SL: always use current SL from DB ──────────
                 # (trailing stop updater writes entry/above to sl column when
                 #  breakeven activates, so t["sl"] is already correct)
                 eff_sl = float(t["sl"])
+
+                # ── Minimum duration guard — skip closes on sub-candle trades ──
+                _INTERVAL_SECS = {
+                    "1m":60,"3m":180,"5m":300,"15m":900,"30m":1800,
+                    "1h":3600,"2h":7200,"4h":14400,"1d":86400
+                }
+                try:
+                    _opened = datetime.fromisoformat(t["opened_at"].replace("Z","+00:00"))
+                    _age    = (datetime.now(timezone.utc) - _opened).total_seconds()
+                    _min    = _INTERVAL_SECS.get(t["interval"], 900)
+                    if _age < _min:
+                        continue   # too young — let the candle close first
+                except Exception:
+                    pass
 
                 # ── TP check — must run before SL check ──────────────────
                 if t["direction"] == "LONG":
@@ -365,18 +408,34 @@ def auto_close(symbol: str, interval: str, current_price: float) -> tuple:
                 if not hit:
                     if t["direction"] == "LONG":
                         if current_price <= eff_sl:
-                            hit = "loss" if not be_active else "cancelled"
+                            if not be_active:
+                                hit = "loss"
+                            elif eff_sl > float(t["entry"]):  # trailing SL above entry → profitable exit
+                                hit = "win"
+                            else:
+                                hit = "cancelled"             # SL at entry → scratch
                     elif t["direction"] == "SHORT":
                         if current_price >= eff_sl:
-                            hit = "loss" if not be_active else "cancelled"
+                            if not be_active:
+                                hit = "loss"
+                            elif eff_sl < float(t["entry"]):  # trailing SL below entry → profitable exit
+                                hit = "win"
+                            else:
+                                hit = "cancelled"             # SL at entry → scratch
 
                 if hit:
-                    close_px = round(current_price, 8)
-                    if hit == "cancelled":
-                        close_px = float(t["entry"])   # 0% ROI on breakeven/time exits
+                    if hit == "loss":
+                        close_px = round(eff_sl, 8)         # snap to exact SL
+                    elif hit == "cancelled":
+                        close_px = float(t["entry"])         # scratch at entry
+                    else:
+                        # Win: TP hit closes at TP; trailing SL hit closes at eff_sl
+                        _tp_hit = (
+                            (t["direction"] == "LONG"  and current_price >= float(t["tp"])) or
+                            (t["direction"] == "SHORT" and current_price <= float(t["tp"]))
+                        )
+                        close_px = round(float(t["tp"]), 8) if _tp_hit else round(eff_sl, 8)
                     roi = _calc_roi(t["direction"], float(t["entry"]), close_px)
-                    if hit == "cancelled" and roi > 0:
-                        hit = "win"
                     analysis = _generate_analysis(t, close_px, hit, roi)
                     now      = datetime.now(timezone.utc).isoformat()
                     db.execute("""
@@ -436,7 +495,7 @@ def update_trailing_stops(symbol: str, interval: str, current_price: float,
         db = _conn()
         try:
             rows = db.execute(
-                "SELECT * FROM trades WHERE symbol=? AND interval=? AND status='open'",
+                "SELECT * FROM trades WHERE symbol=? AND interval=? AND status IN ('open','pending')",
                 (symbol, interval)
             ).fetchall()
             for row in rows:
@@ -464,8 +523,18 @@ def update_trailing_stops(symbol: str, interval: str, current_price: float,
                     if candidates:
                         new_sl = round(max(candidates), 8)
                         if new_sl > current_sl:
-                            db.execute("UPDATE trades SET sl=? WHERE id=?",
-                                       (new_sl, t["id"]))
+                            # If trailing SL crosses above entry → structural BE confirmed
+                            be_now = 1 if new_sl > entry else t.get("breakeven_activated", 0)
+                            db.execute(
+                                "UPDATE trades SET sl=?, breakeven_activated=? WHERE id=?",
+                                (new_sl, be_now, t["id"])
+                            )
+                            if be_now and not t.get("breakeven_activated"):
+                                logger.info(
+                                    f"[BE_STRUCTURAL] {t['symbol']} {interval} "
+                                    f"trailing SL {new_sl:.4f} crossed above entry {entry:.4f} "
+                                    f"— breakeven activated"
+                                )
                             updated.append(t["id"])
 
                 elif direction == "SHORT" and swing_highs:
@@ -475,8 +544,18 @@ def update_trailing_stops(symbol: str, interval: str, current_price: float,
                     if candidates:
                         new_sl = round(min(candidates), 8)
                         if new_sl < current_sl:
-                            db.execute("UPDATE trades SET sl=? WHERE id=?",
-                                       (new_sl, t["id"]))
+                            # If trailing SL crosses below entry → structural BE confirmed
+                            be_now = 1 if new_sl < entry else t.get("breakeven_activated", 0)
+                            db.execute(
+                                "UPDATE trades SET sl=?, breakeven_activated=? WHERE id=?",
+                                (new_sl, be_now, t["id"])
+                            )
+                            if be_now and not t.get("breakeven_activated"):
+                                logger.info(
+                                    f"[BE_STRUCTURAL] {t['symbol']} {interval} "
+                                    f"trailing SL {new_sl:.4f} crossed below entry {entry:.4f} "
+                                    f"— breakeven activated"
+                                )
                             updated.append(t["id"])
 
             if updated:
@@ -700,20 +779,10 @@ def _adapt(db) -> list:
         win_rate = wins / len(factor_rows)
         old_w    = weights.get(factor, DEFAULT_WEIGHTS[factor])
         default_w= DEFAULT_WEIGHTS[factor]
-        floor_w  = default_w * WEIGHT_FLOOR
         ceil_w   = default_w * WEIGHT_CEIL
 
-        if win_rate < 0.40:
-            # Factor present but keeps losing — reduce its weight
-            new_w = max(round(old_w * 0.75, 2), floor_w)
-            if abs(new_w - old_w) > 0.01:
-                changes.append(
-                    f"⬇ '{factor}' weight {old_w:.2f}→{new_w:.2f} "
-                    f"(present in {wins}/{len(factor_rows)} wins, win rate {win_rate:.0%})"
-                )
-                weights[factor] = new_w
-
-        elif win_rate > 0.70:
+        # Weights only go UP — losses never penalize a factor below WEIGHT_FLOOR_ABS
+        if win_rate > 0.70:
             # Factor present → winning often — boost its weight
             new_w = min(round(old_w * 1.10, 2), ceil_w)
             if abs(new_w - old_w) > 0.01:
@@ -733,20 +802,25 @@ def _adapt(db) -> list:
                 )
                 weights[factor] = new_w
 
+    # ── Enforce absolute weight floor on all non-zero-default factors ────────────
+    for f, d in DEFAULT_WEIGHTS.items():
+        if d > 0 and weights.get(f, 0) < WEIGHT_FLOOR_ABS:
+            weights[f] = WEIGHT_FLOOR_ABS
+
     # ── Overall win rate → threshold adaptation ──────────
     recent = list(closed[:ADAPT_WINDOW])
     if len(recent) >= MIN_SAMPLES:
         overall_wr = sum(1 for r in recent if r["status"] == "win") / len(recent)
         old_thresh = threshold
 
-        if overall_wr < 0.40 and threshold < 9.0:
-            threshold = min(round(threshold + 0.5, 1), 9.0)
+        if overall_wr < 0.40 and threshold < 8.0:
+            threshold = min(round(threshold + 0.5, 1), 8.0)
             changes.append(
                 f"⬆ Signal threshold {old_thresh:.1f}→{threshold:.1f} "
                 f"(last {len(recent)} trades: {overall_wr:.0%} win rate, target >55%)"
             )
-        elif overall_wr > 0.70 and threshold > 8.0:
-            threshold = max(round(threshold - 0.25, 1), 8.0)  # Fix 9: floor at 8.0
+        elif overall_wr > 0.70 and threshold > 7.0:
+            threshold = max(round(threshold - 0.25, 1), 7.0)
             changes.append(
                 f"⬇ Signal threshold {old_thresh:.1f}→{threshold:.1f} "
                 f"(win rate {overall_wr:.0%} — allowing slightly lower bar)"
@@ -759,8 +833,8 @@ def _adapt(db) -> list:
             consec_losses += 1
         else:
             break
-    if consec_losses >= 3 and threshold < 9.5:
-        new_thresh = min(round(threshold + 0.5, 1), 9.5)
+    if consec_losses >= 3 and threshold < 8.0:
+        new_thresh = min(round(threshold + 0.5, 1), 8.0)
         if new_thresh != threshold:
             changes.append(
                 f"⬆ Signal threshold {threshold:.1f}→{new_thresh:.1f} "
@@ -819,7 +893,7 @@ def get_trades() -> list:
 def get_open_trades(symbol: str | None = None, interval: str | None = None) -> list:
     """Return all open trades, optionally filtered by symbol and/or interval."""
     db   = _conn()
-    q    = "SELECT * FROM trades WHERE status='open'"
+    q    = "SELECT * FROM trades WHERE status IN ('open','pending')"
     args: list = []
     if symbol:
         q += " AND symbol=?";   args.append(symbol)
@@ -835,6 +909,18 @@ def get_open_trades(symbol: str | None = None, interval: str | None = None) -> l
         t["ai_analysis"]      = json.loads(t.get("ai_analysis") or "null")
         result.append(t)
     return result
+
+
+def has_active_trade(symbol: str, interval: str, direction: str) -> bool:
+    """Return True if there is already an open or pending trade for this symbol+interval+direction."""
+    db  = _conn()
+    row = db.execute(
+        "SELECT 1 FROM trades WHERE symbol=? AND interval=? AND direction=? "
+        "AND status IN ('open','pending') LIMIT 1",
+        (symbol, interval, direction)
+    ).fetchone()
+    db.close()
+    return row is not None
 
 
 def get_adaptation_log(limit: int = 15) -> list:
