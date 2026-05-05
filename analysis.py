@@ -452,7 +452,7 @@ def volume_analysis(df: pd.DataFrame) -> dict:
     avg20 = vol.iloc[-20:].mean()
     avg5  = vol.iloc[-5:].mean()
     expanding = bool(avg5 > vol.iloc[-20:-5].mean())
-    recent_spike = bool((vol.iloc[-10:] > 2 * avg20).any())
+    recent_spike = bool((vol.iloc[-10:] > 1.3 * avg20).any())
 
     obv_s = obv(df)
     obv_up = bool(obv_s.iloc[-1] > obv_s.iloc[-20])
@@ -577,6 +577,7 @@ def confluence_score(regime, structure, vol, rsi_data, sweeps,
     w = weights.get("regime", 2.0)
     trending = "Uptrend" in regime["regime"] or "Downtrend" in regime["regime"]
     snap["regime"] = trending
+    snap["regime_up"] = "Uptrend" in regime["regime"]
     if trending:
         score += w
         reasons.append({"pts": round(w, 1), "earned": True,
@@ -976,23 +977,6 @@ def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
 
     rr = round(reward_d / risk_d, 2) if risk_d > 0 else 0
 
-    # ── Enforce minimum R:R: 3:1 minimum ─────────────────────────────────────
-    # Exception: historical_range targets with R:R >= 2.0 are analytically
-    # grounded and survive — a validated 2.x:1 beats a mechanical 3:1 projection.
-    min_rr = 3.0
-    if risk_d > 0 and rr < min_rr and bias != "Neutral":
-        if tp_source == "historical_range" and rr >= 2.0:
-            pass  # historically-validated target — accept below mechanical threshold
-        else:
-            if bias == "Long":
-                target = round(entry_price + min_rr * risk_d, 6)
-            else:
-                target = round(entry_price - min_rr * risk_d, 6)
-            target_basis = f"{min_rr:.0f}:1 R:R projection (structural target too close)"
-            tp_source    = "forced_3r"
-            reward_d = abs(target - entry_price)
-            rr = round(reward_d / risk_d, 2)
-
     return dict(
         bias=bias,
         current=round(cur, 6),
@@ -1002,7 +986,7 @@ def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
         target_basis=target_basis,
         tp_source=tp_source,
         rr=rr,
-        favorable=rr >= min_rr,
+        favorable=rr > 0,
         invalidation_note=inval_note,
     )
 
@@ -1064,9 +1048,9 @@ def generate_signal(confluence: dict, structure, risk: dict, h4_df,
                     signal_threshold: float | None = None,
                     interval: str = "4h",
                     body_ratio_min: float = 0.30,
-                    min_rr: float = 3.0,
-                    rsi_long_range: tuple = (35.0, 85.0),
-                    rsi_short_range: tuple = (20.0, 65.0),
+                    min_rr: float = 2.0,
+                    rsi_long_range: tuple = (30.0, 70.0),
+                    rsi_short_range: tuple = (30.0, 70.0),
                     level_touch_min: int = 2,
                     symbol: str = "") -> dict | None:
     """
@@ -1077,25 +1061,29 @@ def generate_signal(confluence: dict, structure, risk: dict, h4_df,
       - BOS confirmed
       - ADX > threshold (trending market — ranging markets produce false BOS)
       - Volume expanding (low-volume breakouts are almost always fake)
-      - R:R >= min_rr
 
     All gate parameters are configurable for backtesting / regime switching.
     """
     threshold = signal_threshold if signal_threshold is not None else get_threshold()
     if confluence["score"] < threshold:
+        print(f"[SIGNAL BLOCKED] {symbol} {interval}: score={confluence['score']:.1f} < threshold={threshold:.1f}", flush=True)
         return None
     if not structure:
+        print(f"[SIGNAL BLOCKED] {symbol} {interval}: no structure data", flush=True)
         return None
 
-    snap = confluence.get("factors_snapshot", {})
+    snap  = confluence.get("factors_snapshot", {})
+    score = confluence["score"]
 
     # ── Hard gate 1: ADX must confirm a trending market ──────────────────────
     if not snap.get("adx"):
+        print(f"[SIGNAL BLOCKED] {symbol} {interval}: ADX gate — ranging/choppy market", flush=True)
         return None  # Ranging/choppy — trend-following BOS signals fail here
 
-    # ── Hard gate 2: Volume must expand on the BOS candle ────────────────────
+    # ── Volume penalty (soft — reduces score by 0.5) ─────────────────────────
     if not snap.get("volume"):
-        return None  # Low-volume breakout — high false-break probability
+        print(f"[VOLUME PENALTY] {symbol} {interval}: volume not expanding/no spike — -0.5 score", flush=True)
+        score -= 0.5
 
     # ── Hard gate 3: BOS candle quality ──────────────────────────────────────
     # The candle that broke structure must be a conviction candle, not a doji.
@@ -1106,6 +1094,7 @@ def generate_signal(confluence: dict, structure, risk: dict, h4_df,
     body_ratio = body_sz / total_rng if total_rng > 0 else 0
 
     if body_ratio < body_ratio_min:
+        print(f"[SIGNAL BLOCKED] {symbol} {interval}: body_ratio={body_ratio:.2f} < {body_ratio_min:.2f} (doji/indecision candle)", flush=True)
         return None  # Doji / spinning top — indecision candle, not a BOS
 
     # ── Hard gate 5: Level significance ──────────────────────────────────────
@@ -1115,29 +1104,31 @@ def generate_signal(confluence: dict, structure, risk: dict, h4_df,
     level_col   = "high" if structure["bullish_bos"] else "low"
     touch_count = int((abs(h4_df[level_col] - entry_price) / entry_price <= 0.005).sum())
     if touch_count < level_touch_min:
+        print(f"[SIGNAL BLOCKED] {symbol} {interval}: level touches={touch_count} < {level_touch_min} (entry level not confirmed S/R)", flush=True)
         return None  # Level not confirmed as key S/R
 
-    # ── Hard gate 4: RSI range filter (Fix 3) ────────────────────────────────
-    # LONG: RSI must be in [rsi_long_min, rsi_long_max) — strict upper bound prevents
-    #       chasing overbought entries. SHORT: strict lower bound filters oversold shorts.
-    rsi_val = snap.get("rsi_value", 50.0)
+    # ── Hard gate 4: RSI range filter ────────────────────────────────────────
+    # In a trending regime, RSI staying overbought/oversold IS the signal — skip
+    # the overbought/oversold cap when regime is trending and direction aligns.
+    rsi_val    = snap.get("rsi_value", 50.0)
+    _trending  = snap.get("regime", False)
+    _regime_up = snap.get("regime_up", False)
     if structure["bullish_bos"]:
-        rsi_lo, rsi_hi = rsi_long_range
-        if not (rsi_lo <= rsi_val < rsi_hi):
-            return None  # RSI outside permitted LONG range
+        _trend_aligned = _trending and _regime_up
+        if not _trend_aligned:
+            rsi_lo, rsi_hi = rsi_long_range
+            if not (rsi_lo <= rsi_val < rsi_hi):
+                print(f"[SIGNAL BLOCKED] {symbol} {interval} LONG: RSI={rsi_val:.1f} outside [{rsi_lo},{rsi_hi})", flush=True)
+                return None
     elif structure["bearish_bos"]:
-        rsi_lo, rsi_hi = rsi_short_range
-        if not (rsi_lo < rsi_val <= rsi_hi):
-            return None  # RSI outside permitted SHORT range
+        _trend_aligned = _trending and not _regime_up
+        if not _trend_aligned:
+            rsi_lo, rsi_hi = rsi_short_range
+            if not (rsi_lo < rsi_val <= rsi_hi):
+                print(f"[SIGNAL BLOCKED] {symbol} {interval} SHORT: RSI={rsi_val:.1f} outside ({rsi_lo},{rsi_hi}]", flush=True)
+                return None
 
-    # ── Hard R:R gate ─────────────────────────────────────────────────────────
-    # Historical-range targets with R:R >= 2.0 are analytically grounded and
-    # allowed through; all other sources require the full min_rr threshold.
-    _rr         = risk.get("rr", 0)
-    _tp_src     = risk.get("tp_source", "")
-    _rr_ok      = _rr >= min_rr or (_tp_src == "historical_range" and _rr >= 2.0)
-    if not _rr_ok:
-        return None
+    # R:R is reported in the signal but not used as a gate — natural TP/SL stands.
 
     # ── Retest confirmation gate ──────────────────────────────────────────────
     # Enter only when price has pulled back to the broken level, not at the
@@ -1145,7 +1136,7 @@ def generate_signal(confluence: dict, structure, risk: dict, h4_df,
     current = risk["current"]
     if structure["bullish_bos"]:
         broken_level = structure.get("last_swing_high")
-        if broken_level and current > broken_level * 1.008:
+        if broken_level and current > broken_level * 1.02:
             pct = (current - broken_level) / broken_level * 100
             print(
                 f"[RETEST GATE] {symbol} {interval.upper()} LONG: price {current:.2f} is "
@@ -1155,7 +1146,7 @@ def generate_signal(confluence: dict, structure, risk: dict, h4_df,
             return None
     elif structure["bearish_bos"]:
         broken_level = structure.get("last_swing_low")
-        if broken_level and current < broken_level * 0.992:
+        if broken_level and current < broken_level * 0.98:
             pct = (broken_level - current) / broken_level * 100
             print(
                 f"[RETEST GATE] {symbol} {interval.upper()} SHORT: price {current:.2f} is "
@@ -1181,13 +1172,14 @@ def generate_signal(confluence: dict, structure, risk: dict, h4_df,
             "Bearish BOS — retest entry at broken support (now resistance)"
         )
     else:
+        print(f"[SIGNAL BLOCKED] {symbol} {interval}: no BOS direction (neither bullish nor bearish BOS)", flush=True)
         return None
 
     top_reasons = [r["text"] for r in confluence["reasons"] if r["earned"]]
 
     return dict(
         direction=direction,
-        score=confluence["score"],
+        score=score,
         max_score=confluence["max"],
         entry=entry_price,              # structural retest level
         current_price=risk["current"],  # where BOS actually happened
@@ -1488,8 +1480,9 @@ def generate_macd_signal(df: pd.DataFrame, interval: str = "1h") -> dict | None:
 # ─────────────────────────────────────────────
 
 def full_analysis(symbol: str, interval: str = "4h", weights: dict | None = None,
-                  body_ratio_min: float = 0.30, rsi_long_range: tuple = (35.0, 85.0),
-                  rsi_short_range: tuple = (20.0, 65.0), level_touch_min: int = 1) -> dict:
+                  body_ratio_min: float = 0.30, rsi_long_range: tuple = (30.0, 70.0),
+                  rsi_short_range: tuple = (30.0, 70.0), level_touch_min: int = 1,
+                  score_threshold: float | None = None) -> dict:
     # Resolve timeframes
     htf, candle_limit = INTERVAL_HTF.get(interval, ("1d", 200))
 
@@ -1539,7 +1532,9 @@ def full_analysis(symbol: str, interval: str = "4h", weights: dict | None = None
 
     # Load adaptive parameters from learning engine
     adapt_weights   = weights if weights is not None else get_weights()
-    adapt_threshold = get_threshold()
+    # Use caller-supplied threshold if given; otherwise floor at 3.0 so the scanner
+    # can apply its own per-symbol threshold after full_analysis() returns.
+    adapt_threshold = score_threshold if score_threshold is not None else 3.0
     adapt_stop_mult = get_stop_multiplier()
 
     # Section 6: Confluence (adaptive weights + ADX + VWAP)

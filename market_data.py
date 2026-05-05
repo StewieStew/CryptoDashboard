@@ -2,6 +2,7 @@
 External market context — Fear & Greed, BTC Dominance, Funding Rates, Open Interest.
 All data is cached for 1 hour to avoid hammering external APIs.
 """
+from __future__ import annotations
 
 import time
 import threading
@@ -88,6 +89,40 @@ def get_open_interest(symbol: str) -> float:
         return float(r.json()["openInterest"])
     result = _cached(f"oi_{symbol}", _fetch, ttl=300)   # 5-min cache
     return result or 0.0
+
+
+# ── Live price + historical bar helpers ──────────────────────────────────────
+
+_BINANCE_SPOT = "https://api.binance.us/api/v3"
+
+def get_live_price(symbol: str) -> float | None:
+    """Fetch current spot price from Binance. No cache — always fresh."""
+    try:
+        r = requests.get(
+            f"{_BINANCE_SPOT}/ticker/price",
+            params={"symbol": symbol},
+            timeout=5,
+        )
+        return float(r.json()["price"])
+    except Exception:
+        return None
+
+
+def fetch_1m_bars_since(symbol: str, since_ms: int) -> list[dict]:
+    """
+    Fetch 1m OHLCV bars from Binance from since_ms (epoch ms) until now.
+    Returns up to 1000 bars (~16 hours). Each bar: {high, low}.
+    """
+    try:
+        r = requests.get(
+            f"{_BINANCE_SPOT}/klines",
+            params={"symbol": symbol, "interval": "1m", "startTime": since_ms, "limit": 1000},
+            timeout=10,
+        )
+        bars = r.json()
+        return [{"high": float(b[2]), "low": float(b[3])} for b in bars if isinstance(b, list)]
+    except Exception:
+        return []
 
 
 # ── Full context bundle ───────────────────────────────────────────────────────

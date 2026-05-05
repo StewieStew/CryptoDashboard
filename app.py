@@ -42,7 +42,7 @@ DEFAULT_SYMBOLS  = [
 
 # Paper-trade mode: only these coins on 4H using discovery-validated params.
 PAPER_SYMBOLS   = ["BTCUSDT", "ETHUSDT", "XRPUSDT"]
-PAPER_INTERVALS = ["1h", "4h"]
+PAPER_INTERVALS = ["15m", "1h", "4h"]
 
 # Three-tier scanning: 15m (scalp), 1h (day trade — MACD primary), 4h (swing).
 SCAN_INTERVALS   = ["15m", "1h", "4h"]
@@ -86,6 +86,7 @@ RISK_PER_TRADE_PCT  = 0.01   # 1% of account per trade
 DAILY_LOSS_HALT_PCT = 0.05   # halt if daily loss exceeds 5%
 DRAWDOWN_REDUCE_PCT = 0.15   # reduce size if drawdown > 15%
 FEE_SLIPPAGE_PCT    = 0.001  # 0.1% fee + slippage per side (each way)
+FEE_RATE            = 0.002  # 0.1% per side × 2 sides = 0.2% round-trip fee gate
 
 
 def _reset_daily_risk() -> None:
@@ -572,13 +573,144 @@ _apply_discovery_params()
 
 # ── Session filter ────────────────────────────────────────────────────────────
 def _in_active_session() -> bool:
+    """Crypto markets are 24/7 — always return True."""
+    return True
+
+
+# ── Historical backfill: replay 1m bars from trade open until now ─────────────
+
+def _backfill_trade(trade: dict) -> bool:
     """
-    True during European or US trading sessions (7am–10pm UTC).
-    Day (15m) signals are only logged during active sessions when volume is highest.
-    Swing (4h) signals fire any time.
+    Fetch 1m candles from Binance from this trade's opened_at until now and
+    replay bar-by-bar to detect any TP or SL hit that was missed while the bot
+    was down or the trade was pending.  Returns True if the trade was closed.
     """
-    h = datetime.now(timezone.utc).hour
-    return 7 <= h < 22
+    trade_id  = trade["id"]
+    direction = trade["direction"]
+    tp        = float(trade["tp"])
+    sl        = float(trade["sl"])
+    sym       = trade["symbol"]
+
+    try:
+        since_ms = int(pd.Timestamp(trade["opened_at"]).timestamp() * 1000)
+    except Exception:
+        return False
+
+    bars = market_data.fetch_1m_bars_since(sym, since_ms)
+    if not bars:
+        return False
+
+    outcome     = None
+    close_price = None
+    for bar in bars:
+        hi, lo = bar["high"], bar["low"]
+        if direction == "LONG":
+            if hi >= tp:
+                outcome = "win";  close_price = tp;  break
+            if lo <= sl:
+                outcome = "loss"; close_price = sl;  break
+        else:
+            if lo <= tp:
+                outcome = "win";  close_price = tp;  break
+            if hi >= sl:
+                outcome = "loss"; close_price = sl;  break
+
+    if not outcome:
+        print(f"[BACKFILL] {sym} {trade['interval']}: still open, handed to monitor", flush=True)
+        return False
+
+    try:
+        closed = learning.close_trade(trade_id, close_price, outcome)
+        if closed:
+            label = "TP hit" if outcome == "win" else "SL hit"
+            print(
+                f"[BACKFILL] {sym} {trade['interval']}: {label} → {outcome.upper()}"
+                f" @ {close_price} ({closed.get('roi_pct', 0):+.2f}%)",
+                flush=True,
+            )
+            notifications.send_close_alert(
+                closed, closed["status"], closed["close_price"], closed.get("roi_pct", 0)
+            )
+            _record_trade_pnl(float(closed.get("roi_pct") or 0))
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _backfill_all_open_trades() -> int:
+    """Replay 1m history for every open trade. Called once at bot startup."""
+    trades = learning.get_open_trades()
+    if not trades:
+        print("[BACKFILL] no open/pending trades to backfill", flush=True)
+        return 0
+    print(f"[BACKFILL] checking {len(trades)} open/pending trade(s) for missed TP/SL hits...", flush=True)
+    closed_count = 0
+    for trade in trades:
+        if _backfill_trade(trade):
+            closed_count += 1
+        time.sleep(0.3)   # mild pacing between Binance calls
+    print(f"[BACKFILL] complete — resolved {closed_count}/{len(trades)} trade(s)", flush=True)
+    return closed_count
+
+
+# ── Real-time TP/SL monitor: runs every 60 s ─────────────────────────────────
+
+def _monitor_open_trades() -> int:
+    """
+    Fetch the live Binance price for every open trade's symbol and immediately
+    close any trade whose TP or SL has been crossed.  Returns closes count.
+    """
+    trades = learning.get_open_trades()
+    if not trades:
+        return 0
+
+    symbols = {t["symbol"] for t in trades}
+    prices: dict[str, float] = {}
+    for sym in symbols:
+        px = market_data.get_live_price(sym)
+        if px:
+            prices[sym] = px
+
+    if not prices:
+        return 0
+
+    checked: set[tuple[str, str]] = set()
+    total_closed = 0
+    for t in trades:
+        sym, intv = t["symbol"], t["interval"]
+        if (sym, intv) in checked:
+            continue
+        checked.add((sym, intv))
+        px = prices.get(sym)
+        if not px:
+            continue
+        print(f"[MONITOR] {sym} {intv}: live={px:.4f}  TP={t['tp']}  SL={t['sl']}", flush=True)
+        closed, partials = learning.auto_close(sym, intv, px)
+        for p in partials:
+            notifications.send_partial_alert(p, p["partial_price"])
+        for c in closed:
+            notifications.send_close_alert(c, c["status"], c["close_price"], c.get("roi_pct", 0))
+            _record_trade_pnl(float(c.get("roi_pct") or 0))
+            print(
+                f"[MONITOR CLOSE] {sym} {intv}: {c['direction']}"
+                f" → {c['status']} @ {c['close_price']} ({c.get('roi_pct', 0):+.2f}%)",
+                flush=True,
+            )
+        total_closed += len(closed)
+
+    return total_closed
+
+
+def _price_monitor_loop() -> None:
+    """Lightweight 60-second loop: fetch live prices and close any TP/SL hits."""
+    time.sleep(15)   # stagger start so scanner initialises first
+    while True:
+        try:
+            _monitor_open_trades()
+        except Exception as exc:
+            print(f"[MONITOR ERROR] {exc}", flush=True)
+        time.sleep(60)
 
 
 # ── Price-based auto-close helper ────────────────────────────────────────────
@@ -656,11 +788,14 @@ def _resolve_open_trades(sym: str, interval: str) -> int:
         close_price = None
         for _, bar in future.iterrows():
             hi, lo = float(bar["high"]), float(bar["low"])
-            # TP removed — trailing stop lets winners run; only SL closes here
             if direction == "LONG":
+                if hi >= tp:
+                    outcome = "win";  close_price = tp;  break
                 if lo <= sl:
                     outcome = "loss"; close_price = sl;  break
             else:  # SHORT
+                if lo <= tp:
+                    outcome = "win";  close_price = tp;  break
                 if hi >= sl:
                     outcome = "loss"; close_price = sl;  break
 
@@ -695,6 +830,11 @@ def _background_scanner() -> None:
     _scanner_status["running"] = True
     time.sleep(10)          # short startup pause, then begin immediately
 
+    # Backfill any trades that may have hit TP/SL while the bot was offline
+    _backfill_all_open_trades()
+
+    _warmup_complete = False   # first cycle is observation-only; no new trades logged
+
     while True:
         syms = PAPER_SYMBOLS   # paper-trade: locked to discovery-validated coins only
         scan_signals = 0
@@ -702,6 +842,11 @@ def _background_scanner() -> None:
 
         # ── Daily risk reset ──────────────────────────────────────────────────
         _reset_daily_risk()
+        _cycle_ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        print(f"[SCAN CYCLE] {_cycle_ts} — scanning {len(syms) * len(PAPER_INTERVALS)} configs", flush=True)
+
+        # ── Real-time TP/SL check before scanning for new signals ────────────
+        scan_closes += _monitor_open_trades()
 
         for sym in syms:
             # Fetch bias TFs: 1h for confirmation candle check, 1d for 4H bias
@@ -728,7 +873,8 @@ def _background_scanner() -> None:
                     # Load per-symbol discovery params (weights + thresholds)
                     sym_p = learning.get_symbol_params(sym, interval) or {}
                     sym_weights = sym_p.get("weights") or None
-                    data = full_analysis(sym, interval, weights=sym_weights)
+                    data = full_analysis(sym, interval, weights=sym_weights,
+                                        score_threshold=sym_p.get("score_threshold", 3.0))
                     now  = time.time()
                     data["cache_age"] = 0
                     with _lock:
@@ -738,7 +884,8 @@ def _background_scanner() -> None:
                     regime_label = "UNCERTAIN"
                     try:
                         detected_regime = regime.detect_regime_from_data(data)
-                        regime_label    = detected_regime.get("label", "UNCERTAIN")
+                        _raw = detected_regime.get("regime", "transitioning")
+                        regime_label = {"trending": "TRENDING", "ranging": "RANGING"}.get(_raw, "UNCERTAIN")
                         learning.save_regime(sym, detected_regime)
                         base_p = {
                             "score_threshold": sym_p.get("score_threshold", learning.get_threshold()),
@@ -746,14 +893,19 @@ def _background_scanner() -> None:
                             "adx_threshold":   sym_p.get("adx_threshold",   25),
                             "body_ratio_min":  sym_p.get("body_ratio_min",  0.30),
                         }
+                        # 15m scalp cap: prevent elevated adaptive params from silencing
+                        # all signals. VOL_SQUEEZE has hardcoded score=7.0 and internal
+                        # net_rr≥1.8 — both gates must stay at/below these values to fire.
+                        if interval == "15m":
+                            base_p["score_threshold"] = min(base_p["score_threshold"], 7.0)
+                            base_p["min_rr"]          = min(base_p["min_rr"],          1.5)
                         regime_p = regime.get_regime_params(detected_regime, base_p)
                     except Exception:
                         regime_p = {}
 
                     htf        = "1h" if interval == "15m" else "1d"
                     htf_d      = bias_cache.get(htf, {})
-                    is_day     = interval in ("15m", "30m", "1h")
-                    session_ok = (not is_day) or _in_active_session()
+                    session_ok = True  # crypto is 24/7
 
                     # ── Build candidate signal list based on regime ───────────
                     # regime_label is TRENDING, RANGING, or UNCERTAIN
@@ -762,9 +914,18 @@ def _background_scanner() -> None:
                     # (A) BOS trend-following signal — always check but only keep
                     #     in TRENDING or UNCERTAIN (with higher bar).
                     bos_sig = data.get("signal")
+                    # Checklist gate: BOS + trending regime + OBV required
                     if bos_sig:
-                        regime_threshold = regime_p.get("score_threshold")
-                        if regime_threshold and bos_sig.get("score", 0) < regime_threshold:
+                        _factors = bos_sig.get("factors_snapshot", {})
+                        _checklist = (
+                            _factors.get("bos") and      # Break of structure confirmed
+                            _factors.get("regime") and   # Trending/aligned market
+                            _factors.get("obv")          # OBV confirming direction
+                        )
+                        if not _checklist:
+                            _sc = bos_sig.get("score", 0)
+                            _missing = [k for k in ["bos", "regime", "obv"] if not _factors.get(k)]
+                            print(f"[CHECKLIST BLOCK] {sym} {interval}: score={_sc:.1f} missing={_missing}", flush=True)
                             bos_sig = None
                     if bos_sig and regime_label in ("TRENDING", "UNCERTAIN"):
                         candidate_sigs.append(bos_sig)
@@ -781,14 +942,24 @@ def _background_scanner() -> None:
                         candidate_sigs.append(sq_sig)
 
                     # ── Process each candidate signal ─────────────────────────
+                    if not candidate_sigs:
+                        _conf  = data.get("confluence", {})
+                        _sc    = _conf.get("score", 0.0)
+                        _snap  = _conf.get("factors_snapshot", {})
+                        _braw  = data.get("signal")   # signal that was dropped (wrong regime / threshold)
+                        if _braw and regime_label not in ("TRENDING", "UNCERTAIN"):
+                            print(f"[SCAN] {sym} {interval}: BOS score={_sc:.1f} — regime={regime_label} → dropped (need TRENDING/UNCERTAIN)", flush=True)
+                        else:
+                            print(f"[SCAN] {sym} {interval}: no signal — regime={regime_label} score={_sc:.1f} bos={_snap.get('bos')} adx={_snap.get('adx')}", flush=True)
                     for sig in candidate_sigs:
-                        if not sig or not session_ok:
+                        if not sig:
                             continue
 
                         sig_type = sig.get("signal_type", "")
                         # Mean-reversion signals skip the HTF bias filter
                         # (they are counter-trend by design)
                         if sig_type not in ("MEAN_REVERSION",) and not _bias_agrees(sig["direction"], htf_d):
+                            print(f"[SCAN] {sym} {interval}: {sig['direction']} score={sig.get('score',0):.1f} — HTF BIAS BLOCK", flush=True)
                             continue
 
                         # ── Signal quality gates (Fixes 2, 4, 5, 6) ──────────
@@ -799,64 +970,33 @@ def _background_scanner() -> None:
                             sym_p.get("score_threshold", learning.get_threshold()),
                         )
 
-                        # Fix 2: Regime hard-block for BOS trend signals ───────
+                        # Fix 2: Regime penalty for BOS trend signals (was hard-block) ──
                         if sig_type not in ("MEAN_REVERSION", "VOL_SQUEEZE", "MACD_EMA_VOL"):
-                            if sig["direction"] == "LONG" and not factors.get("regime"):
-                                logger.info(
-                                    f"[REGIME BLOCK] {sym} {interval}: LONG rejected — regime=False"
-                                )
-                                continue
-                            if sig["direction"] == "SHORT" and not factors.get("regime"):
-                                logger.info(
-                                    f"[REGIME BLOCK] {sym} {interval}: SHORT rejected — regime=False"
-                                )
-                                continue
+                            if not factors.get("regime"):
+                                score -= 1.5
+                                print(f"[SCAN] {sym} {interval}: {sig['direction']} score→{score:.1f} — REGIME PENALTY (-1.5)", flush=True)
 
                         # Fix 5: OBV=False raises effective threshold by 1.0 for LONGs ──
                         effective_threshold = base_threshold
                         if sig["direction"] == "LONG" and not factors.get("obv"):
                             effective_threshold += 1.0
-                            logger.debug(
-                                f"[OBV PENALTY] {sym} {interval}: OBV=False on LONG, "
-                                f"threshold raised to {effective_threshold}"
-                            )
+                            print(f"[SCAN] {sym} {interval}: OBV penalty → threshold={effective_threshold:.1f}", flush=True)
                         if score < effective_threshold:
+                            print(f"[SCAN] {sym} {interval}: {sig['direction']} score={score:.1f} — THRESHOLD BLOCK (need {effective_threshold:.1f})", flush=True)
+                            continue
+
+                        # Fix 4: Smart-money gate removed — score threshold is the only gate
+
+                        # Skip if there's already an open or pending trade for
+                        # this exact symbol + interval + direction
+                        if learning.has_active_trade(sym, interval, sig["direction"]):
                             logger.info(
-                                f"[THRESHOLD BLOCK] {sym} {interval}: score={score:.1f} "
-                                f"< effective_threshold={effective_threshold:.1f}"
+                                f"[SKIP] already have open {sym} {interval} "
+                                f"{sig['direction']} — skipping"
                             )
                             continue
 
-                        # Fix 4: Require smart-money factor for sub-threshold signals ──
-                        smart_money_confirmed = (
-                            factors.get("fvg") or factors.get("fib") or factors.get("liquidity")
-                        )
-                        if score < (base_threshold + 1.0) and not smart_money_confirmed:
-                            logger.info(
-                                f"[SMART-MONEY BLOCK] {sym} {interval}: score={score:.1f} "
-                                f"< {base_threshold + 1.0:.1f}, no FVG/FIB/Liquidity — skipping"
-                            )
-                            continue
-
-                        # Fix 6: Skip same-symbol same-direction duplicate ─────
-                        _existing = [
-                            t for t in learning.get_open_trades(sym)
-                            if t["direction"] == sig["direction"]
-                        ]
-                        if _existing:
-                            logger.info(
-                                f"[DUPE BLOCK] {sym} {interval}: {sig['direction']} already "
-                                f"open on {_existing[0].get('interval', '?')} — skipping"
-                            )
-                            continue
-
-                        # ── Fee-adjusted R:R gate ─────────────────────────────
-                        net_rr = _rr_after_fees(
-                            sig["entry"], sig["target"], sig["stop"], sig["direction"]
-                        )
-                        min_rr_required = regime_p.get("min_rr", sym_p.get("min_rr", 1.8))
-                        if net_rr < min_rr_required:
-                            continue   # Skip: spread/fees eat the edge
+                        # R:R is logged but no longer used as a gate.
 
                         # ── 1H confirmation candle for 4H / 1H swing signals ──
                         # Mean-reversion and squeeze entries skip this filter
@@ -871,8 +1011,10 @@ def _background_scanner() -> None:
                                     h1_bull  = h1["close"] > h1["open"]
                                     h1_bear  = h1["close"] < h1["open"]
                                     if sig["direction"] == "LONG"  and not (h1_bull and h1_ratio >= 0.40):
+                                        print(f"[SCAN] {sym} {interval}: LONG — 1H CANDLE BLOCK (ratio={h1_ratio:.2f} bull={h1_bull})", flush=True)
                                         continue
                                     if sig["direction"] == "SHORT" and not (h1_bear and h1_ratio >= 0.40):
+                                        print(f"[SCAN] {sym} {interval}: SHORT — 1H CANDLE BLOCK (ratio={h1_ratio:.2f} bear={h1_bear})", flush=True)
                                         continue
                             if interval == "1h":
                                 h1_candles = bias_cache.get("1h", {}).get("chart", {}).get("candles", [])
@@ -884,8 +1026,10 @@ def _background_scanner() -> None:
                                     h1_bull  = h1["close"] > h1["open"]
                                     h1_bear  = h1["close"] < h1["open"]
                                     if sig["direction"] == "LONG"  and not (h1_bull and h1_ratio >= 0.35):
+                                        print(f"[SCAN] {sym} {interval}: LONG — 1H CANDLE BLOCK (ratio={h1_ratio:.2f} bull={h1_bull})", flush=True)
                                         continue
                                     if sig["direction"] == "SHORT" and not (h1_bear and h1_ratio >= 0.35):
+                                        print(f"[SCAN] {sym} {interval}: SHORT — 1H CANDLE BLOCK (ratio={h1_ratio:.2f} bear={h1_bear})", flush=True)
                                         continue
 
                         # ── Capital weight: skip if config is in penalty zone ──
@@ -895,12 +1039,14 @@ def _background_scanner() -> None:
                             sig = dict(sig)
                             sig["reason"] = f"[size={cap_w:.2f}×] " + sig.get("reason", "")
 
+                        if not _warmup_complete:
+                            print(f"[WARMUP] {sym} {interval}: {sig['direction']} score={sig.get('score',0):.1f} — observation only, skipping log", flush=True)
+                            continue
+
                         trade_id = f"{sym}_{interval}_{sig['direction']}_{int(time.time())}"
                         cur_px   = sig.get("current_price", sig["entry"])
                         vwap_val = data.get("vwap") or 0
-                        is_macd  = sig_type == "MACD_EMA_VOL"
-                        # Mean-reversion and squeeze signals are immediate entries
-                        is_immediate = is_macd or sig_type in ("MEAN_REVERSION", "VOL_SQUEEZE")
+                        is_immediate = True   # all signals enter immediately at market price
 
                         trade_data = {
                             "id":               trade_id,
@@ -922,9 +1068,44 @@ def _background_scanner() -> None:
                             "vwap_side":        ("above" if vwap_val and cur_px > vwap_val
                                                  else "below"),
                         }
+                        # Enforce minimum 1:1 R:R
+                        _entry = sig.get("entry") or sig.get("price")
+                        _tp    = sig.get("target")
+                        _sl    = sig.get("stop")
+                        _dir   = sig.get("direction")
+                        if _entry and _tp and _sl and _entry != _sl:
+                            if _dir == "LONG":
+                                _rr = (_tp - _entry) / (_entry - _sl)
+                            else:
+                                _rr = (_entry - _tp) / (_sl - _entry)
+                            if _rr < 1.0:
+                                print(f"[SKIP RR] {sym} {interval}: R:R={_rr:.2f} < 1.0, skipping", flush=True)
+                                continue
+
+                        # Fee-adjusted minimum profit gate
+                        # TP distance must exceed round-trip fees (0.2%) to yield any net gain
+                        _entry = sig.get("entry") or sig.get("price")
+                        _tp    = sig.get("target")
+                        _dir   = sig.get("direction")
+                        if _entry and _tp and _entry > 0:
+                            if _dir == "LONG":
+                                _net_pct = (_tp - _entry) / _entry - FEE_RATE
+                            else:
+                                _net_pct = (_entry - _tp) / _entry - FEE_RATE
+                            if _net_pct <= 0:
+                                print(
+                                    f"[SKIP FEE] {sym} {interval}: TP distance "
+                                    f"{abs(_tp - _entry) / _entry * 100:.3f}% doesn't cover "
+                                    f"fees (0.2%), skipping",
+                                    flush=True,
+                                )
+                                continue
+
                         logged = learning.log_trade(trade_data)
                         if logged:
                             scan_signals += 1
+                            print(f"[SIGNAL] {sym} {interval}: {sig['direction']} score={sig['score']:.1f}"
+                                  f" entry={sig['entry']} tp={sig['target']} sl={sig['stop']}", flush=True)
                             notifications.send_signal_alert({
                                 "symbol":        sym,
                                 "interval":      interval,
@@ -939,6 +1120,17 @@ def _background_scanner() -> None:
                                 "pending":       not is_immediate,
                                 "current_price": cur_px,
                             })
+                            # Auto-update TradingView Pine Script clipboard
+                            try:
+                                import subprocess
+                                subprocess.Popen(
+                                    ["python3", os.path.join(os.path.dirname(__file__), "gen_pinescript.py")],
+                                    stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL
+                                )
+                                print(f"[PINESCRIPT] Auto-updated clipboard for {sym} {interval} trade", flush=True)
+                            except Exception as _e:
+                                print(f"[PINESCRIPT] Could not auto-update: {_e}", flush=True)
 
                     # ── Bar-accurate TP/SL resolution ─────────────────────────
                     scan_closes += _resolve_open_trades(sym, interval)
@@ -978,6 +1170,11 @@ def _background_scanner() -> None:
         _scanner_status["last_scan_at"]    = now_iso
         _scanner_status["signals_logged"]  += scan_signals
         _scanner_status["trades_closed"]   += scan_closes
+        print(f"[SCAN CYCLE] complete — {scan_signals} signal(s), {scan_closes} close(s)", flush=True)
+
+        if not _warmup_complete:
+            _warmup_complete = True
+            print("[WARMUP] complete — new signals will be logged from next cycle onward", flush=True)
 
         # Rebalance per-config capital weights every sweep
         try:
@@ -989,6 +1186,7 @@ def _background_scanner() -> None:
 
 
 threading.Thread(target=_background_scanner, daemon=True).start()
+threading.Thread(target=_price_monitor_loop, daemon=True).start()
 
 
 # ── Weekly review job ─────────────────────────────────────────────────────────
@@ -1677,6 +1875,511 @@ def config_weights():
         "weights":     weights,
         "description": "1.5× = outperforming (scale up), 1.0× = neutral, 0.25× = underperforming (scale down)",
     })
+
+
+# ── Trade Chart Page ──────────────────────────────────────────────────────────
+
+@app.route("/chart")
+def trade_charts():
+    """
+    Interactive candlestick chart page — one chart per trade with entry/TP/SL lines.
+    Fetches real OHLC data from Binance and renders with Plotly.js.
+    """
+    import urllib.request
+    import urllib.error
+
+    trades = learning.get_trades()
+
+    # ── Fetch OHLC candles for a single trade ────────────────────────────────
+    def fetch_candles(symbol: str, interval: str, opened_at_str: str, closed_at_str: str | None):
+        """Return list of {time, open, high, low, close} dicts, or [] on error."""
+        try:
+            # Convert timestamps to ms
+            opened_dt  = pd.Timestamp(opened_at_str)
+            opened_ms  = int(opened_dt.timestamp() * 1000)
+
+            if closed_at_str:
+                closed_dt = pd.Timestamp(closed_at_str)
+                closed_ms = int(closed_dt.timestamp() * 1000)
+            else:
+                closed_ms = int(time.time() * 1000)
+
+            # Candle duration in ms for padding
+            interval_ms = {
+                "1m": 60_000, "5m": 300_000, "15m": 900_000,
+                "30m": 1_800_000, "1h": 3_600_000, "4h": 14_400_000,
+                "1d": 86_400_000, "1w": 604_800_000,
+            }.get(interval, 3_600_000)
+
+            pad        = 10 * interval_ms
+            start_ms   = opened_ms - pad
+            end_ms     = closed_ms + pad
+
+            url = (
+                f"https://api.binance.com/api/v3/klines"
+                f"?symbol={symbol}&interval={interval}"
+                f"&startTime={start_ms}&endTime={end_ms}&limit=200"
+            )
+            req  = urllib.request.Request(url, headers={"User-Agent": "CryptoDashboard/1.0"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                raw = json.loads(resp.read().decode())
+
+            candles = []
+            for k in raw:
+                candles.append({
+                    "time":  k[0],           # open time ms
+                    "open":  float(k[1]),
+                    "high":  float(k[2]),
+                    "low":   float(k[3]),
+                    "close": float(k[4]),
+                })
+            return candles
+        except Exception:
+            return []
+
+    # ── Build per-trade chart data ────────────────────────────────────────────
+    charts_data = []
+    for t in trades:
+        sym      = t.get("symbol", "")
+        interval = t.get("interval", "1h")
+        entry    = float(t.get("entry") or 0)
+        tp       = float(t.get("tp")    or 0)
+        sl       = float(t.get("sl")    or 0)
+        direction = t.get("direction", "")
+        status    = t.get("status", "open")
+        roi_pct   = t.get("roi_pct")
+        opened_at = t.get("opened_at", "")
+        closed_at = t.get("closed_at")
+
+        candles = fetch_candles(sym, interval, opened_at, closed_at)
+
+        roi_str = f"{roi_pct:+.2f}%" if roi_pct is not None else "open"
+        title   = (
+            f"{sym} {interval} {direction} | "
+            f"Entry: {entry} | TP: {tp} | SL: {sl} | {roi_str}"
+        )
+
+        charts_data.append({
+            "id":        t.get("id", ""),
+            "title":     title,
+            "symbol":    sym,
+            "interval":  interval,
+            "direction": direction,
+            "status":    status,
+            "entry":     entry,
+            "tp":        tp,
+            "sl":        sl,
+            "roi_pct":   roi_pct,
+            "opened_at": opened_at,
+            "closed_at": closed_at or "",
+            "candles":   candles,
+        })
+
+    # ── Render HTML ───────────────────────────────────────────────────────────
+    charts_json = json.dumps(charts_data)
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Trade Charts — Crypto Dashboard</title>
+<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{
+    background: #0d1117;
+    color: #e6edf3;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    padding: 20px;
+  }}
+  h1 {{
+    font-size: 1.4rem;
+    margin-bottom: 6px;
+    color: #58a6ff;
+  }}
+  .subtitle {{
+    color: #8b949e;
+    font-size: 0.85rem;
+    margin-bottom: 20px;
+  }}
+  .filters {{
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 20px;
+    align-items: center;
+  }}
+  .filters label {{ font-size: 0.85rem; color: #8b949e; }}
+  .filters select, .filters input {{
+    background: #161b22;
+    border: 1px solid #30363d;
+    color: #e6edf3;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 0.85rem;
+  }}
+  .btn {{
+    background: #21262d;
+    border: 1px solid #30363d;
+    color: #e6edf3;
+    padding: 6px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: background 0.15s;
+  }}
+  .btn:hover {{ background: #30363d; }}
+  .btn.active {{ background: #1f6feb; border-color: #388bfd; }}
+  .summary-bar {{
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 20px;
+    padding: 12px 16px;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    font-size: 0.85rem;
+  }}
+  .stat {{ display: flex; flex-direction: column; gap: 2px; }}
+  .stat-label {{ color: #8b949e; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }}
+  .stat-value {{ font-size: 1rem; font-weight: 600; }}
+  .win  {{ color: #3fb950; }}
+  .loss {{ color: #f85149; }}
+  .open {{ color: #79c0ff; }}
+  .chart-card {{
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 10px;
+    margin-bottom: 20px;
+    overflow: hidden;
+  }}
+  .chart-header {{
+    padding: 12px 16px;
+    border-bottom: 1px solid #21262d;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+  }}
+  .chart-title {{
+    font-size: 0.9rem;
+    font-weight: 600;
+    font-family: monospace;
+  }}
+  .badge {{
+    font-size: 0.75rem;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+    text-transform: uppercase;
+  }}
+  .badge-win    {{ background: #0d4a1f; color: #3fb950; border: 1px solid #238636; }}
+  .badge-loss   {{ background: #4a0d0d; color: #f85149; border: 1px solid #da3633; }}
+  .badge-open   {{ background: #0d2a4a; color: #79c0ff; border: 1px solid #1f6feb; }}
+  .badge-cancelled {{ background: #2d2d2d; color: #8b949e; border: 1px solid #484f58; }}
+  .meta {{
+    padding: 8px 16px;
+    font-size: 0.78rem;
+    color: #8b949e;
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    border-bottom: 1px solid #21262d;
+  }}
+  .meta span {{ display: flex; gap: 4px; align-items: center; }}
+  .plotly-container {{ width: 100%; height: 480px; }}
+  .no-data {{
+    padding: 40px;
+    text-align: center;
+    color: #8b949e;
+    font-size: 0.85rem;
+  }}
+  .hidden {{ display: none !important; }}
+  .page-nav {{
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+  }}
+  .page-info {{ color: #8b949e; font-size: 0.85rem; margin-left: 8px; }}
+</style>
+</head>
+<body>
+
+<h1>📈 Trade Charts</h1>
+<p class="subtitle">Candlestick charts with entry, TP &amp; SL levels for every trade</p>
+
+<div class="filters">
+  <label>Filter:
+    <select id="statusFilter" onchange="applyFilters()">
+      <option value="all">All trades</option>
+      <option value="open">Open</option>
+      <option value="win">Wins</option>
+      <option value="loss">Losses</option>
+      <option value="cancelled">Cancelled</option>
+    </select>
+  </label>
+  <label>Symbol:
+    <select id="symbolFilter" onchange="applyFilters()">
+      <option value="all">All symbols</option>
+    </select>
+  </label>
+  <label>Interval:
+    <select id="intervalFilter" onchange="applyFilters()">
+      <option value="all">All intervals</option>
+    </select>
+  </label>
+  <button class="btn" onclick="applyFilters()">Apply</button>
+  <button class="btn" onclick="resetFilters()">Reset</button>
+</div>
+
+<div class="summary-bar" id="summaryBar"></div>
+
+<div class="page-nav" id="pageNav"></div>
+
+<div id="chartsContainer"></div>
+
+<script>
+const ALL_TRADES = {charts_json};
+
+const PAGE_SIZE = 10;
+let currentPage = 1;
+let filteredTrades = [];
+
+function fmt(n) {{
+  if (n === null || n === undefined) return '—';
+  return Number(n).toLocaleString(undefined, {{maximumFractionDigits: 8, minimumFractionDigits: 0}});
+}}
+
+function fmtDate(s) {{
+  if (!s) return '—';
+  try {{ return new Date(s).toLocaleString(); }} catch(e) {{ return s; }}
+}}
+
+function badgeClass(status) {{
+  return 'badge badge-' + (status || 'open');
+}}
+
+function buildSummary(trades) {{
+  const wins = trades.filter(t => t.status === 'win');
+  const losses = trades.filter(t => t.status === 'loss');
+  const open = trades.filter(t => t.status === 'open');
+  const closed = wins.concat(losses);
+  const winRate = closed.length ? (wins.length / closed.length * 100).toFixed(1) : '—';
+  const totalRoi = closed.reduce((s, t) => s + (t.roi_pct || 0), 0).toFixed(2);
+  const avgRoi = closed.length ? (closed.reduce((s, t) => s + (t.roi_pct || 0), 0) / closed.length).toFixed(2) : '—';
+
+  return `
+    <div class="stat"><span class="stat-label">Total</span><span class="stat-value">${{trades.length}}</span></div>
+    <div class="stat"><span class="stat-label">Open</span><span class="stat-value open">${{open.length}}</span></div>
+    <div class="stat"><span class="stat-label">Wins</span><span class="stat-value win">${{wins.length}}</span></div>
+    <div class="stat"><span class="stat-label">Losses</span><span class="stat-value loss">${{losses.length}}</span></div>
+    <div class="stat"><span class="stat-label">Win Rate</span><span class="stat-value">${{winRate}}%</span></div>
+    <div class="stat"><span class="stat-label">Total ROI</span><span class="stat-value ${{parseFloat(totalRoi) >= 0 ? 'win' : 'loss'}}">${{totalRoi}}%</span></div>
+    <div class="stat"><span class="stat-label">Avg ROI</span><span class="stat-value ${{parseFloat(avgRoi) >= 0 ? 'win' : 'loss'}}">${{avgRoi !== '—' ? avgRoi + '%' : '—'}}</span></div>
+  `;
+}}
+
+function buildChart(trade, divId) {{
+  const candles = trade.candles || [];
+  if (!candles.length) return false;
+
+  const dates = candles.map(c => new Date(c.time).toISOString());
+  const open  = candles.map(c => c.open);
+  const high  = candles.map(c => c.high);
+  const low   = candles.map(c => c.low);
+  const close = candles.map(c => c.close);
+
+  const tFirst = dates[0];
+  const tLast  = dates[dates.length - 1];
+
+  const candleTrace = {{
+    type: 'candlestick',
+    x: dates, open, high, low, close,
+    name: trade.symbol,
+    increasing: {{ line: {{ color: '#3fb950' }}, fillcolor: '#238636' }},
+    decreasing: {{ line: {{ color: '#f85149' }}, fillcolor: '#da3633' }},
+  }};
+
+  // Horizontal level lines
+  const lineShapes = [
+    {{ price: trade.entry, color: '#79c0ff', label: `Entry ${{fmt(trade.entry)}}`,  dash: 'dot' }},
+    {{ price: trade.tp,    color: '#3fb950', label: `TP ${{fmt(trade.tp)}}`,         dash: 'dash' }},
+    {{ price: trade.sl,    color: '#f85149', label: `SL ${{fmt(trade.sl)}}`,         dash: 'dash' }},
+  ].filter(l => l.price > 0);
+
+  const shapes = lineShapes.map(l => ({{
+    type: 'line',
+    x0: tFirst, x1: tLast,
+    y0: l.price, y1: l.price,
+    line: {{ color: l.color, width: 1.5, dash: l.dash }},
+  }}));
+
+  const annotations = lineShapes.map(l => ({{
+    x: tLast,
+    y: l.price,
+    xref: 'x', yref: 'y',
+    text: l.label,
+    showarrow: false,
+    xanchor: 'right',
+    font: {{ color: l.color, size: 11 }},
+    bgcolor: 'rgba(13,17,23,0.75)',
+    bordercolor: l.color,
+    borderwidth: 1,
+    borderpad: 3,
+  }}));
+
+  const layout = {{
+    paper_bgcolor: '#161b22',
+    plot_bgcolor:  '#0d1117',
+    font: {{ color: '#e6edf3', size: 11 }},
+    margin: {{ l: 60, r: 120, t: 20, b: 40 }},
+    xaxis: {{
+      type: 'date',
+      rangeslider: {{ visible: false }},
+      gridcolor: '#21262d',
+      linecolor: '#30363d',
+    }},
+    yaxis: {{
+      gridcolor: '#21262d',
+      linecolor: '#30363d',
+      tickformat: '.4~f',
+    }},
+    shapes,
+    annotations,
+    hovermode: 'x unified',
+    showlegend: false,
+  }};
+
+  Plotly.newPlot(divId, [candleTrace], layout, {{
+    responsive: true,
+    displayModeBar: false,
+  }});
+  return true;
+}}
+
+function renderCharts(trades) {{
+  const container = document.getElementById('chartsContainer');
+  container.innerHTML = '';
+  if (!trades.length) {{
+    container.innerHTML = '<div class="no-data">No trades match the current filter.</div>';
+    return;
+  }}
+
+  // Pagination
+  const totalPages = Math.ceil(trades.length / PAGE_SIZE);
+  if (currentPage > totalPages) currentPage = 1;
+  const start = (currentPage - 1) * PAGE_SIZE;
+  const pageTrades = trades.slice(start, start + PAGE_SIZE);
+
+  renderPageNav(trades.length, totalPages);
+
+  pageTrades.forEach((trade, idx) => {{
+    const divId = `chart_${{start + idx}}`;
+    const roiColor = trade.roi_pct === null ? '' : (trade.roi_pct >= 0 ? 'win' : 'loss');
+    const roiStr = trade.roi_pct !== null ? `<span class="${{roiColor}}">${{(trade.roi_pct >= 0 ? '+' : '') + trade.roi_pct.toFixed(2)}}%</span>` : '';
+
+    const card = document.createElement('div');
+    card.className = 'chart-card';
+    card.innerHTML = `
+      <div class="chart-header">
+        <span class="chart-title">${{trade.title}}</span>
+        <span class="${{badgeClass(trade.status)}}">${{trade.status}}</span>
+      </div>
+      <div class="meta">
+        <span>📅 Opened: ${{fmtDate(trade.opened_at)}}</span>
+        ${{trade.closed_at ? `<span>🏁 Closed: ${{fmtDate(trade.closed_at)}}</span>` : ''}}
+        ${{trade.roi_pct !== null ? `<span>💰 ROI: ${{roiStr}}</span>` : ''}}
+        <span>🔷 Entry: ${{fmt(trade.entry)}}</span>
+        <span>✅ TP: <span class="win">${{fmt(trade.tp)}}</span></span>
+        <span>🛑 SL: <span class="loss">${{fmt(trade.sl)}}</span></span>
+      </div>
+      ${{trade.candles && trade.candles.length
+        ? `<div class="plotly-container" id="${{divId}}"></div>`
+        : `<div class="no-data">⚠ No candle data available for this trade</div>`
+      }}
+    `;
+    container.appendChild(card);
+
+    if (trade.candles && trade.candles.length) {{
+      setTimeout(() => buildChart(trade, divId), 0);
+    }}
+  }});
+}}
+
+function renderPageNav(total, totalPages) {{
+  const nav = document.getElementById('pageNav');
+  nav.innerHTML = '';
+  if (totalPages <= 1) return;
+
+  const info = document.createElement('span');
+  info.className = 'page-info';
+  info.textContent = `Showing ${{Math.min((currentPage-1)*PAGE_SIZE+1, total)}}–${{Math.min(currentPage*PAGE_SIZE, total)}} of ${{total}} trades`;
+  nav.appendChild(info);
+
+  const prev = document.createElement('button');
+  prev.className = 'btn' + (currentPage === 1 ? ' disabled' : '');
+  prev.textContent = '← Prev';
+  prev.onclick = () => {{ if (currentPage > 1) {{ currentPage--; renderCharts(filteredTrades); window.scrollTo(0,0); }} }};
+  nav.appendChild(prev);
+
+  for (let p = 1; p <= totalPages; p++) {{
+    const btn = document.createElement('button');
+    btn.className = 'btn' + (p === currentPage ? ' active' : '');
+    btn.textContent = p;
+    btn.onclick = ((_p) => () => {{ currentPage = _p; renderCharts(filteredTrades); window.scrollTo(0,0); }})(p);
+    nav.appendChild(btn);
+  }}
+
+  const next = document.createElement('button');
+  next.className = 'btn' + (currentPage === totalPages ? ' disabled' : '');
+  next.textContent = 'Next →';
+  next.onclick = () => {{ if (currentPage < totalPages) {{ currentPage++; renderCharts(filteredTrades); window.scrollTo(0,0); }} }};
+  nav.appendChild(next);
+}}
+
+function populateFilters() {{
+  const symbols   = [...new Set(ALL_TRADES.map(t => t.symbol))].sort();
+  const intervals = [...new Set(ALL_TRADES.map(t => t.interval))].sort();
+  const symSel = document.getElementById('symbolFilter');
+  const ivSel  = document.getElementById('intervalFilter');
+  symbols.forEach(s => {{ const o = document.createElement('option'); o.value = s; o.textContent = s; symSel.appendChild(o); }});
+  intervals.forEach(i => {{ const o = document.createElement('option'); o.value = i; o.textContent = i; ivSel.appendChild(o); }});
+}}
+
+function applyFilters() {{
+  const st  = document.getElementById('statusFilter').value;
+  const sym = document.getElementById('symbolFilter').value;
+  const iv  = document.getElementById('intervalFilter').value;
+  filteredTrades = ALL_TRADES.filter(t =>
+    (st  === 'all' || t.status   === st)  &&
+    (sym === 'all' || t.symbol   === sym) &&
+    (iv  === 'all' || t.interval === iv)
+  );
+  currentPage = 1;
+  document.getElementById('summaryBar').innerHTML = buildSummary(filteredTrades);
+  renderCharts(filteredTrades);
+}}
+
+function resetFilters() {{
+  document.getElementById('statusFilter').value   = 'all';
+  document.getElementById('symbolFilter').value   = 'all';
+  document.getElementById('intervalFilter').value = 'all';
+  applyFilters();
+}}
+
+// Init
+populateFilters();
+applyFilters();
+</script>
+</body>
+</html>"""
+
+    return html
 
 
 if __name__ == "__main__":

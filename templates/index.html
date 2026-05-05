@@ -153,7 +153,122 @@
       .stat { min-width: 90px; }
       .stat-value { font-size: 15px; }
     }
+
+    /* ── Learning engine section ─────────────────────────────────────────── */
+    .learning-section {
+      padding: 16px 24px;
+      border-top: 1px solid #1e1e1e;
+      background: #111;
+    }
+
+    .learning-section h2 {
+      font-size: 10px;
+      color: #555;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 12px;
+    }
+
+    .learning-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .factor-card {
+      background: #0f0f0f;
+      border: 1px solid #222;
+      border-radius: 6px;
+      padding: 8px 14px;
+      min-width: 140px;
+    }
+
+    .factor-name {
+      font-size: 10px;
+      color: #555;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 3px;
+    }
+
+    .factor-bar-wrap {
+      background: #1a1a1a;
+      border-radius: 3px;
+      height: 4px;
+      margin-bottom: 4px;
+      overflow: hidden;
+    }
+
+    .factor-bar {
+      height: 4px;
+      border-radius: 3px;
+      background: #4ade80;
+      transition: width 0.4s;
+    }
+
+    .factor-weight {
+      font-size: 13px;
+      font-weight: 600;
+      color: #e0e0e0;
+    }
+
+    .learning-meta {
+      font-size: 11px;
+      color: #555;
+      margin-top: 8px;
+    }
+
+    /* ── Charts section ──────────────────────────────────────────────────── */
+    .charts-section {
+      padding: 20px 24px 32px;
+      border-top: 1px solid #1e1e1e;
+    }
+
+    .charts-section h2 {
+      font-size: 10px;
+      color: #555;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 16px;
+    }
+
+    .charts-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+
+    .chart-card {
+      background: #111;
+      border: 1px solid #222;
+      border-radius: 6px;
+      overflow: hidden;
+      flex: 0 0 calc(50% - 8px);
+      min-width: 300px;
+    }
+
+    .chart-title {
+      padding: 10px 14px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      border-bottom: 1px solid #1e1e1e;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .chart-container {
+      height: 300px;
+      width: 100%;
+    }
+
+    @media (max-width: 768px) {
+      .chart-card { flex: 0 0 100%; }
+      .charts-section { padding-left: 12px; padding-right: 12px; }
+    }
   </style>
+  <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
 
@@ -168,6 +283,9 @@
   <div class="stat"><div class="stat-label">Total R</div><div class="stat-value" id="stat-r">—</div></div>
   <div class="stat"><div class="stat-label">Avg R</div><div class="stat-value" id="stat-avg-r">—</div></div>
   <div class="stat"><div class="stat-label">Open</div><div class="stat-value neutral" id="stat-open">—</div></div>
+  <div class="stat"><div class="stat-label">All-time ROI</div><div class="stat-value" id="stat-roi-all">—</div></div>
+  <div class="stat"><div class="stat-label">Weekly ROI</div><div class="stat-value" id="stat-roi-week">—</div></div>
+  <div class="stat"><div class="stat-label">Daily ROI</div><div class="stat-value" id="stat-roi-day">—</div></div>
 </div>
 
 <div class="table-wrap">
@@ -185,14 +303,30 @@
         <th>Status</th>
         <th>Result</th>
         <th>P&amp;L (R)</th>
+        <th>ROI %</th>
         <th>Opened</th>
         <th>Closed</th>
       </tr>
     </thead>
     <tbody id="trades-body">
-      <tr><td colspan="13" class="empty">Loading trades…</td></tr>
+      <tr><td colspan="14" class="empty">Loading trades…</td></tr>
     </tbody>
   </table>
+</div>
+
+<div class="learning-section">
+  <h2>Learning Engine — Factor Weights</h2>
+  <div class="learning-grid" id="learning-grid">
+    <div class="empty" style="padding: 20px; color: #333;">Loading…</div>
+  </div>
+  <div class="learning-meta" id="learning-meta"></div>
+</div>
+
+<div class="charts-section">
+  <h2>Open Trade Charts</h2>
+  <div class="charts-grid" id="charts-grid">
+    <div class="empty" style="padding: 40px; color: #333;">Loading charts…</div>
+  </div>
 </div>
 
 <script>
@@ -238,6 +372,16 @@
     });
   }
 
+  function roiCell(t) {
+    if (!t.close_price || !t.entry) return '<span class="pnl-nil">—</span>';
+    const entry = parseFloat(t.entry), close = parseFloat(t.close_price);
+    if (!isFinite(entry) || !isFinite(close) || entry === 0) return '<span class="pnl-nil">—</span>';
+    const dir = (t.direction || 'LONG').toUpperCase();
+    const pct = dir === 'LONG' ? (close - entry) / entry * 100 : (entry - close) / entry * 100;
+    const sign = pct >= 0 ? '+' : '';
+    return `<span class="${pct >= 0 ? 'pnl-pos' : 'pnl-neg'}">${sign}${pct.toFixed(3)}%</span>`;
+  }
+
   // ─── render ────────────────────────────────────────────────────────────────
 
   function renderSummary(trades) {
@@ -278,12 +422,42 @@
     }
 
     el('stat-open').textContent = open.length;
+
+    // ── ROI stats (sum roi_pct for closed trades) ──────────────────────────
+    const now = Date.now();
+    const DAY  = 86_400_000;
+    const WEEK = 7 * DAY;
+
+    function computeRoi(t) {
+      if (!t.close_price || !t.entry) return 0;
+      const entry = parseFloat(t.entry), close = parseFloat(t.close_price);
+      if (!isFinite(entry) || !isFinite(close) || entry === 0) return 0;
+      const dir = (t.direction || 'LONG').toUpperCase();
+      return dir === 'LONG' ? (close - entry) / entry * 100 : (entry - close) / entry * 100;
+    }
+    function roiSum(trades) {
+      return trades.reduce((s, t) => s + computeRoi(t), 0);
+    }
+
+    function setRoi(elId, pct) {
+      if (!isFinite(pct) || pct === 0) {
+        el(elId).textContent = '—';
+        el(elId).className = 'stat-value';
+        return;
+      }
+      el(elId).textContent = (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
+      el(elId).className = 'stat-value ' + (pct >= 0 ? 'positive' : 'negative');
+    }
+
+    setRoi('stat-roi-all',  roiSum(closed));
+    setRoi('stat-roi-week', roiSum(closed.filter(t => t.closed_at && (now - new Date(t.closed_at).getTime()) < WEEK)));
+    setRoi('stat-roi-day',  roiSum(closed.filter(t => t.closed_at && (now - new Date(t.closed_at).getTime()) < DAY)));
   }
 
   function renderTrades(trades) {
     const tbody = document.getElementById('trades-body');
     if (!trades.length) {
-      tbody.innerHTML = '<tr><td colspan="13" class="empty">No trades yet.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="14" class="empty">No trades yet.</td></tr>';
       return;
     }
 
@@ -329,10 +503,168 @@
         <td>${statusBadge}</td>
         <td>${resBadge}</td>
         <td>${pnlCell}</td>
+        <td>${roiCell(t)}</td>
         <td class="ts">${fmtTime(t.opened_at)}</td>
         <td class="ts">${fmtTime(t.closed_at)}</td>
       </tr>`;
     }).join('');
+  }
+
+  // ─── charts ────────────────────────────────────────────────────────────────
+
+  async function renderCharts(openTrades) {
+    const grid = document.getElementById('charts-grid');
+    grid.innerHTML = '';
+
+    if (!openTrades.length) {
+      grid.innerHTML = '<div class="empty" style="padding: 40px; color: #333;">No open trades to chart.</div>';
+      return;
+    }
+
+    for (const trade of openTrades) {
+      const sym = trade.symbol || 'BTCUSDT';
+      const tf  = trade.interval || '1h';
+      const dir = (trade.direction || 'LONG').toUpperCase();
+
+      const card = document.createElement('div');
+      card.className = 'chart-card';
+
+      const titleEl = document.createElement('div');
+      titleEl.className = 'chart-title';
+      const badge = dir === 'LONG'
+        ? '<span class="badge badge-long">LONG</span>'
+        : '<span class="badge badge-short">SHORT</span>';
+      titleEl.innerHTML = `<span class="symbol">${sym}</span><span class="tf">${tf}</span>${badge}`;
+
+      const containerEl = document.createElement('div');
+      containerEl.className = 'chart-container';
+
+      card.appendChild(titleEl);
+      card.appendChild(containerEl);
+      grid.appendChild(card);
+
+      const chart = LightweightCharts.createChart(containerEl, {
+        layout:          { background: { color: '#111' }, textColor: '#888' },
+        grid:            { vertLines: { color: '#1a1a1a' }, horzLines: { color: '#1a1a1a' } },
+        crosshair:       { mode: LightweightCharts.CrosshairMode.Normal },
+        rightPriceScale: { borderColor: '#222' },
+        timeScale:       { borderColor: '#222', timeVisible: true, secondsVisible: false },
+        width:           containerEl.clientWidth || 600,
+        height:          300,
+      });
+
+      const series = chart.addCandlestickSeries({
+        upColor:          '#4ade80', downColor:        '#f87171',
+        borderUpColor:    '#4ade80', borderDownColor:  '#f87171',
+        wickUpColor:      '#4ade80', wickDownColor:    '#f87171',
+      });
+
+      if (trade.entry != null) {
+        series.createPriceLine({
+          price: parseFloat(trade.entry), color: '#ffffff',
+          lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, title: 'Entry',
+        });
+      }
+      if (trade.tp != null) {
+        series.createPriceLine({
+          price: parseFloat(trade.tp), color: '#4ade80',
+          lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Solid, title: 'TP',
+        });
+      }
+      if (trade.sl != null) {
+        series.createPriceLine({
+          price: parseFloat(trade.sl), color: '#f87171',
+          lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Solid, title: 'SL',
+        });
+      }
+
+      try {
+        const r    = await fetch(`/api/chart/${sym}/${tf}`);
+        const data = await r.json();
+        // API returns {candles:[...], ema200, rsi, ...} — candles at top level
+        const raw = Array.isArray(data.candles) ? data.candles
+          : (Array.isArray(data) ? data : []);
+        if (raw.length) {
+          // Time is already Unix seconds (~1.7B). LightweightCharts needs integer seconds.
+          const candles = raw.map(c => ({
+            time:  Math.floor(c.time),
+            open:  parseFloat(c.open),
+            high:  parseFloat(c.high),
+            low:   parseFloat(c.low),
+            close: parseFloat(c.close),
+          }));
+          // Sort by time ascending and deduplicate
+          candles.sort((a, b) => a.time - b.time);
+          const seen = new Set();
+          const unique = candles.filter(c => { if (seen.has(c.time)) return false; seen.add(c.time); return true; });
+          series.setData(unique);
+          chart.timeScale().fitContent();
+        }
+      } catch (e) {
+        console.error(`chart fetch error for ${sym}`, e);
+      }
+
+      new ResizeObserver(() => {
+        chart.applyOptions({ width: containerEl.clientWidth });
+      }).observe(containerEl);
+    }
+  }
+
+  // ─── learning engine ──────────────────────────────────────────────────────
+
+  async function renderLearning() {
+    const grid = document.getElementById('learning-grid');
+    const meta = document.getElementById('learning-meta');
+    try {
+      const res  = await fetch('/api/learning');
+      const data = await res.json();
+
+      // data may be { weights: {...}, adaptations: N, ... } or { factors: [...] }
+      const weights = data.weights || data.factor_weights || data.factors || data;
+
+      if (!weights || typeof weights !== 'object' || Array.isArray(weights)) {
+        grid.innerHTML = '<div class="empty" style="padding: 20px; color: #555;">No learning data yet.</div>';
+        return;
+      }
+
+      // weights = { adx: {current, default, ratio, status}, bos: {...}, ... }
+      const entries = Object.entries(weights)
+        .filter(([k, v]) => v && typeof v === 'object' && typeof v.current === 'number')
+        .sort((a, b) => b[1].current - a[1].current);
+
+      if (!entries.length) {
+        grid.innerHTML = '<div class="empty" style="padding: 20px; color: #555;">No factor data yet.</div>';
+        return;
+      }
+
+      const maxVal = Math.max(...entries.map(([, v]) => v.current), 0.001);
+      const statusColor = { boosted: '#4ade80', reduced: '#f87171', normal: '#60a5fa' };
+
+      grid.innerHTML = entries.map(([name, w]) => {
+        const pct   = w.current / maxVal * 100;
+        const color = statusColor[w.status] || '#888';
+        const label = name.replace(/_/g, ' ');
+        const delta = w.current - w.default;
+        const sign  = delta >= 0 ? '+' : '';
+        return `<div class="factor-card">
+          <div class="factor-name">${label} <span style="color:${color};font-size:9px;text-transform:uppercase">${w.status}</span></div>
+          <div class="factor-bar-wrap"><div class="factor-bar" style="width:${pct.toFixed(1)}%;background:${color}"></div></div>
+          <div class="factor-weight" style="color:${color}">${w.current.toFixed(2)} <span style="font-size:10px;color:#555">(${sign}${delta.toFixed(2)} vs default)</span></div>
+        </div>`;
+      }).join('');
+
+      const parts = [];
+      if (data.total_closed    != null) parts.push(`${data.total_closed} closed trades`);
+      if (data.overall_win_rate != null) parts.push(`${data.overall_win_rate.toFixed(1)}% overall win rate`);
+      if (data.signal_threshold != null) parts.push(`signal threshold ${data.signal_threshold}`);
+      const lastLog = data.adaptation_log && data.adaptation_log[0];
+      if (lastLog && lastLog.timestamp) parts.push(`last adapted ${new Date(lastLog.timestamp).toLocaleDateString()}`);
+      meta.textContent = parts.join(' · ');
+
+    } catch (e) {
+      grid.innerHTML = '<div class="empty" style="padding: 20px; color: #555;">Learning API unavailable.</div>';
+      console.error('learning fetch error', e);
+    }
   }
 
   // ─── fetch & auto-refresh ──────────────────────────────────────────────────
@@ -346,6 +678,8 @@
       const trades = await res.json();
       renderSummary(trades);
       renderTrades(trades);
+      renderCharts(trades.filter(t => t.status === 'open'));
+      renderLearning();
     } catch (e) {
       console.error('fetch error', e);
     }

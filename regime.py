@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Market Regime Detector — determines per-symbol whether the market is trending
 or ranging, and returns adjusted signal parameters accordingly.
