@@ -3,335 +3,681 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Crypto Dashboard — Trades</title>
+  <title>CryptoBot Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+    :root {
+      --bg:          #f5f5f7;
+      --surface:     #ffffff;
+      --surface-2:   #f9f9fb;
+      --border:      #e5e7eb;
+      --border-2:    #d1d5db;
+      --text:        #111827;
+      --text-2:      #6b7280;
+      --text-3:      #9ca3af;
+      --blue:        #2563eb;
+      --blue-light:  #eff6ff;
+      --blue-dark:   #1d4ed8;
+      --green:       #16a34a;
+      --green-light: #f0fdf4;
+      --red:         #dc2626;
+      --red-light:   #fef2f2;
+      --nav-h:       60px;
+      --radius:      12px;
+      --radius-sm:   8px;
+      --shadow:      0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.04);
+      --shadow-md:   0 4px 6px rgba(0,0,0,.07), 0 2px 4px rgba(0,0,0,.05);
+    }
+
+    html { scroll-behavior: smooth; }
+
     body {
-      background: #0f0f0f;
-      color: #e0e0e0;
-      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
-      font-size: 13px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
       min-height: 100vh;
     }
 
-    header {
-      background: #111;
-      border-bottom: 1px solid #222;
-      padding: 16px 24px;
+    /* ── NAV ── */
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      height: var(--nav-h);
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      flex-wrap: wrap;
+      padding: 0 24px;
+      gap: 0;
+      box-shadow: 0 1px 0 var(--border);
     }
 
-    header h1 {
-      font-size: 15px;
-      font-weight: 600;
-      letter-spacing: 0.05em;
-      color: #fff;
+    .nav-brand {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: -0.01em;
+      margin-right: 32px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      white-space: nowrap;
+    }
+
+    .nav-brand-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--blue);
+      display: inline-block;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex: 1;
+      list-style: none;
+    }
+
+    .nav-links a {
+      display: block;
+      padding: 6px 12px;
+      border-radius: var(--radius-sm);
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-2);
+      text-decoration: none;
+      transition: background .15s, color .15s;
+    }
+
+    .nav-links a:hover { background: var(--bg); color: var(--text); }
+    .nav-links a.active { background: var(--blue-light); color: var(--blue); }
+
+    .nav-right {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 12px;
     }
 
     #refresh-indicator {
-      font-size: 11px;
-      color: #555;
-    }
-
-    #refresh-indicator.refreshing { color: #4ade80; }
-
-    /* Summary bar */
-    .summary {
+      font-size: 12px;
+      color: var(--text-3);
       display: flex;
-      flex-wrap: wrap;
-      gap: 12px;
-      padding: 16px 24px;
-      background: #111;
-      border-bottom: 1px solid #1e1e1e;
+      align-items: center;
+      gap: 6px;
     }
 
-    .stat {
-      background: #1a1a1a;
-      border: 1px solid #222;
-      border-radius: 6px;
-      padding: 10px 16px;
-      min-width: 120px;
+    #refresh-indicator .dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: #d1fae5;
+      border: 1px solid #6ee7b7;
+      transition: background .3s;
     }
+
+    #refresh-indicator.refreshing .dot {
+      background: var(--blue);
+      border-color: var(--blue);
+      animation: pulse 0.8s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    /* Hamburger */
+    .nav-toggle {
+      display: none;
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 4px;
+      color: var(--text-2);
+    }
+
+    .nav-toggle svg { display: block; }
+
+    /* ── MAIN LAYOUT ── */
+    main {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 32px 24px 64px;
+      display: flex;
+      flex-direction: column;
+      gap: 32px;
+    }
+
+    /* ── SECTION HEADERS ── */
+    .section-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+
+    .section-header h2 {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--text);
+      letter-spacing: -0.01em;
+    }
+
+    .section-header .badge-count {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text-2);
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 20px;
+    }
+
+    .section-anchor { scroll-margin-top: calc(var(--nav-h) + 16px); }
+
+    /* ── STAT CARDS ── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 12px;
+    }
+
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      box-shadow: var(--shadow);
+      transition: box-shadow .2s;
+    }
+
+    .stat-card:hover { box-shadow: var(--shadow-md); }
 
     .stat-label {
-      font-size: 10px;
-      color: #555;
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-3);
       text-transform: uppercase;
-      letter-spacing: 0.08em;
-      margin-bottom: 4px;
+      letter-spacing: 0.06em;
+      margin-bottom: 8px;
     }
 
     .stat-value {
-      font-size: 18px;
+      font-size: 24px;
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: -0.02em;
+      line-height: 1;
+    }
+
+    .stat-value.positive { color: var(--green); }
+    .stat-value.negative { color: var(--red); }
+    .stat-value.neutral  { color: var(--blue); }
+
+    /* ── TABLE CARD ── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .card-title {
+      font-size: 14px;
       font-weight: 600;
-      color: #e0e0e0;
+      color: var(--text);
     }
 
-    .stat-value.positive { color: #4ade80; }
-    .stat-value.negative { color: #f87171; }
-    .stat-value.neutral  { color: #60a5fa; }
-
-    /* Table wrapper */
-    .table-wrap {
-      padding: 20px 24px;
-      overflow-x: auto;
-    }
+    /* Table */
+    .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 
     table {
       width: 100%;
       border-collapse: collapse;
-      min-width: 900px;
+      min-width: 860px;
     }
 
     thead th {
-      background: #141414;
-      color: #555;
-      font-size: 10px;
+      background: var(--surface-2);
+      color: var(--text-3);
+      font-size: 11px;
+      font-weight: 600;
       text-transform: uppercase;
-      letter-spacing: 0.08em;
-      padding: 10px 12px;
+      letter-spacing: 0.06em;
+      padding: 10px 16px;
       text-align: left;
-      border-bottom: 1px solid #222;
+      border-bottom: 1px solid var(--border);
       white-space: nowrap;
     }
 
     tbody tr {
-      border-bottom: 1px solid #1a1a1a;
-      transition: background 0.15s;
+      border-bottom: 1px solid var(--border);
+      transition: background .12s;
     }
 
-    tbody tr:hover { background: #161616; }
+    tbody tr:last-child { border-bottom: none; }
+    tbody tr:hover { background: var(--surface-2); }
 
     td {
-      padding: 10px 12px;
+      padding: 12px 16px;
       vertical-align: middle;
       white-space: nowrap;
+      color: var(--text);
     }
 
-    /* Direction badge */
+    /* Badges */
     .badge {
-      display: inline-block;
-      padding: 2px 8px;
-      border-radius: 4px;
+      display: inline-flex;
+      align-items: center;
+      padding: 3px 10px;
+      border-radius: 20px;
       font-size: 11px;
       font-weight: 600;
-      letter-spacing: 0.04em;
+      letter-spacing: 0.03em;
     }
 
-    .badge-long      { background: rgba(74,222,128,0.15); color: #4ade80; border: 1px solid rgba(74,222,128,0.25); }
-    .badge-short     { background: rgba(248,113,113,0.15); color: #f87171; border: 1px solid rgba(248,113,113,0.25); }
-    .badge-open      { background: rgba(96,165,250,0.15); color: #60a5fa; border: 1px solid rgba(96,165,250,0.25); }
-    .badge-closed    { background: rgba(100,116,139,0.15); color: #94a3b8; border: 1px solid rgba(100,116,139,0.25); }
-    .badge-cancelled { background: rgba(100,116,139,0.1); color: #475569; border: 1px solid rgba(100,116,139,0.2); }
-    .badge-win       { background: rgba(74,222,128,0.15); color: #4ade80; border: 1px solid rgba(74,222,128,0.25); }
-    .badge-loss      { background: rgba(248,113,113,0.15); color: #f87171; border: 1px solid rgba(248,113,113,0.25); }
+    .badge-long      { background: #dcfce7; color: #15803d; }
+    .badge-short     { background: #fee2e2; color: #b91c1c; }
+    .badge-open      { background: var(--blue-light); color: var(--blue); }
+    .badge-closed    { background: #f3f4f6; color: #4b5563; }
+    .badge-cancelled { background: #f9fafb; color: #9ca3af; }
+    .badge-win       { background: #dcfce7; color: #15803d; }
+    .badge-loss      { background: #fee2e2; color: #b91c1c; }
 
-    .pnl-pos { color: #4ade80; font-weight: 600; }
-    .pnl-neg { color: #f87171; font-weight: 600; }
-    .pnl-nil { color: #444; }
+    .pnl-pos { color: var(--green); font-weight: 600; }
+    .pnl-neg { color: var(--red); font-weight: 600; }
+    .pnl-nil { color: var(--text-3); }
 
-    .symbol { color: #fff; font-weight: 600; }
-    .price  { color: #c0c0c0; font-family: monospace; }
-    .tf     { color: #888; }
-    .ts     { color: #555; font-size: 11px; }
-    .tp-src { color: #888; font-size: 11px; max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+    .symbol { color: var(--text); font-weight: 600; font-size: 13px; }
+    .price  { color: var(--text-2); font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
+    .tf     { color: var(--text-3); font-size: 12px; font-weight: 500; }
+    .ts     { color: var(--text-3); font-size: 12px; }
+    .tp-src { color: var(--text-3); font-size: 12px; max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
 
     .empty {
       text-align: center;
       padding: 60px 20px;
-      color: #333;
+      color: var(--text-3);
       font-size: 14px;
     }
 
-    @media (max-width: 768px) {
-      header, .summary, .table-wrap { padding-left: 12px; padding-right: 12px; }
-      .stat { min-width: 90px; }
-      .stat-value { font-size: 15px; }
-    }
-
-    /* ── Learning engine section ─────────────────────────────────────────── */
-    .learning-section {
-      padding: 16px 24px;
-      border-top: 1px solid #1e1e1e;
-      background: #111;
-    }
-
-    .learning-section h2 {
-      font-size: 10px;
-      color: #555;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      margin-bottom: 12px;
-    }
-
-    .learning-grid {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
+    /* ── LEARNING ENGINE ── */
+    .factors-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 10px;
+      padding: 20px;
     }
 
     .factor-card {
-      background: #0f0f0f;
-      border: 1px solid #222;
-      border-radius: 6px;
-      padding: 8px 14px;
-      min-width: 140px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 14px 16px;
+      transition: box-shadow .15s;
     }
+
+    .factor-card:hover { box-shadow: var(--shadow-md); }
 
     .factor-name {
-      font-size: 10px;
-      color: #555;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-3);
       text-transform: uppercase;
       letter-spacing: 0.06em;
-      margin-bottom: 3px;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
     }
 
+    .factor-status {
+      font-size: 9px;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 10px;
+      text-transform: uppercase;
+    }
+
+    .status-normal  { background: var(--blue-light); color: var(--blue); }
+    .status-boosted { background: #dcfce7; color: #15803d; }
+    .status-reduced { background: #fee2e2; color: #b91c1c; }
+
     .factor-bar-wrap {
-      background: #1a1a1a;
-      border-radius: 3px;
+      background: var(--border);
+      border-radius: 4px;
       height: 4px;
-      margin-bottom: 4px;
+      margin-bottom: 10px;
       overflow: hidden;
     }
 
-    .factor-bar {
-      height: 4px;
-      border-radius: 3px;
-      background: #4ade80;
-      transition: width 0.4s;
+    .factor-bar { height: 4px; border-radius: 4px; transition: width 0.4s ease; }
+    .bar-normal  { background: var(--blue); }
+    .bar-boosted { background: var(--green); }
+    .bar-reduced { background: var(--red); }
+
+    .factor-value {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: -0.02em;
+      line-height: 1;
     }
 
-    .factor-weight {
-      font-size: 13px;
-      font-weight: 600;
-      color: #e0e0e0;
-    }
-
-    .learning-meta {
+    .factor-delta {
       font-size: 11px;
-      color: #555;
-      margin-top: 8px;
+      color: var(--text-3);
+      margin-top: 3px;
     }
 
-    /* ── Charts section ──────────────────────────────────────────────────── */
-    .charts-section {
-      padding: 20px 24px 32px;
-      border-top: 1px solid #1e1e1e;
-    }
-
-    .charts-section h2 {
-      font-size: 10px;
-      color: #555;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      margin-bottom: 16px;
-    }
-
-    .charts-grid {
+    .learning-meta-bar {
+      padding: 12px 20px;
+      border-top: 1px solid var(--border);
+      font-size: 12px;
+      color: var(--text-3);
       display: flex;
       flex-wrap: wrap;
       gap: 16px;
     }
 
+    .meta-item { display: flex; align-items: center; gap: 6px; }
+    .meta-item span { color: var(--text-2); font-weight: 500; }
+
+    /* ── CHARTS ── */
+    .charts-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(480px, 1fr));
+      gap: 16px;
+      padding: 20px;
+    }
+
     .chart-card {
-      background: #111;
-      border: 1px solid #222;
-      border-radius: 6px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
       overflow: hidden;
-      flex: 0 0 calc(50% - 8px);
-      min-width: 300px;
+      box-shadow: var(--shadow);
     }
 
     .chart-title {
-      padding: 10px 14px;
-      font-size: 11px;
+      padding: 12px 16px;
+      font-size: 13px;
       font-weight: 600;
-      letter-spacing: 0.06em;
-      border-bottom: 1px solid #1e1e1e;
+      border-bottom: 1px solid var(--border);
       display: flex;
       gap: 8px;
       align-items: center;
+      color: var(--text);
     }
 
     .chart-container {
-      height: 300px;
+      height: 280px;
       width: 100%;
     }
 
+    /* ── MOBILE ── */
     @media (max-width: 768px) {
-      .chart-card { flex: 0 0 100%; }
-      .charts-section { padding-left: 12px; padding-right: 12px; }
+      main { padding: 20px 16px 48px; gap: 24px; }
+
+      nav { padding: 0 16px; }
+
+      .nav-links {
+        display: none;
+        position: fixed;
+        top: var(--nav-h);
+        left: 0; right: 0;
+        background: var(--surface);
+        border-bottom: 1px solid var(--border);
+        padding: 8px 16px 16px;
+        flex-direction: column;
+        gap: 2px;
+        box-shadow: var(--shadow-md);
+      }
+
+      .nav-links.open { display: flex; }
+      .nav-links a { padding: 10px 12px; font-size: 14px; }
+      .nav-toggle { display: block; }
+
+      .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+      .stat-card { padding: 14px 16px; }
+      .stat-value { font-size: 20px; }
+
+      .charts-grid { grid-template-columns: 1fr; padding: 12px; }
+      .factors-grid { grid-template-columns: repeat(2, 1fr); padding: 12px; }
+
+      .card-header { padding: 14px 16px; }
+      thead th, td { padding: 10px 12px; }
     }
+
+    @media (max-width: 480px) {
+      .stats-grid { grid-template-columns: repeat(2, 1fr); }
+      .factors-grid { grid-template-columns: 1fr 1fr; }
+    }
+
+    /* ── LIVE INDICATOR ── */
+    .live-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background: #f0fdf4;
+      border: 1px solid #bbf7d0;
+      color: var(--green);
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 10px;
+      border-radius: 20px;
+    }
+
+    .live-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--green);
+      animation: pulse 2s infinite;
+    }
+
+    /* ── SCROLLBAR ── */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--text-3); }
   </style>
-  <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
 
-<header>
-  <h1>TRADES</h1>
-  <span id="refresh-indicator">refreshing in <span id="countdown">30</span>s</span>
-</header>
-
-<div class="summary">
-  <div class="stat"><div class="stat-label">Total</div><div class="stat-value neutral" id="stat-total">—</div></div>
-  <div class="stat"><div class="stat-label">Win Rate</div><div class="stat-value" id="stat-wr">—</div></div>
-  <div class="stat"><div class="stat-label">Total R</div><div class="stat-value" id="stat-r">—</div></div>
-  <div class="stat"><div class="stat-label">Avg R</div><div class="stat-value" id="stat-avg-r">—</div></div>
-  <div class="stat"><div class="stat-label">Open</div><div class="stat-value neutral" id="stat-open">—</div></div>
-  <div class="stat"><div class="stat-label">All-time ROI</div><div class="stat-value" id="stat-roi-all">—</div></div>
-  <div class="stat"><div class="stat-label">Weekly ROI</div><div class="stat-value" id="stat-roi-week">—</div></div>
-  <div class="stat"><div class="stat-label">Daily ROI</div><div class="stat-value" id="stat-roi-day">—</div></div>
-</div>
-
-<div class="table-wrap">
-  <table>
-    <thead>
-      <tr>
-        <th>Symbol</th>
-        <th>TF</th>
-        <th>Dir</th>
-        <th>Entry</th>
-        <th>Stop</th>
-        <th>TP</th>
-        <th>R:R</th>
-        <th>TP Source</th>
-        <th>Status</th>
-        <th>Result</th>
-        <th>P&amp;L (R)</th>
-        <th>ROI %</th>
-        <th>Opened</th>
-        <th>Closed</th>
-      </tr>
-    </thead>
-    <tbody id="trades-body">
-      <tr><td colspan="14" class="empty">Loading trades…</td></tr>
-    </tbody>
-  </table>
-</div>
-
-<div class="learning-section">
-  <h2>Learning Engine — Factor Weights</h2>
-  <div class="learning-grid" id="learning-grid">
-    <div class="empty" style="padding: 20px; color: #333;">Loading…</div>
+<!-- NAV -->
+<nav>
+  <div class="nav-brand">
+    <span class="nav-brand-dot"></span>
+    CryptoBot
   </div>
-  <div class="learning-meta" id="learning-meta"></div>
-</div>
 
-<div class="charts-section">
-  <h2>Open Trade Charts</h2>
-  <div class="charts-grid" id="charts-grid">
-    <div class="empty" style="padding: 40px; color: #333;">Loading charts…</div>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="#overview" class="active">Overview</a></li>
+    <li><a href="#trades">Trades</a></li>
+    <li><a href="#charts">Charts</a></li>
+    <li><a href="#learning">Learning</a></li>
+  </ul>
+
+  <div class="nav-right">
+    <span class="live-pill"><span class="live-dot"></span>Live</span>
+    <div id="refresh-indicator">
+      <span class="dot"></span>
+      <span id="refresh-text">refreshing in <b id="countdown">30</b>s</span>
+    </div>
+    <button class="nav-toggle" id="nav-toggle" aria-label="Menu">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <line x1="3" y1="6" x2="21" y2="6"/>
+        <line x1="3" y1="12" x2="21" y2="12"/>
+        <line x1="3" y1="18" x2="21" y2="18"/>
+      </svg>
+    </button>
   </div>
-</div>
+</nav>
+
+<!-- MAIN -->
+<main>
+
+  <!-- OVERVIEW -->
+  <section id="overview" class="section-anchor">
+    <div class="section-header">
+      <h2>Overview</h2>
+    </div>
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-label">Total Trades</div>
+        <div class="stat-value neutral" id="stat-total">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Win Rate</div>
+        <div class="stat-value" id="stat-wr">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Total R</div>
+        <div class="stat-value" id="stat-r">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Avg R / Trade</div>
+        <div class="stat-value" id="stat-avg-r">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Open Positions</div>
+        <div class="stat-value neutral" id="stat-open">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">All-time ROI</div>
+        <div class="stat-value" id="stat-roi-all">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Weekly ROI</div>
+        <div class="stat-value" id="stat-roi-week">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Daily ROI</div>
+        <div class="stat-value" id="stat-roi-day">—</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- TRADES -->
+  <section id="trades" class="section-anchor">
+    <div class="section-header">
+      <h2>Trades</h2>
+      <span class="badge-count" id="trade-count">0</span>
+    </div>
+    <div class="card">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Symbol</th>
+              <th>TF</th>
+              <th>Dir</th>
+              <th>Entry</th>
+              <th>Stop</th>
+              <th>TP</th>
+              <th>R:R</th>
+              <th>TP Source</th>
+              <th>Status</th>
+              <th>Result</th>
+              <th>P&amp;L (R)</th>
+              <th>ROI %</th>
+              <th>Opened</th>
+              <th>Closed</th>
+            </tr>
+          </thead>
+          <tbody id="trades-body">
+            <tr><td colspan="14" class="empty">Loading trades…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- CHARTS -->
+  <section id="charts" class="section-anchor">
+    <div class="section-header">
+      <h2>Open Trade Charts</h2>
+      <span class="badge-count" id="chart-count">0</span>
+    </div>
+    <div class="card" style="overflow:visible; background:none; border:none; box-shadow:none; padding:0;">
+      <div class="charts-grid" id="charts-grid">
+        <div class="card" style="padding:40px; text-align:center; color:var(--text-3);">No open trades to chart.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- LEARNING ENGINE -->
+  <section id="learning" class="section-anchor">
+    <div class="section-header">
+      <h2>Learning Engine</h2>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">Factor Weights</div>
+        <div id="learning-threshold" style="font-size:12px;color:var(--text-3);"></div>
+      </div>
+      <div class="factors-grid" id="learning-grid">
+        <div class="empty" style="grid-column:1/-1;">Loading…</div>
+      </div>
+      <div class="learning-meta-bar" id="learning-meta"></div>
+    </div>
+  </section>
+
+</main>
 
 <script>
-  // ─── helpers ───────────────────────────────────────────────────────────────
+  // ── Nav mobile toggle ──────────────────────────────────────────────────────
+  document.getElementById('nav-toggle').addEventListener('click', () => {
+    document.getElementById('nav-links').classList.toggle('open');
+  });
 
+  // Close menu when a nav link is clicked
+  document.querySelectorAll('.nav-links a').forEach(a => {
+    a.addEventListener('click', () => {
+      document.getElementById('nav-links').classList.remove('open');
+    });
+  });
+
+  // Active nav link on scroll
+  const sections = ['overview','trades','charts','learning'];
+  const navLinks = {};
+  sections.forEach(id => { navLinks[id] = document.querySelector(`.nav-links a[href="#${id}"]`); });
+
+  const observer = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        sections.forEach(id => navLinks[id] && navLinks[id].classList.remove('active'));
+        const link = navLinks[e.target.id];
+        if (link) link.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-20% 0px -75% 0px' });
+
+  sections.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) observer.observe(el);
+  });
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
   function fmt(n) {
     if (n == null) return '—';
     const v = parseFloat(n);
@@ -366,7 +712,7 @@
     if (!iso) return '—';
     const d = new Date(iso);
     if (isNaN(d)) return '—';
-    return new Date(iso).toLocaleString('en-US', {
+    return d.toLocaleString('en-US', {
       timeZone: 'America/New_York', month: 'short', day: 'numeric',
       hour: 'numeric', minute: '2-digit', hour12: true
     });
@@ -382,8 +728,7 @@
     return `<span class="${pct >= 0 ? 'pnl-pos' : 'pnl-neg'}">${sign}${pct.toFixed(3)}%</span>`;
   }
 
-  // ─── render ────────────────────────────────────────────────────────────────
-
+  // ── Summary ────────────────────────────────────────────────────────────────
   function renderSummary(trades) {
     const closed = trades.filter(t => t.status === 'win' || t.status === 'loss');
     const wins   = trades.filter(t => t.status === 'win');
@@ -400,6 +745,7 @@
     const el = id => document.getElementById(id);
 
     el('stat-total').textContent = trades.length;
+    el('trade-count').textContent = trades.length;
 
     if (wr !== null) {
       el('stat-wr').textContent = wr.toFixed(1) + '%';
@@ -415,18 +761,13 @@
       el('stat-avg-r').textContent = (avgR >= 0 ? '+' : '') + avgR.toFixed(2) + 'R';
       el('stat-avg-r').className   = 'stat-value ' + (avgR >= 0 ? 'positive' : 'negative');
     } else {
-      el('stat-r').textContent     = '—';
-      el('stat-r').className       = 'stat-value';
-      el('stat-avg-r').textContent = '—';
-      el('stat-avg-r').className   = 'stat-value';
+      el('stat-r').textContent     = '—'; el('stat-r').className = 'stat-value';
+      el('stat-avg-r').textContent = '—'; el('stat-avg-r').className = 'stat-value';
     }
 
     el('stat-open').textContent = open.length;
 
-    // ── ROI stats (sum roi_pct for closed trades) ──────────────────────────
-    const now = Date.now();
-    const DAY  = 86_400_000;
-    const WEEK = 7 * DAY;
+    const now = Date.now(), DAY = 86_400_000, WEEK = 7 * DAY;
 
     function computeRoi(t) {
       if (!t.close_price || !t.entry) return 0;
@@ -435,33 +776,30 @@
       const dir = (t.direction || 'LONG').toUpperCase();
       return dir === 'LONG' ? (close - entry) / entry * 100 : (entry - close) / entry * 100;
     }
-    function roiSum(trades) {
-      return trades.reduce((s, t) => s + computeRoi(t), 0);
-    }
 
     function setRoi(elId, pct) {
       if (!isFinite(pct) || pct === 0) {
-        el(elId).textContent = '—';
-        el(elId).className = 'stat-value';
-        return;
+        el(elId).textContent = '—'; el(elId).className = 'stat-value'; return;
       }
       el(elId).textContent = (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
       el(elId).className = 'stat-value ' + (pct >= 0 ? 'positive' : 'negative');
     }
 
+    const roiSum = ts => ts.reduce((s, t) => s + computeRoi(t), 0);
     setRoi('stat-roi-all',  roiSum(closed));
     setRoi('stat-roi-week', roiSum(closed.filter(t => t.closed_at && (now - new Date(t.closed_at).getTime()) < WEEK)));
     setRoi('stat-roi-day',  roiSum(closed.filter(t => t.closed_at && (now - new Date(t.closed_at).getTime()) < DAY)));
   }
 
+  // ── Trades table ───────────────────────────────────────────────────────────
   function renderTrades(trades) {
     const tbody = document.getElementById('trades-body');
     if (!trades.length) {
-      tbody.innerHTML = '<tr><td colspan="14" class="empty">No trades yet.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="14" class="empty">No trades logged yet. Bot is scanning for setups.</td></tr>';
       return;
     }
 
-    tbody.innerHTML = trades.map(t => {
+    tbody.innerHTML = [...trades].reverse().map(t => {
       const dir = (t.direction || '').toUpperCase();
       const st  = (t.status    || '').toLowerCase();
       const r   = calcPnlR(t);
@@ -471,20 +809,20 @@
         : '<span class="badge badge-short">SHORT</span>';
 
       let statusBadge;
-      if (st === 'open')           statusBadge = '<span class="badge badge-open">OPEN</span>';
-      else if (st === 'win' || st === 'loss') statusBadge = '<span class="badge badge-closed">CLOSED</span>';
-      else                         statusBadge = '<span class="badge badge-cancelled">CANCELLED</span>';
+      if (st === 'open')                          statusBadge = '<span class="badge badge-open">OPEN</span>';
+      else if (st === 'win' || st === 'loss')     statusBadge = '<span class="badge badge-closed">CLOSED</span>';
+      else                                        statusBadge = '<span class="badge badge-cancelled">CANCELLED</span>';
 
       let resBadge;
-      if (st === 'win')  resBadge = '<span class="badge badge-win">WIN</span>';
+      if (st === 'win')       resBadge = '<span class="badge badge-win">WIN</span>';
       else if (st === 'loss') resBadge = '<span class="badge badge-loss">LOSS</span>';
-      else               resBadge = '<span class="pnl-nil">—</span>';
+      else                   resBadge = '<span class="pnl-nil">—</span>';
 
       let pnlCell;
       if (r !== null) {
         pnlCell = `<span class="${r >= 0 ? 'pnl-pos' : 'pnl-neg'}">${r >= 0 ? '+' : ''}${r.toFixed(1)}R</span>`;
       } else if (st === 'open') {
-        pnlCell = '<span class="pnl-nil">open</span>';
+        pnlCell = '<span class="badge badge-open" style="font-size:10px;">open</span>';
       } else {
         pnlCell = '<span class="pnl-nil">—</span>';
       }
@@ -510,14 +848,15 @@
     }).join('');
   }
 
-  // ─── charts ────────────────────────────────────────────────────────────────
-
+  // ── Charts ─────────────────────────────────────────────────────────────────
   async function renderCharts(openTrades) {
     const grid = document.getElementById('charts-grid');
+    const countEl = document.getElementById('chart-count');
+    countEl.textContent = openTrades.length;
     grid.innerHTML = '';
 
     if (!openTrades.length) {
-      grid.innerHTML = '<div class="empty" style="padding: 40px; color: #333;">No open trades to chart.</div>';
+      grid.innerHTML = '<div class="card" style="padding:48px; text-align:center; color:var(--text-3); grid-column:1/-1;">No open trades to chart.</div>';
       return;
     }
 
@@ -534,7 +873,7 @@
       const badge = dir === 'LONG'
         ? '<span class="badge badge-long">LONG</span>'
         : '<span class="badge badge-short">SHORT</span>';
-      titleEl.innerHTML = `<span class="symbol">${sym}</span><span class="tf">${tf}</span>${badge}`;
+      titleEl.innerHTML = `<span class="symbol">${sym}</span><span class="tf" style="color:var(--text-3);font-size:12px;">${tf}</span>${badge}`;
 
       const containerEl = document.createElement('div');
       containerEl.className = 'chart-container';
@@ -544,135 +883,119 @@
       grid.appendChild(card);
 
       const chart = LightweightCharts.createChart(containerEl, {
-        layout:          { background: { color: '#111' }, textColor: '#888' },
-        grid:            { vertLines: { color: '#1a1a1a' }, horzLines: { color: '#1a1a1a' } },
+        layout:          { background: { color: '#ffffff' }, textColor: '#9ca3af' },
+        grid:            { vertLines: { color: '#f3f4f6' }, horzLines: { color: '#f3f4f6' } },
         crosshair:       { mode: LightweightCharts.CrosshairMode.Normal },
-        rightPriceScale: { borderColor: '#222' },
-        timeScale:       { borderColor: '#222', timeVisible: true, secondsVisible: false },
+        rightPriceScale: { borderColor: '#e5e7eb' },
+        timeScale:       { borderColor: '#e5e7eb', timeVisible: true, secondsVisible: false },
         width:           containerEl.clientWidth || 600,
-        height:          300,
+        height:          280,
       });
 
       const series = chart.addCandlestickSeries({
-        upColor:          '#4ade80', downColor:        '#f87171',
-        borderUpColor:    '#4ade80', borderDownColor:  '#f87171',
-        wickUpColor:      '#4ade80', wickDownColor:    '#f87171',
+        upColor:         '#16a34a', downColor:       '#dc2626',
+        borderUpColor:   '#16a34a', borderDownColor: '#dc2626',
+        wickUpColor:     '#16a34a', wickDownColor:   '#dc2626',
       });
 
       if (trade.entry != null) {
-        series.createPriceLine({
-          price: parseFloat(trade.entry), color: '#ffffff',
-          lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, title: 'Entry',
-        });
+        series.createPriceLine({ price: parseFloat(trade.entry), color: '#374151', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, title: 'Entry' });
       }
       if (trade.tp != null) {
-        series.createPriceLine({
-          price: parseFloat(trade.tp), color: '#4ade80',
-          lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Solid, title: 'TP',
-        });
+        series.createPriceLine({ price: parseFloat(trade.tp), color: '#16a34a', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Solid, title: 'TP' });
       }
       if (trade.sl != null) {
-        series.createPriceLine({
-          price: parseFloat(trade.sl), color: '#f87171',
-          lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Solid, title: 'SL',
-        });
+        series.createPriceLine({ price: parseFloat(trade.sl), color: '#dc2626', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Solid, title: 'SL' });
       }
 
       try {
         const r    = await fetch(`/api/chart/${sym}/${tf}`);
         const data = await r.json();
-        // API returns {candles:[...], ema200, rsi, ...} — candles at top level
-        const raw = Array.isArray(data.candles) ? data.candles
-          : (Array.isArray(data) ? data : []);
+        const raw  = Array.isArray(data.candles) ? data.candles : (Array.isArray(data) ? data : []);
         if (raw.length) {
-          // Time is already Unix seconds (~1.7B). LightweightCharts needs integer seconds.
           const candles = raw.map(c => ({
-            time:  Math.floor(c.time),
-            open:  parseFloat(c.open),
-            high:  parseFloat(c.high),
-            low:   parseFloat(c.low),
-            close: parseFloat(c.close),
+            time: Math.floor(c.time), open: parseFloat(c.open),
+            high: parseFloat(c.high), low: parseFloat(c.low), close: parseFloat(c.close),
           }));
-          // Sort by time ascending and deduplicate
           candles.sort((a, b) => a.time - b.time);
           const seen = new Set();
-          const unique = candles.filter(c => { if (seen.has(c.time)) return false; seen.add(c.time); return true; });
-          series.setData(unique);
+          series.setData(candles.filter(c => { if (seen.has(c.time)) return false; seen.add(c.time); return true; }));
           chart.timeScale().fitContent();
         }
-      } catch (e) {
-        console.error(`chart fetch error for ${sym}`, e);
-      }
+      } catch (e) { console.error(`chart fetch error for ${sym}`, e); }
 
-      new ResizeObserver(() => {
-        chart.applyOptions({ width: containerEl.clientWidth });
-      }).observe(containerEl);
+      new ResizeObserver(() => { chart.applyOptions({ width: containerEl.clientWidth }); }).observe(containerEl);
     }
   }
 
-  // ─── learning engine ──────────────────────────────────────────────────────
-
+  // ── Learning engine ────────────────────────────────────────────────────────
   async function renderLearning() {
     const grid = document.getElementById('learning-grid');
     const meta = document.getElementById('learning-meta');
+    const thresh = document.getElementById('learning-threshold');
     try {
       const res  = await fetch('/api/learning');
       const data = await res.json();
-
-      // data may be { weights: {...}, adaptations: N, ... } or { factors: [...] }
       const weights = data.weights || data.factor_weights || data.factors || data;
 
       if (!weights || typeof weights !== 'object' || Array.isArray(weights)) {
-        grid.innerHTML = '<div class="empty" style="padding: 20px; color: #555;">No learning data yet.</div>';
+        grid.innerHTML = '<div class="empty" style="grid-column:1/-1;">No learning data yet.</div>';
         return;
       }
 
-      // weights = { adx: {current, default, ratio, status}, bos: {...}, ... }
       const entries = Object.entries(weights)
         .filter(([k, v]) => v && typeof v === 'object' && typeof v.current === 'number')
         .sort((a, b) => b[1].current - a[1].current);
 
       if (!entries.length) {
-        grid.innerHTML = '<div class="empty" style="padding: 20px; color: #555;">No factor data yet.</div>';
+        grid.innerHTML = '<div class="empty" style="grid-column:1/-1;">No factor data yet.</div>';
         return;
       }
 
+      if (data.signal_threshold != null) {
+        thresh.textContent = `Signal threshold: ${data.signal_threshold}`;
+      }
+
       const maxVal = Math.max(...entries.map(([, v]) => v.current), 0.001);
-      const statusColor = { boosted: '#4ade80', reduced: '#f87171', normal: '#60a5fa' };
 
       grid.innerHTML = entries.map(([name, w]) => {
-        const pct   = w.current / maxVal * 100;
-        const color = statusColor[w.status] || '#888';
-        const label = name.replace(/_/g, ' ');
-        const delta = w.current - w.default;
-        const sign  = delta >= 0 ? '+' : '';
+        const pct    = w.current / maxVal * 100;
+        const st     = w.status || 'normal';
+        const delta  = w.current - w.default;
+        const sign   = delta >= 0 ? '+' : '';
+        const label  = name.replace(/_/g, ' ').toUpperCase();
+        const barCls = `bar-${st}`;
+        const stCls  = `status-${st}`;
         return `<div class="factor-card">
-          <div class="factor-name">${label} <span style="color:${color};font-size:9px;text-transform:uppercase">${w.status}</span></div>
-          <div class="factor-bar-wrap"><div class="factor-bar" style="width:${pct.toFixed(1)}%;background:${color}"></div></div>
-          <div class="factor-weight" style="color:${color}">${w.current.toFixed(2)} <span style="font-size:10px;color:#555">(${sign}${delta.toFixed(2)} vs default)</span></div>
+          <div class="factor-name">
+            ${label}
+            <span class="factor-status ${stCls}">${st}</span>
+          </div>
+          <div class="factor-bar-wrap"><div class="factor-bar ${barCls}" style="width:${pct.toFixed(1)}%"></div></div>
+          <div class="factor-value">${w.current.toFixed(2)}</div>
+          <div class="factor-delta">${sign}${delta.toFixed(2)} vs default</div>
         </div>`;
       }).join('');
 
       const parts = [];
-      if (data.total_closed    != null) parts.push(`${data.total_closed} closed trades`);
-      if (data.overall_win_rate != null) parts.push(`${data.overall_win_rate.toFixed(1)}% overall win rate`);
-      if (data.signal_threshold != null) parts.push(`signal threshold ${data.signal_threshold}`);
+      if (data.total_closed     != null) parts.push(`<div class="meta-item">Closed trades <span>${data.total_closed}</span></div>`);
+      if (data.overall_win_rate != null) parts.push(`<div class="meta-item">Win rate <span>${data.overall_win_rate.toFixed(1)}%</span></div>`);
       const lastLog = data.adaptation_log && data.adaptation_log[0];
-      if (lastLog && lastLog.timestamp) parts.push(`last adapted ${new Date(lastLog.timestamp).toLocaleDateString()}`);
-      meta.textContent = parts.join(' · ');
+      if (lastLog && lastLog.timestamp) parts.push(`<div class="meta-item">Last adapted <span>${new Date(lastLog.timestamp).toLocaleDateString()}</span></div>`);
+      meta.innerHTML = parts.join('');
 
     } catch (e) {
-      grid.innerHTML = '<div class="empty" style="padding: 20px; color: #555;">Learning API unavailable.</div>';
+      grid.innerHTML = '<div class="empty" style="grid-column:1/-1;">Learning API unavailable.</div>';
       console.error('learning fetch error', e);
     }
   }
 
-  // ─── fetch & auto-refresh ──────────────────────────────────────────────────
-
+  // ── Fetch & auto-refresh ──────────────────────────────────────────────────
   async function load() {
     const ind = document.getElementById('refresh-indicator');
-    ind.className = 'refreshing';
-    ind.textContent = 'refreshing…';
+    const txt = document.getElementById('refresh-text');
+    ind.classList.add('refreshing');
+    txt.textContent = 'refreshing…';
     try {
       const res    = await fetch('/api/trades');
       const trades = await res.json();
@@ -680,12 +1003,10 @@
       renderTrades(trades);
       renderCharts(trades.filter(t => t.status === 'open'));
       renderLearning();
-    } catch (e) {
-      console.error('fetch error', e);
-    }
+    } catch (e) { console.error('fetch error', e); }
     seconds = 30;
-    ind.className = '';
-    ind.innerHTML = 'refreshing in <span id="countdown">30</span>s';
+    ind.classList.remove('refreshing');
+    txt.innerHTML = 'refreshing in <b id="countdown">30</b>s';
   }
 
   let seconds = 30;
