@@ -817,8 +817,14 @@ def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
             inval = round(last_sh - atr_val, 6)   # fallback if no swing low
 
         # ── Target: next meaningful resistance ABOVE entry
-        #    Priority: prior swing high → bearish FVG fill → EMA200 → EMA50 → 3×ATR
-        prev_sh = structure.get("prev_swing_high")
+        #    Priority: nearest swing high → bearish FVG fill → EMA200 → EMA50
+        #              → historical range (all fetched candles) → 3×ATR fallback
+        # Scan ALL detected swing highs above entry (nearest first)
+        _sh_above = sorted(
+            [p for _, p in swing_highs if p > entry_price]
+        )
+        _best_sh = _sh_above[0] if _sh_above else None
+
         fvg_long = None
         if fvgs:
             candidates = [f["midpoint"] for f in fvgs
@@ -828,8 +834,8 @@ def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
             if candidates:
                 fvg_long = min(candidates)
 
-        if prev_sh and prev_sh > entry_price:
-            target       = prev_sh
+        if _best_sh:
+            target       = _best_sh
             target_basis = "Prior swing high"
             tp_source    = "swing_level"
         elif fvg_long:
@@ -845,16 +851,14 @@ def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
             target_basis = "EMA50 dynamic resistance"
             tp_source    = "ema50"
         else:
-            # ── Historical pattern-based target: highest close in last 50 candles
-            #    above entry — where price has actually been recently
+            # ── Historical range: highest close in ALL fetched candles above entry
             _risk_d      = abs(entry_price - inval)
-            _recent      = df["close"].iloc[-50:]
-            _above       = _recent[_recent > entry_price]
+            _above       = df["close"][df["close"] > entry_price]
             _hist_high   = float(_above.max()) if not _above.empty else float("nan")
             _hist_rr     = (_hist_high - entry_price) / _risk_d if (_risk_d > 0 and not pd.isna(_hist_high)) else 0
             if _hist_rr >= 2.0:
                 target       = round(_hist_high, 6)
-                target_basis = f"Historical range high (50-candle peak, {_hist_rr:.1f}:1)"
+                target_basis = f"Historical range high ({len(df)}-candle peak, {_hist_rr:.1f}:1)"
                 tp_source    = "historical_range"
             else:
                 target       = round(entry_price + 3.0 * atr_val, 6)
@@ -887,8 +891,15 @@ def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
             inval = round(last_sl + atr_val, 6)   # fallback if no swing high
 
         # ── Target: next meaningful support BELOW entry
-        #    Priority: prior swing low → bullish FVG fill → EMA200 → EMA50 → 3×ATR
-        prev_sl = structure.get("prev_swing_low")
+        #    Priority: nearest swing low → bullish FVG fill → EMA200 → EMA50
+        #              → historical range (all fetched candles) → 3×ATR fallback
+        # Scan ALL detected swing lows below entry (nearest first)
+        _sl_below = sorted(
+            [p for _, p in swing_lows if p < entry_price],
+            reverse=True  # descending = nearest to entry first
+        )
+        _best_sl = _sl_below[0] if _sl_below else None
+
         fvg_short = None
         if fvgs:
             candidates = [f["midpoint"] for f in fvgs
@@ -898,8 +909,8 @@ def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
             if candidates:
                 fvg_short = max(candidates)
 
-        if prev_sl and prev_sl < entry_price:
-            target       = prev_sl
+        if _best_sl:
+            target       = _best_sl
             target_basis = "Prior swing low"
             tp_source    = "swing_level"
         elif fvg_short:
@@ -915,16 +926,14 @@ def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
             target_basis = "EMA50 dynamic support"
             tp_source    = "ema50"
         else:
-            # ── Historical pattern-based target: lowest close in last 50 candles
-            #    below entry — where price has actually been recently
+            # ── Historical range: lowest close in ALL fetched candles below entry
             _risk_d      = abs(entry_price - inval)
-            _recent      = df["close"].iloc[-50:]
-            _below       = _recent[_recent < entry_price]
+            _below       = df["close"][df["close"] < entry_price]
             _hist_low    = float(_below.min()) if not _below.empty else float("nan")
             _hist_rr     = (entry_price - _hist_low) / _risk_d if (_risk_d > 0 and not pd.isna(_hist_low)) else 0
             if _hist_rr >= 2.0:
                 target       = round(_hist_low, 6)
-                target_basis = f"Historical range low (50-candle trough, {_hist_rr:.1f}:1)"
+                target_basis = f"Historical range low ({len(df)}-candle trough, {_hist_rr:.1f}:1)"
                 tp_source    = "historical_range"
             else:
                 target       = round(entry_price - 3.0 * atr_val, 6)
