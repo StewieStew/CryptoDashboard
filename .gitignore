@@ -8,3 +8,8 @@ build/
 .DS_Store
 nul
 *.bat
+
+# SQLite database — never commit
+*.db
+*.db-shm
+*.db-wal
