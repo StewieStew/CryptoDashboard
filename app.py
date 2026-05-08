@@ -1509,6 +1509,68 @@ def admin_reset_learning():
     return jsonify({"status": "learning reset", "weights": learning.DEFAULT_WEIGHTS})
 
 
+@app.route("/api/admin/import_trade", methods=["POST"])
+def admin_import_trade():
+    """Insert or replace a single trade record — admin/sync use only."""
+    import learning as _l, json as _json
+    body = request.get_json() or {}
+    required = ["id", "symbol", "interval", "direction", "entry", "tp", "sl",
+                "score", "opened_at", "status"]
+    missing = [f for f in required if f not in body]
+    if missing:
+        return jsonify({"error": f"missing fields: {missing}"}), 400
+    try:
+        with _l._conn() as db:
+            db.execute("""
+                INSERT OR REPLACE INTO trades
+                (id, symbol, interval, direction, entry, tp, sl, score, effective_score,
+                 reason, factors_snapshot, target_basis, tp_source, opened_at, partial_tp,
+                 status, closed_at, close_price, roi_pct, breakeven_activated, partial_hit)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                body["id"], body["symbol"], body["interval"], body["direction"],
+                float(body["entry"]), float(body["tp"]), float(body["sl"]),
+                float(body["score"]), float(body.get("effective_score", body["score"])),
+                body.get("reason", ""),
+                _json.dumps(body["factors_snapshot"]) if isinstance(body.get("factors_snapshot"), dict) else body.get("factors_snapshot", "{}"),
+                body.get("target_basis", ""), body.get("tp_source", "unknown"),
+                body["opened_at"], body.get("partial_tp"),
+                body["status"],
+                body.get("closed_at"), body.get("close_price"), body.get("roi_pct"),
+                int(body.get("breakeven_activated", 0)), int(body.get("partial_hit", 0)),
+            ))
+        return jsonify({"status": "imported", "id": body["id"]})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/admin/set_weights", methods=["POST"])
+def admin_set_weights():
+    """Directly set learning weights and threshold — admin/sync use only."""
+    import learning as _l, json as _json
+    body = request.get_json() or {}
+    weights = body.get("weights")
+    threshold = body.get("threshold")
+    if not weights and threshold is None:
+        return jsonify({"error": "provide weights and/or threshold"}), 400
+    try:
+        with _l._conn() as db:
+            if weights:
+                # Merge with defaults so missing keys keep their default value
+                merged = dict(_l.DEFAULT_WEIGHTS)
+                merged.update({k: float(v) for k, v in weights.items()})
+                db.execute("UPDATE config SET value=? WHERE key='weights'",
+                           (_json.dumps(merged),))
+            if threshold is not None:
+                db.execute("UPDATE config SET value=? WHERE key='signal_threshold'",
+                           (str(float(threshold)),))
+        return jsonify({"status": "weights updated",
+                        "weights": _l.get_weights(),
+                        "threshold": _l.get_threshold()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # ── Backtester routes ─────────────────────────────────────────────────────────
 
 @app.route("/api/backtest/run", methods=["POST"])
