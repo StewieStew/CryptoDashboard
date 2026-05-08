@@ -1062,6 +1062,7 @@ def _background_scanner() -> None:
                             "reason":           sig.get("reason", ""),
                             "factors_snapshot": sig.get("factors_snapshot", {}),
                             "target_basis":     sig.get("target_basis", ""),
+                            "tp_source":        sig.get("tp_source", "unknown"),
                             "opened_at":        datetime.now(timezone.utc).isoformat(),
                             "status":           "open" if is_immediate else "pending",
                             "adx_value":        data.get("adx", {}).get("value", 0),

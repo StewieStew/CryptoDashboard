@@ -1,7 +1,5 @@
 """
 Adaptive Learning Engine — Trade Tracking, Post-Trade Analysis & Signal Optimization.
-
-Storage: SQLite at /data/trades.db (Render Persistent Disk) with fallback to ./trades.db
 """
 from __future__ import annotations
 
@@ -18,12 +16,8 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────
 # STORAGE PATH
 # ─────────────────────────────────────────────
-_DATA_DIR = "/data"
-DB_PATH   = os.environ.get(
-    "DB_PATH",
-    os.path.join(_DATA_DIR, "trades.db") if os.path.isdir(_DATA_DIR)
-    else os.path.expanduser("~/CryptoDashboard/trades.db")
-)
+_HERE     = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.environ.get("DB_PATH", os.path.join(_HERE, "trades.db"))
 _lock     = threading.Lock()
 
 # ─────────────────────────────────────────────
