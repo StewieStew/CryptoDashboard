@@ -1077,7 +1077,7 @@ def _background_scanner() -> None:
                             "vwap_side":        ("above" if vwap_val and cur_px > vwap_val
                                                  else "below"),
                         }
-                        # Enforce minimum 1:1 R:R
+                        # Enforce minimum 3:1 R:R
                         _entry = sig.get("entry") or sig.get("price")
                         _tp    = sig.get("target")
                         _sl    = sig.get("stop")
@@ -1087,8 +1087,8 @@ def _background_scanner() -> None:
                                 _rr = (_tp - _entry) / (_entry - _sl)
                             else:
                                 _rr = (_entry - _tp) / (_sl - _entry)
-                            if _rr < 1.0:
-                                print(f"[SKIP RR] {sym} {interval}: R:R={_rr:.2f} < 1.0, skipping", flush=True)
+                            if _rr < 3.0:
+                                print(f"[SKIP RR] {sym} {interval}: R:R={_rr:.2f} < 3.0, skipping", flush=True)
                                 continue
 
                         # Fee-adjusted minimum profit gate

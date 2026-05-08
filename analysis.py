@@ -808,62 +808,74 @@ def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
             if fib_618 and last_sl and fib_618 > last_sl:
                 entry_price = round(fib_618, 6)
 
-        # ── Stop: below the most recent swing LOW — the structural pivot that
-        #    set up the rally. A close below this level invalidates the thesis.
-        #    stop_multiplier×ATR is a tiny wick buffer only (default 0.1).
-        if last_sl:
-            inval = round(last_sl - stop_multiplier * atr_val, 6)
-        else:
-            inval = round(last_sh - atr_val, 6)   # fallback if no swing low
-
-        # ── Target: next meaningful resistance ABOVE entry
-        #    Priority: nearest swing high → bearish FVG fill → EMA200 → EMA50
-        #              → historical range (all fetched candles) → 3×ATR fallback
-        # Scan ALL detected swing highs above entry (nearest first)
-        _sh_above = sorted(
-            [p for _, p in swing_highs if p > entry_price]
+        # ── Stop: structural swing low with wick buffer.
+        #    If the first structural SL doesn't yield a 3R target, step to a
+        #    deeper swing low to widen the setup — then check again.
+        _sl_below = sorted(
+            [p for _, p in swing_lows if p < entry_price],
+            reverse=True   # nearest to entry first
         )
-        _best_sh = _sh_above[0] if _sh_above else None
 
-        fvg_long = None
-        if fvgs:
-            candidates = [f["midpoint"] for f in fvgs
-                          if f["type"] == "bearish"
-                          and f["midpoint"] > entry_price
-                          and not f.get("filled", False)]   # skip filled FVGs
-            if candidates:
-                fvg_long = min(candidates)
+        def _find_long_target(sl_price, min_rr=3.0):
+            """Return (target, basis, tp_source) ≥ min_rr from sl_price, or None."""
+            _inval   = round(sl_price - stop_multiplier * atr_val, 6)
+            _risk    = abs(entry_price - _inval)
+            if _risk <= 0:
+                return None
+            _min_tp  = entry_price + min_rr * _risk
 
-        if _best_sh:
-            target       = _best_sh
-            target_basis = "Prior swing high"
-            tp_source    = "swing_level"
-        elif fvg_long:
-            target       = round(fvg_long, 6)
-            target_basis = "Bearish FVG fill zone"
-            tp_source    = "fvg"
-        elif ema200_val > entry_price:
-            target       = round(ema200_val, 6)
-            target_basis = "EMA200 dynamic resistance"
-            tp_source    = "ema200"
-        elif ema50_val > entry_price:
-            target       = round(ema50_val, 6)
-            target_basis = "EMA50 dynamic resistance"
-            tp_source    = "ema50"
+            # 1. Swing high ≥ min_tp
+            _sh_ok = sorted([p for _, p in swing_highs if p >= _min_tp])
+            if _sh_ok:
+                return (_sh_ok[0], "Prior swing high", "swing_high")
+
+            # 2. Bearish FVG ≥ min_tp
+            if fvgs:
+                _fvg_ok = [f["midpoint"] for f in fvgs
+                           if f["type"] == "bearish"
+                           and f["midpoint"] >= _min_tp
+                           and not f.get("filled", False)]
+                if _fvg_ok:
+                    return (round(min(_fvg_ok), 6), "Bearish FVG fill zone", "fvg")
+
+            # 3. EMA200 ≥ min_tp
+            if ema200_val >= _min_tp:
+                return (round(ema200_val, 6), "EMA200 dynamic resistance", "ema200")
+
+            # 4. EMA50 ≥ min_tp
+            if ema50_val >= _min_tp:
+                return (round(ema50_val, 6), "EMA50 dynamic resistance", "ema50")
+
+            # 5. Historical range high ≥ min_tp across all fetched candles
+            _above   = df["close"][df["close"] >= _min_tp]
+            if not _above.empty:
+                _hist_h  = float(_above.min())   # closest candle close at/above min_tp
+                _hist_rr = (_hist_h - entry_price) / _risk
+                if _hist_rr >= min_rr:
+                    return (round(_hist_h, 6),
+                            f"Historical range high ({len(df)}-candle, {_hist_rr:.1f}R)",
+                            "historical_range")
+            return None
+
+        # Try structural SL levels from nearest to deepest
+        _chosen_sl   = _sl_below[0] if _sl_below else (last_sl or (entry_price - atr_val))
+        _tp_result   = None
+        for _sl_try in (_sl_below or [_chosen_sl]):
+            _tp_result = _find_long_target(_sl_try)
+            if _tp_result:
+                _chosen_sl = _sl_try
+                break
+
+        if _tp_result:
+            target, target_basis, tp_source = _tp_result
+            inval = round(_chosen_sl - stop_multiplier * atr_val, 6)
         else:
-            # ── Historical range: highest close in ALL fetched candles above entry
-            _risk_d      = abs(entry_price - inval)
-            _above       = df["close"][df["close"] > entry_price]
-            _hist_high   = float(_above.max()) if not _above.empty else float("nan")
-            _hist_rr     = (_hist_high - entry_price) / _risk_d if (_risk_d > 0 and not pd.isna(_hist_high)) else 0
-            if _hist_rr >= 2.0:
-                target       = round(_hist_high, 6)
-                target_basis = f"Historical range high ({len(df)}-candle peak, {_hist_rr:.1f}:1)"
-                tp_source    = "historical_range"
-            else:
-                target       = round(entry_price + 3.0 * atr_val, 6)
-                target_basis = "3×ATR projection"
-                tp_source    = "forced_3r"
+            # No structural 3R target found — mark as no_3r so R:R gate rejects it
+            inval        = round((_sl_below[0] if _sl_below else entry_price - atr_val) - stop_multiplier * atr_val, 6)
+            target       = entry_price   # 0 reward → R:R = 0 → gate rejects
+            target_basis = "No structural 3R target found"
+            tp_source    = "no_3r_target"
+
         bias       = "Long"
         inval_note = (f"{tf} close below ${inval:,.4f} — structural swing low violated, "
                       f"invalidates the bullish BOS")
@@ -883,62 +895,76 @@ def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
             if fib_618 and last_sh and fib_618 < last_sh:
                 entry_price = round(fib_618, 6)
 
-        # ── Stop: above the most recent swing HIGH — the structural pivot that
-        #    set up the drop. A close above this level invalidates the thesis.
-        if last_sh:
-            inval = round(last_sh + stop_multiplier * atr_val, 6)
+        # ── Stop: structural swing HIGH with wick buffer.
+        #    If the nearest swing high doesn't yield a 3R target, step to a
+        #    deeper (higher) swing high to widen the setup — then check again.
+        _sh_above = sorted(
+            [p for _, p in swing_highs if p > entry_price]
+        )  # ascending = nearest to entry first
+
+        def _find_short_target(sh_price, min_rr=3.0):
+            """Return (target, basis, tp_source) ≥ min_rr from sh_price, or None."""
+            _inval  = round(sh_price + stop_multiplier * atr_val, 6)
+            _risk   = abs(_inval - entry_price)
+            if _risk <= 0:
+                return None
+            _min_tp = entry_price - min_rr * _risk   # must be this far BELOW entry
+
+            # 1. Swing low <= min_tp (nearest = highest price = closest to min_tp)
+            _sl_ok = sorted(
+                [p for _, p in swing_lows if p <= _min_tp],
+                reverse=True   # highest first = nearest to entry
+            )
+            if _sl_ok:
+                return (_sl_ok[0], "Prior swing low", "swing_low")
+
+            # 2. Bullish FVG <= min_tp
+            if fvgs:
+                _fvg_ok = [f["midpoint"] for f in fvgs
+                           if f["type"] == "bullish"
+                           and f["midpoint"] <= _min_tp
+                           and not f.get("filled", False)]
+                if _fvg_ok:
+                    return (round(max(_fvg_ok), 6), "Bullish FVG fill zone", "fvg")
+
+            # 3. EMA200 <= min_tp
+            if ema200_val <= _min_tp:
+                return (round(ema200_val, 6), "EMA200 dynamic support", "ema200")
+
+            # 4. EMA50 <= min_tp
+            if ema50_val <= _min_tp:
+                return (round(ema50_val, 6), "EMA50 dynamic support", "ema50")
+
+            # 5. Historical range low <= min_tp across all fetched candles
+            _below = df["close"][df["close"] <= _min_tp]
+            if not _below.empty:
+                _hist_l  = float(_below.max())   # closest candle close at/below min_tp
+                _hist_rr = (entry_price - _hist_l) / _risk
+                if _hist_rr >= min_rr:
+                    return (round(_hist_l, 6),
+                            f"Historical range low ({len(df)}-candle, {_hist_rr:.1f}R)",
+                            "historical_range")
+            return None
+
+        # Try structural SL levels from nearest swing high to deepest
+        _chosen_sh  = _sh_above[0] if _sh_above else (last_sh or (entry_price + atr_val))
+        _tp_result  = None
+        for _sh_try in (_sh_above or [_chosen_sh]):
+            _tp_result = _find_short_target(_sh_try)
+            if _tp_result:
+                _chosen_sh = _sh_try
+                break
+
+        if _tp_result:
+            target, target_basis, tp_source = _tp_result
+            inval = round(_chosen_sh + stop_multiplier * atr_val, 6)
         else:
-            inval = round(last_sl + atr_val, 6)   # fallback if no swing high
+            # No structural 3R target found — mark as no_3r so R:R gate rejects it
+            inval        = round((_sh_above[0] if _sh_above else entry_price + atr_val) + stop_multiplier * atr_val, 6)
+            target       = entry_price   # 0 reward → R:R = 0 → gate rejects
+            target_basis = "No structural 3R target found"
+            tp_source    = "no_3r_target"
 
-        # ── Target: next meaningful support BELOW entry
-        #    Priority: nearest swing low → bullish FVG fill → EMA200 → EMA50
-        #              → historical range (all fetched candles) → 3×ATR fallback
-        # Scan ALL detected swing lows below entry (nearest first)
-        _sl_below = sorted(
-            [p for _, p in swing_lows if p < entry_price],
-            reverse=True  # descending = nearest to entry first
-        )
-        _best_sl = _sl_below[0] if _sl_below else None
-
-        fvg_short = None
-        if fvgs:
-            candidates = [f["midpoint"] for f in fvgs
-                          if f["type"] == "bullish"
-                          and f["midpoint"] < entry_price
-                          and not f.get("filled", False)]   # skip filled FVGs
-            if candidates:
-                fvg_short = max(candidates)
-
-        if _best_sl:
-            target       = _best_sl
-            target_basis = "Prior swing low"
-            tp_source    = "swing_level"
-        elif fvg_short:
-            target       = round(fvg_short, 6)
-            target_basis = "Bullish FVG fill zone"
-            tp_source    = "fvg"
-        elif ema200_val < entry_price:
-            target       = round(ema200_val, 6)
-            target_basis = "EMA200 dynamic support"
-            tp_source    = "ema200"
-        elif ema50_val < entry_price:
-            target       = round(ema50_val, 6)
-            target_basis = "EMA50 dynamic support"
-            tp_source    = "ema50"
-        else:
-            # ── Historical range: lowest close in ALL fetched candles below entry
-            _risk_d      = abs(entry_price - inval)
-            _below       = df["close"][df["close"] < entry_price]
-            _hist_low    = float(_below.min()) if not _below.empty else float("nan")
-            _hist_rr     = (entry_price - _hist_low) / _risk_d if (_risk_d > 0 and not pd.isna(_hist_low)) else 0
-            if _hist_rr >= 2.0:
-                target       = round(_hist_low, 6)
-                target_basis = f"Historical range low ({len(df)}-candle trough, {_hist_rr:.1f}:1)"
-                tp_source    = "historical_range"
-            else:
-                target       = round(entry_price - 3.0 * atr_val, 6)
-                target_basis = "3×ATR projection"
-                tp_source    = "forced_3r"
         bias       = "Short"
         inval_note = (f"{tf} close above ${inval:,.4f} — structural swing high violated, "
                       f"invalidates the bearish BOS")
