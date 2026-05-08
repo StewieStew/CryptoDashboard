@@ -981,6 +981,14 @@ def _background_scanner() -> None:
                         if sig["direction"] == "LONG" and not factors.get("obv"):
                             effective_threshold += 1.0
                             print(f"[SCAN] {sym} {interval}: OBV penalty → threshold={effective_threshold:.1f}", flush=True)
+
+                        # TP-source self-learning: raise threshold for historically poor sources ──
+                        _tp_src = sig.get("tp_source", "unknown")
+                        _tp_adj = learning.tp_source_threshold_adjustment(_tp_src)
+                        if _tp_adj > 0:
+                            effective_threshold += _tp_adj
+                            print(f"[SCAN] {sym} {interval}: tp_source='{_tp_src}' penalty +{_tp_adj:.1f} → threshold={effective_threshold:.1f}", flush=True)
+
                         if score < effective_threshold:
                             print(f"[SCAN] {sym} {interval}: {sig['direction']} score={score:.1f} — THRESHOLD BLOCK (need {effective_threshold:.1f})", flush=True)
                             continue
@@ -1551,8 +1559,9 @@ def admin_set_weights():
     body = request.get_json() or {}
     weights = body.get("weights")
     threshold = body.get("threshold")
-    if not weights and threshold is None:
-        return jsonify({"error": "provide weights and/or threshold"}), 400
+    stop_multiplier = body.get("stop_multiplier")
+    if not weights and threshold is None and stop_multiplier is None:
+        return jsonify({"error": "provide weights, threshold, and/or stop_multiplier"}), 400
     try:
         with _l._conn() as db:
             if weights:
@@ -1564,9 +1573,13 @@ def admin_set_weights():
             if threshold is not None:
                 db.execute("UPDATE config SET value=? WHERE key='signal_threshold'",
                            (str(float(threshold)),))
+            if stop_multiplier is not None:
+                db.execute("UPDATE config SET value=? WHERE key='stop_multiplier'",
+                           (str(float(stop_multiplier)),))
         return jsonify({"status": "weights updated",
                         "weights": _l.get_weights(),
-                        "threshold": _l.get_threshold()})
+                        "threshold": _l.get_threshold(),
+                        "stop_multiplier": _l.get_stop_multiplier()})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

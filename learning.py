@@ -46,7 +46,7 @@ DEFAULT_WEIGHTS = {
     # Core max ≈ 10 pts; FVG + FIB + liquidity are bonus precision factors
 }
 DEFAULT_THRESHOLD = 7.0    # minimum score to fire a signal
-DEFAULT_STOP_MULT = 0.1    # ATR wick buffer on structural stop (was 0.5 main stop)
+DEFAULT_STOP_MULT = 0.3    # ATR wick buffer on structural stop — 0.3×ATR gives ~3-5 pts breathing room on ETH/BTC 15m
 ADAPT_WINDOW      = 8      # trades to look back per-factor
 MIN_SAMPLES       = 2      # minimum trades before adapting a factor
 WEIGHT_FLOOR_ABS  = 1.0    # absolute minimum — no active factor weight can drop below 1.0
@@ -109,7 +109,9 @@ def _init_db():
         # Lower threshold from 8.0 → 7.0 (hard gates now do the heavy filtering)
         db.execute("UPDATE config SET value=? WHERE key='signal_threshold' AND CAST(value AS REAL) = 8.0",
                    (str(DEFAULT_THRESHOLD),))
-        db.execute("UPDATE config SET value=? WHERE key='stop_multiplier' AND CAST(value AS REAL) >= 0.4",
+        # Raise stop_multiplier to new default (0.3) if still at old tight value (0.1)
+        # IMPORTANT: never reset stop_multiplier downward — let the adaptation engine control it
+        db.execute("UPDATE config SET value=? WHERE key='stop_multiplier' AND CAST(value AS REAL) < 0.3",
                    (str(DEFAULT_STOP_MULT),))
         db.commit()
 
@@ -844,15 +846,15 @@ def _adapt(db) -> list:
             threshold = new_thresh
 
     # ── Stop multiplier adaptation ────────────────────────
-    # If recent losses were stopped out within 0.5% of entry → stops too tight
+    # If recent losses were stopped out within 1.0% of entry → stops too tight
     recent_losses = [r for r in closed[:ADAPT_WINDOW] if r["status"] == "loss"]
-    if len(recent_losses) >= 3:
+    if len(recent_losses) >= 2:
         tight = sum(
             1 for r in recent_losses
             if r["sl"] and r["entry"]
-            and abs(float(r["sl"]) - float(r["entry"])) / float(r["entry"]) < 0.005
+            and abs(float(r["sl"]) - float(r["entry"])) / float(r["entry"]) < 0.01
         )
-        if tight >= 3 and stop_mult < 1.0:
+        if tight >= 2 and stop_mult < 1.5:
             new_mult = min(round(stop_mult + 0.1, 1), 1.0)
             if new_mult != stop_mult:
                 changes.append(
@@ -977,6 +979,66 @@ def get_ai_accuracy() -> dict:
     return result
 
 
+def get_tp_source_stats(min_samples: int = 2) -> dict:
+    """
+    Return win rate and trade count for each tp_source from closed trades.
+    Only includes sources with at least min_samples closed trades.
+    """
+    db = _conn()
+    rows = db.execute("""
+        SELECT tp_source, status, COUNT(*) as cnt
+        FROM trades
+        WHERE status IN ('win','loss') AND tp_source IS NOT NULL
+        GROUP BY tp_source, status
+    """).fetchall()
+    db.close()
+
+    raw: dict = {}
+    for row in rows:
+        src = row["tp_source"] or "unknown"
+        if src not in raw:
+            raw[src] = {"wins": 0, "losses": 0}
+        if row["status"] == "win":
+            raw[src]["wins"] = row["cnt"]
+        else:
+            raw[src]["losses"] = row["cnt"]
+
+    result = {}
+    for src, counts in raw.items():
+        total = counts["wins"] + counts["losses"]
+        if total >= min_samples:
+            result[src] = {
+                "win_rate":  round(counts["wins"] / total, 3),
+                "total":     total,
+                "wins":      counts["wins"],
+                "losses":    counts["losses"],
+            }
+    return result
+
+
+def tp_source_threshold_adjustment(tp_source: str, min_samples: int = 2) -> float:
+    """
+    Return extra points to ADD to the effective score threshold based on
+    the tp_source's historical win rate.  Higher penalty = harder to fire.
+
+    Win rate ≥ 55%  →  0.0  (performing fine, no penalty)
+    Win rate 35–55% → +0.5  (mediocre, slight raise)
+    Win rate < 35%  → +1.5  (consistently losing, significant raise)
+
+    Returns 0.0 if the source has fewer than min_samples trades (not enough data).
+    """
+    stats = get_tp_source_stats(min_samples)
+    if tp_source not in stats:
+        return 0.0
+    wr = stats[tp_source]["win_rate"]
+    if wr >= 0.55:
+        return 0.0
+    elif wr >= 0.35:
+        return 0.5
+    else:
+        return 1.5
+
+
 def get_learning_state() -> dict:
     weights   = get_weights()
     threshold = get_threshold()
@@ -1007,6 +1069,7 @@ def get_learning_state() -> dict:
         "default_stop_mult":DEFAULT_STOP_MULT,
         "overall_win_rate": win_rate,
         "total_closed":     len(closed),
+        "tp_source_stats":  get_tp_source_stats(),
         "adaptation_log":   get_adaptation_log(10),
     }
 
