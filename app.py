@@ -1509,36 +1509,6 @@ def admin_reset_learning():
     return jsonify({"status": "learning reset", "weights": learning.DEFAULT_WEIGHTS})
 
 
-@app.route("/api/admin/import_trade", methods=["POST"])
-def admin_import_trade():
-    """Insert a trade record directly — used to sync local trades to Render."""
-    import learning as _l
-    body = request.get_json() or {}
-    required = ["id", "symbol", "interval", "direction", "entry", "tp", "sl",
-                "score", "opened_at", "status"]
-    missing = [f for f in required if f not in body]
-    if missing:
-        return jsonify({"error": f"missing fields: {missing}"}), 400
-    try:
-        with _l._conn() as db:
-            db.execute("""
-                INSERT OR REPLACE INTO trades
-                (id, symbol, interval, direction, entry, tp, sl, score, effective_score,
-                 reason, factors_snapshot, target_basis, tp_source, opened_at, partial_tp, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                body["id"], body["symbol"], body["interval"], body["direction"],
-                body["entry"], body["tp"], body["sl"],
-                body["score"], body.get("effective_score", body["score"]),
-                body.get("reason", ""), body.get("factors_snapshot", "{}"),
-                body.get("target_basis", ""), body.get("tp_source", "unknown"),
-                body["opened_at"], body.get("partial_tp"), body["status"],
-            ))
-        return jsonify({"status": "imported", "id": body["id"]})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
 # ── Backtester routes ─────────────────────────────────────────────────────────
 
 @app.route("/api/backtest/run", methods=["POST"])
