@@ -520,9 +520,15 @@ def update_trailing_stops(symbol: str, interval: str, current_price: float,
                     continue
 
                 if direction == "LONG" and swing_lows:
-                    # Highest swing low that is: above current SL AND below current price
+                    # partial_tp is the 1.5R level — use it as the floor for the trailing SL.
+                    # This prevents locking in less than 1.5R: the stop can only be placed
+                    # at a swing low that is AT OR ABOVE partial_tp, guaranteeing that
+                    # if we get stopped out on the trail, we exit at ≥1.5R profit.
+                    _partial_tp = t.get("partial_tp")
                     candidates = [p for p in swing_lows
-                                  if p > current_sl and p < current_price]
+                                  if p > current_sl
+                                  and (_partial_tp is None or p >= _partial_tp)
+                                  and p < current_price]
                     if candidates:
                         new_sl = round(max(candidates), 8)
                         if new_sl > current_sl:
@@ -541,9 +547,14 @@ def update_trailing_stops(symbol: str, interval: str, current_price: float,
                             updated.append(t["id"])
 
                 elif direction == "SHORT" and swing_highs:
-                    # Lowest swing high that is: below current SL AND above current price
+                    # partial_tp is the 1.5R level (below entry for SHORTs) — use it as the
+                    # ceiling for the trailing SL.  Only trail to swing highs AT OR BELOW
+                    # partial_tp, so a trailing stop-out always locks in ≥1.5R profit.
+                    _partial_tp = t.get("partial_tp")
                     candidates = [p for p in swing_highs
-                                  if p < current_sl and p > current_price]
+                                  if p < current_sl
+                                  and (_partial_tp is None or p <= _partial_tp)
+                                  and p > current_price]
                     if candidates:
                         new_sl = round(min(candidates), 8)
                         if new_sl < current_sl:
