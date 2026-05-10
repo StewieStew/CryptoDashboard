@@ -385,17 +385,15 @@ def auto_close(symbol: str, interval: str, current_price: float) -> tuple:
                 #  breakeven activates, so t["sl"] is already correct)
                 eff_sl = float(t["sl"])
 
-                # ── Minimum duration guard — skip closes on sub-candle trades ──
-                _INTERVAL_SECS = {
-                    "1m":60,"3m":180,"5m":300,"15m":900,"30m":1800,
-                    "1h":3600,"2h":7200,"4h":14400,"1d":86400
-                }
+                # ── Minimum duration guard — 60s only, to avoid double-close race ──
+                # Previously used full candle duration (e.g. 3600s for 1h) which caused
+                # same-candle SL hits to be completely missed. Now just 60s — one monitor
+                # cycle — so real price action is respected immediately.
                 try:
                     _opened = datetime.fromisoformat(t["opened_at"].replace("Z","+00:00"))
                     _age    = (datetime.now(timezone.utc) - _opened).total_seconds()
-                    _min    = _INTERVAL_SECS.get(t["interval"], 900)
-                    if _age < _min:
-                        continue   # too young — let the candle close first
+                    if _age < 60:
+                        continue   # too young — avoid race with entry
                 except Exception:
                     pass
 

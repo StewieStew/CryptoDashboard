@@ -779,8 +779,19 @@ def _resolve_open_trades(sym: str, interval: str) -> int:
         except Exception:
             continue
 
-        # Only examine bars that opened AFTER the trade was logged
-        future = df[df.index > opened_at]
+        # Examine bars from the candle that was forming when the trade opened onward.
+        # Using >= (floored to candle boundary) so the opening candle is included —
+        # its high/low reflects any wick that hit SL/TP on the same candle as entry.
+        _freq_map = {
+            "1m":"1min","3m":"3min","5m":"5min","15m":"15min","30m":"30min",
+            "1h":"1h","2h":"2h","4h":"4h","1d":"1D",
+        }
+        _freq = _freq_map.get(trade["interval"], "1h")
+        try:
+            _candle_start = opened_at.floor(_freq)
+        except Exception:
+            _candle_start = opened_at
+        future = df[df.index >= _candle_start]
         if future.empty:
             continue
 
