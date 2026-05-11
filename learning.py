@@ -126,12 +126,17 @@ def _init_db():
             ("partial_tp",          "REAL"),
             ("partial_hit",         "INTEGER DEFAULT 0"),
             ("tp_source",           "TEXT DEFAULT 'unknown'"),
+            ("initial_sl",          "REAL"),   # original SL at entry — never overwritten by trailing logic
         ]:
             try:
                 db.execute(f"ALTER TABLE trades ADD COLUMN {col} {defn}")
                 db.commit()
             except Exception:
                 pass    # column already exists
+
+        # Backfill initial_sl for existing rows that don't have it yet
+        db.execute("UPDATE trades SET initial_sl = sl WHERE initial_sl IS NULL")
+        db.commit()
 
         db.close()
 
@@ -299,12 +304,12 @@ def log_trade(trade: dict) -> bool:
 
             db.execute("""
                 INSERT INTO trades
-                (id, symbol, interval, direction, entry, tp, sl, score, effective_score,
+                (id, symbol, interval, direction, entry, tp, sl, initial_sl, score, effective_score,
                  reason, factors_snapshot, target_basis, tp_source, opened_at, partial_tp, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 trade["id"], sym, intv, dirn,
-                trade["entry"], trade["tp"], trade["sl"],
+                trade["entry"], trade["tp"], trade["sl"], trade["sl"],  # initial_sl = sl at entry
                 trade["score"], trade.get("effective_score", trade["score"]),
                 trade.get("reason", ""),
                 json.dumps(trade.get("factors_snapshot", {})),

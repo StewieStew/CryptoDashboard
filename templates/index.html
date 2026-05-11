@@ -805,18 +805,23 @@
     return v.toFixed(5);
   }
 
-  function rr(entry, tp, sl) {
-    if (entry == null || tp == null || sl == null) return '—';
-    const risk   = Math.abs(parseFloat(entry) - parseFloat(sl));
+  function rr(entry, tp, sl, initial_sl) {
+    if (entry == null || tp == null) return '—';
+    const refSl  = initial_sl != null ? initial_sl : sl;
+    if (refSl == null) return '—';
+    const risk   = Math.abs(parseFloat(entry) - parseFloat(refSl));
     const reward = Math.abs(parseFloat(tp)    - parseFloat(entry));
     if (risk === 0) return '—';
     return (reward / risk).toFixed(1) + 'R';
   }
 
   function calcPnlR(trade) {
-    const { direction, entry, sl, close_price } = trade;
-    if (!close_price || !entry || !sl) return null;
-    const risk = Math.abs(parseFloat(entry) - parseFloat(sl));
+    const { direction, entry, sl, initial_sl, close_price } = trade;
+    if (!close_price || !entry) return null;
+    // prefer initial_sl (preserved at entry) so trailing stops don't corrupt the R calc
+    const refSl = initial_sl != null ? initial_sl : sl;
+    if (!refSl) return null;
+    const risk = Math.abs(parseFloat(entry) - parseFloat(refSl));
     if (risk === 0) return null;
     const dir  = (direction || '').toUpperCase();
     const gain = dir === 'LONG'
@@ -959,7 +964,7 @@
         <td class="price">${fmt(t.entry)}</td>
         <td class="price">${fmt(t.sl)}</td>
         <td class="price">${fmt(t.tp)}</td>
-        <td class="price">${rr(t.entry, t.tp, t.sl)}</td>
+        <td class="price">${rr(t.entry, t.tp, t.sl, t.initial_sl)}</td>
         <td class="tp-src" title="${tpSrc}">${tpSrc}</td>
         <td>${statusBadge}</td>
         <td>${resBadge}</td>
@@ -1303,23 +1308,51 @@
 
     _modalSeries.setData(candles);
 
-    // Entry candle marker (blue arrow)
-    if (trade.opened_at && candles.length) {
-      const intMs       = _INTERVAL_MS[tf] || 3600000;
-      const entryFloor  = Math.floor(new Date(trade.opened_at).getTime() / intMs) * intMs;
-      const entrySecExp = Math.floor(entryFloor / 1000);
-      const entryCandle = candles.find(c => c.time === entrySecExp)
-        || candles.reduce((best, c) =>
-            Math.abs(c.time - entrySecExp) < Math.abs(best.time - entrySecExp) ? c : best,
-            candles[0]);
-      if (entryCandle) {
-        _modalSeries.setMarkers([{
-          time:     entryCandle.time,
-          position: dir === 'LONG' ? 'belowBar' : 'aboveBar',
-          color:    '#2563eb',
-          shape:    dir === 'LONG' ? 'arrowUp' : 'arrowDown',
-          text:     'Entry',
-        }]);
+    // Candle markers: entry + TP/SL hit (for closed trades)
+    if (candles.length) {
+      const intMs = _INTERVAL_MS[tf] || 3600000;
+      const markers = [];
+
+      // Entry candle — blue arrow
+      if (trade.opened_at) {
+        const entryFloor = Math.floor(new Date(trade.opened_at).getTime() / intMs) * intMs;
+        const entrySecEx = Math.floor(entryFloor / 1000);
+        const entryC = candles.find(c => c.time === entrySecEx)
+          || candles.reduce((b, c) => Math.abs(c.time - entrySecEx) < Math.abs(b.time - entrySecEx) ? c : b, candles[0]);
+        if (entryC) {
+          markers.push({
+            time:     entryC.time,
+            position: dir === 'LONG' ? 'belowBar' : 'aboveBar',
+            color:    '#2563eb',
+            shape:    dir === 'LONG' ? 'arrowUp' : 'arrowDown',
+            text:     'Entry',
+          });
+        }
+      }
+
+      // Close candle — green circle (TP) or red circle (SL) for closed trades
+      if (!isOpen && trade.closed_at) {
+        const closeFloor = Math.floor(new Date(trade.closed_at).getTime() / intMs) * intMs;
+        const closeSecEx = Math.floor(closeFloor / 1000);
+        const closeC = candles.find(c => c.time === closeSecEx)
+          || candles.reduce((b, c) => Math.abs(c.time - closeSecEx) < Math.abs(b.time - closeSecEx) ? c : b, candles[0]);
+        if (closeC) {
+          const isWin  = (trade.status || '').toLowerCase() === 'win';
+          markers.push({
+            time:     closeC.time,
+            position: isWin
+              ? (dir === 'LONG' ? 'aboveBar' : 'belowBar')
+              : (dir === 'LONG' ? 'belowBar' : 'aboveBar'),
+            color:    isWin ? '#16a34a' : '#dc2626',
+            shape:    'circle',
+            text:     isWin ? 'TP' : 'SL',
+          });
+        }
+      }
+
+      if (markers.length) {
+        markers.sort((a, b) => a.time - b.time);
+        _modalSeries.setMarkers(markers);
       }
     }
 
@@ -1336,7 +1369,9 @@
     }
 
     const statusEl = document.getElementById('modal-status');
-    if (statusEl) statusEl.textContent = `${candles.length} candles · ${isOpen ? 'live' : 'historical'} · blue arrow = entry candle`;
+    if (statusEl) statusEl.textContent = isOpen
+      ? `${candles.length} candles · live · 🔵 blue arrow = entry candle`
+      : `${candles.length} candles · historical · 🔵 entry  🟢 TP / 🔴 SL`;
 
     // Responsive resize
     new ResizeObserver(() => {
