@@ -499,6 +499,108 @@
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 3px; }
     ::-webkit-scrollbar-thumb:hover { background: var(--text-3); }
+
+    /* ── TRADE CHART MODAL ── */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.55);
+      z-index: 999;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      backdrop-filter: blur(2px);
+    }
+    .modal-overlay.open { display: flex; }
+
+    .modal-box {
+      background: var(--surface);
+      border-radius: var(--radius);
+      box-shadow: 0 24px 80px rgba(0,0,0,.25);
+      width: 100%;
+      max-width: 940px;
+      max-height: 90vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      animation: modal-in .18s ease;
+    }
+
+    @keyframes modal-in {
+      from { opacity: 0; transform: translateY(10px) scale(.98); }
+      to   { opacity: 1; transform: translateY(0)    scale(1);   }
+    }
+
+    .modal-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
+    }
+
+    .modal-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: -0.01em;
+    }
+
+    .modal-meta {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      font-size: 12px;
+      flex: 1;
+    }
+
+    .modal-close {
+      margin-left: auto;
+      flex-shrink: 0;
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      width: 30px; height: 30px;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer;
+      color: var(--text-2);
+      font-size: 16px;
+      transition: background .15s;
+    }
+    .modal-close:hover { background: var(--bg); }
+
+    .modal-chart-wrap {
+      flex: 1;
+      min-height: 320px;
+      height: 480px;
+      position: relative;
+    }
+
+    .modal-status-bar {
+      padding: 8px 20px;
+      border-top: 1px solid var(--border);
+      font-size: 11px;
+      color: var(--text-3);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .modal-loading {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-3);
+      font-size: 14px;
+    }
+
+    tbody tr.clickable { cursor: pointer; }
+    tbody tr.clickable:hover { background: var(--blue-light) !important; }
   </style>
 </head>
 <body>
@@ -643,6 +745,21 @@
   </section>
 
 </main>
+
+<!-- TRADE CHART MODAL -->
+<div class="modal-overlay" id="trade-modal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <div class="modal-title" id="modal-title">Chart</div>
+      <div class="modal-meta" id="modal-meta"></div>
+      <button class="modal-close" id="modal-close" title="Close (Esc)">✕</button>
+    </div>
+    <div class="modal-chart-wrap" id="modal-chart-wrap">
+      <div class="modal-loading" id="modal-loading">Loading chart data…</div>
+    </div>
+    <div class="modal-status-bar" id="modal-status"></div>
+  </div>
+</div>
 
 <script>
   // ── Nav mobile toggle ──────────────────────────────────────────────────────
@@ -792,12 +909,17 @@
   }
 
   // ── Trades table ───────────────────────────────────────────────────────────
+  const _tradeMap = new Map(); // id → trade, populated by renderTrades
+
   function renderTrades(trades) {
     const tbody = document.getElementById('trades-body');
     if (!trades.length) {
       tbody.innerHTML = '<tr><td colspan="14" class="empty">No trades logged yet. Bot is scanning for setups.</td></tr>';
       return;
     }
+
+    _tradeMap.clear();
+    [...trades].forEach(t => { if (t.id != null) _tradeMap.set(String(t.id), t); });
 
     tbody.innerHTML = [...trades].reverse().map(t => {
       const dir = (t.direction || '').toUpperCase();
@@ -828,8 +950,9 @@
       }
 
       const tpSrc = (t.tp_source || 'unknown').replace(/_/g, ' ');
+      const rowId = t.id != null ? ` data-id="${t.id}"` : '';
 
-      return `<tr>
+      return `<tr class="clickable"${rowId}>
         <td class="symbol">${t.symbol || '—'}</td>
         <td class="tf">${t.interval || '—'}</td>
         <td>${dirBadge}</td>
@@ -988,6 +1111,194 @@
       grid.innerHTML = '<div class="empty" style="grid-column:1/-1;">Learning API unavailable.</div>';
       console.error('learning fetch error', e);
     }
+  }
+
+  // ── Trade Chart Modal ──────────────────────────────────────────────────────
+  const _INTERVAL_MS = {
+    '1m':60000,'3m':180000,'5m':300000,'15m':900000,'30m':1800000,
+    '1h':3600000,'2h':7200000,'4h':14400000,'1d':86400000
+  };
+
+  let _modalChart  = null;
+  let _modalSeries = null;
+
+  const _modalOverlay = document.getElementById('trade-modal');
+  const _modalClose   = document.getElementById('modal-close');
+
+  // Close handlers
+  _modalClose.addEventListener('click', _closeModal);
+  _modalOverlay.addEventListener('click', e => { if (e.target === _modalOverlay) _closeModal(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') _closeModal(); });
+
+  function _closeModal() {
+    _modalOverlay.classList.remove('open');
+    if (_modalChart) { try { _modalChart.remove(); } catch(e) {} _modalChart = null; _modalSeries = null; }
+    const wrap = document.getElementById('modal-chart-wrap');
+    if (wrap) wrap.innerHTML = '<div class="modal-loading">Loading chart data…</div>';
+    const status = document.getElementById('modal-status');
+    if (status) status.textContent = '';
+  }
+
+  // Row click delegation
+  document.getElementById('trades-body').addEventListener('click', e => {
+    const row = e.target.closest('tr[data-id]');
+    if (row) _openTradeChart(row.dataset.id);
+  });
+
+  async function _openTradeChart(tradeId) {
+    const trade = _tradeMap.get(String(tradeId));
+    if (!trade) return;
+
+    const sym    = trade.symbol   || 'BTCUSDT';
+    const tf     = trade.interval || '1h';
+    const dir    = (trade.direction || 'LONG').toUpperCase();
+    const st     = (trade.status   || '').toLowerCase();
+    const isOpen = st === 'open';
+
+    // Header
+    const dirBadge = dir === 'LONG'
+      ? '<span class="badge badge-long">LONG</span>'
+      : '<span class="badge badge-short">SHORT</span>';
+
+    let resBadge = '';
+    if      (st === 'win')  resBadge = '<span class="badge badge-win">WIN</span>';
+    else if (st === 'loss') resBadge = '<span class="badge badge-loss">LOSS</span>';
+    else if (isOpen)        resBadge = '<span class="badge badge-open">LIVE</span>';
+
+    const r = calcPnlR(trade);
+    const pnlHtml = r !== null
+      ? `<span class="${r >= 0 ? 'pnl-pos' : 'pnl-neg'}">${r >= 0 ? '+' : ''}${r.toFixed(1)}R</span>`
+      : '';
+
+    document.getElementById('modal-title').innerHTML =
+      `${sym} <span style="font-size:13px;font-weight:500;color:var(--text-3);margin-left:2px;">${tf}</span>`;
+
+    document.getElementById('modal-meta').innerHTML = [
+      dirBadge,
+      resBadge,
+      pnlHtml ? `<span style="display:flex;align-items:center;gap:4px;">${pnlHtml}</span>` : '',
+      `<span style="color:var(--text-3)">Entry <b style="color:var(--text)">${fmt(trade.entry)}</b></span>`,
+      `<span style="color:var(--text-3)">SL <b style="color:#dc2626">${fmt(trade.sl)}</b></span>`,
+      `<span style="color:var(--text-3)">TP <b style="color:#16a34a">${fmt(trade.tp)}</b></span>`,
+      !isOpen && trade.closed_at ? `<span style="color:var(--text-3)">Closed ${fmtTime(trade.closed_at)}</span>` : '',
+    ].filter(Boolean).join('');
+
+    document.getElementById('modal-status').textContent = '';
+
+    // Show modal
+    _modalOverlay.classList.add('open');
+
+    // Destroy previous chart
+    if (_modalChart) { try { _modalChart.remove(); } catch(e) {} _modalChart = null; _modalSeries = null; }
+    const wrap = document.getElementById('modal-chart-wrap');
+    wrap.innerHTML = '<div class="modal-loading">Fetching candles…</div>';
+
+    // Fetch OHLCV from Binance
+    let candles = [];
+    let fetchErr = null;
+    try {
+      const intMs = _INTERVAL_MS[tf] || 3600000;
+      let url;
+      if (isOpen) {
+        url = `https://api.binance.us/api/v3/klines?symbol=${sym}&interval=${tf}&limit=200`;
+      } else {
+        // Center view on the trade: 30 bars before open, 15 bars after close
+        const openMs  = trade.opened_at ? new Date(trade.opened_at).getTime() : Date.now() - intMs * 100;
+        const closeMs = trade.closed_at ? new Date(trade.closed_at).getTime() : openMs + intMs;
+        const startMs = openMs  - 30 * intMs;
+        const endMs   = closeMs + 15 * intMs;
+        url = `https://api.binance.us/api/v3/klines?symbol=${sym}&interval=${tf}&startTime=${startMs}&endTime=${endMs}&limit=300`;
+      }
+
+      const res = await fetch(url);
+      const raw = await res.json();
+      if (Array.isArray(raw) && raw.length) {
+        const seen = new Set();
+        candles = raw
+          .map(k => ({
+            time:  Math.floor(k[0] / 1000),
+            open:  parseFloat(k[1]),
+            high:  parseFloat(k[2]),
+            low:   parseFloat(k[3]),
+            close: parseFloat(k[4]),
+          }))
+          .sort((a, b) => a.time - b.time)
+          .filter(c => { if (seen.has(c.time)) return false; seen.add(c.time); return true; });
+      } else if (raw && raw.code) {
+        fetchErr = raw.msg || 'Binance API error';
+      }
+    } catch (e) {
+      fetchErr = e.message || 'Network error';
+      console.error('Modal chart fetch error', e);
+    }
+
+    wrap.innerHTML = '';
+
+    if (!candles.length) {
+      wrap.innerHTML = `<div class="modal-loading">${fetchErr ? '⚠ ' + fetchErr : 'No candle data returned.'}</div>`;
+      return;
+    }
+
+    // Build chart
+    _modalChart = LightweightCharts.createChart(wrap, {
+      layout:          { background: { color: '#ffffff' }, textColor: '#9ca3af' },
+      grid:            { vertLines: { color: '#f3f4f6' }, horzLines: { color: '#f3f4f6' } },
+      crosshair:       { mode: LightweightCharts.CrosshairMode.Normal },
+      rightPriceScale: { borderColor: '#e5e7eb' },
+      timeScale:       { borderColor: '#e5e7eb', timeVisible: true, secondsVisible: false },
+      width:           wrap.clientWidth  || 880,
+      height:          wrap.clientHeight || 480,
+    });
+
+    _modalSeries = _modalChart.addCandlestickSeries({
+      upColor:        '#16a34a', downColor:       '#dc2626',
+      borderUpColor: '#16a34a', borderDownColor: '#dc2626',
+      wickUpColor:   '#16a34a', wickDownColor:   '#dc2626',
+    });
+
+    // Price lines
+    if (trade.entry != null) {
+      _modalSeries.createPriceLine({
+        price: parseFloat(trade.entry), color: '#374151', lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Dashed, title: 'Entry',
+      });
+    }
+    if (trade.sl != null) {
+      _modalSeries.createPriceLine({
+        price: parseFloat(trade.sl), color: '#dc2626', lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Solid, title: 'SL',
+      });
+    }
+    if (trade.tp != null) {
+      _modalSeries.createPriceLine({
+        price: parseFloat(trade.tp), color: '#16a34a', lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Solid, title: 'TP',
+      });
+    }
+
+    _modalSeries.setData(candles);
+
+    // Scroll to trade window (closed) or show latest (open)
+    if (!isOpen && trade.opened_at) {
+      const intMs   = _INTERVAL_MS[tf] || 3600000;
+      const openMs  = new Date(trade.opened_at).getTime();
+      const closeMs = trade.closed_at ? new Date(trade.closed_at).getTime() : openMs + intMs;
+      const fromSec = Math.floor((openMs  - 8 * intMs) / 1000);
+      const toSec   = Math.floor((closeMs + 8 * intMs) / 1000);
+      try { _modalChart.timeScale().setVisibleRange({ from: fromSec, to: toSec }); } catch(e) {}
+    } else {
+      _modalChart.timeScale().fitContent();
+    }
+
+    const statusEl = document.getElementById('modal-status');
+    if (statusEl) statusEl.textContent = `${candles.length} candles · ${isOpen ? 'live' : 'historical'} · click anywhere on chart to crosshair`;
+
+    // Responsive resize
+    new ResizeObserver(() => {
+      if (_modalChart) {
+        _modalChart.applyOptions({ width: wrap.clientWidth, height: wrap.clientHeight });
+      }
+    }).observe(wrap);
   }
 
   // ── Fetch & auto-refresh ──────────────────────────────────────────────────
