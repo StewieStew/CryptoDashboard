@@ -825,9 +825,12 @@ def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
             _min_tp  = entry_price + min_rr * _risk
 
             # 1. Swing high ≥ min_tp
+            # Set TP 0.2×ATR BELOW the swing high so the order fills before price
+            # wicks up to the structural resistance and rejects.
             _sh_ok = sorted([p for _, p in swing_highs if p >= _min_tp])
             if _sh_ok:
-                return (_sh_ok[0], "Prior swing high", "swing_high")
+                _tp = round(_sh_ok[0] - 0.2 * atr_val, 6)
+                return (_tp, "Prior swing high", "swing_high")
 
             # 2. Bearish FVG ≥ min_tp
             if fvgs:
@@ -916,7 +919,10 @@ def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
                 reverse=True   # highest first = nearest to entry
             )
             if _sl_ok:
-                return (_sl_ok[0], "Prior swing low", "swing_low")
+                # Set TP 0.2×ATR ABOVE the swing low so the order fills before price
+                # wicks down to the structural support and bounces.
+                _tp = round(_sl_ok[0] + 0.2 * atr_val, 6)
+                return (_tp, "Prior swing low", "swing_low")
 
             # 2. Bullish FVG <= min_tp
             if fvgs:
