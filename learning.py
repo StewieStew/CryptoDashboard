@@ -359,8 +359,10 @@ def auto_close(symbol: str, interval: str, current_price: float) -> tuple:
     """
     Auto-close open trades whose SL has been hit.
 
-    Breakeven trailing stop:
-    - Once price moves 1× risk distance in our favour, SL moves to entry (breakeven).
+    Trailing stop (see update_trailing_stops for full logic):
+    - 2R profit → SL moves to entry (breakeven)
+    - 3R profit → SL moves to +1R (locks in minimum 1R)
+    - Beyond 3R → SL trails 0.5R below/above current price
 
     Trades close ONLY when price hits SL or TP. No time-based or stagnation exits.
 
@@ -489,15 +491,14 @@ def update_trade_ai(trade_id: str, ai_result: dict) -> None:
 def update_trailing_stops(symbol: str, interval: str, current_price: float,
                           swing_highs: list, swing_lows: list) -> list:
     """
-    After a trade reaches 2R profit, trail the stop loss to the most recent
-    swing structure to lock in gains while letting winners run.
+    Three-phase trailing stop (R measured against initial risk, not current SL):
 
-    LONG:  trail SL up to the highest swing LOW that is above the current SL
-           (each new HL raises the floor)
-    SHORT: trail SL down to the lowest swing HIGH that is below the current SL
-           (each new LH lowers the ceiling)
+      Phase 1 — 2R profit : move SL to entry (breakeven).
+      Phase 2 — 3R profit : move SL to +1R above/below entry (locks in minimum 1R).
+      Phase 3 — beyond 3R : trail SL at exactly 0.5R below (LONG) / above (SHORT)
+                             current price, updated every cycle.
 
-    swing_highs / swing_lows: flat lists of prices (floats), most recent last.
+    SL only ever moves in the direction of profit — never backwards.
     Returns list of trade IDs whose SL was updated.
     """
     updated = []
@@ -509,94 +510,73 @@ def update_trailing_stops(symbol: str, interval: str, current_price: float,
                 (symbol, interval)
             ).fetchall()
             for row in rows:
-                t         = dict(row)
-                entry     = float(t["entry"])
+                t          = dict(row)
+                entry      = float(t["entry"])
                 current_sl = float(t["sl"])
-                risk_d    = abs(entry - current_sl)
-                direction = t["direction"]
+                direction  = t["direction"]
 
+                # Always use initial_sl for risk distance so R stays consistent
+                # even after the SL has already moved to breakeven or beyond.
+                ref_sl = float(t["initial_sl"]) if t.get("initial_sl") else current_sl
+                risk_d = abs(entry - ref_sl)
                 if risk_d <= 0:
                     continue
 
-                # Two-phase trailing stop:
-                #   Phase 1 — 1.0R profit: move SL to entry (breakeven). Protects capital
-                #             as soon as the trade is meaningfully in profit.
-                #   Phase 2 — 1.5R profit: trail SL to structural swing lows/highs at or
-                #             beyond the 1.5R level, locking in ≥1.5R on a trailing exit.
                 profit_r = (
                     (current_price - entry) / risk_d if direction == "LONG"
                     else (entry - current_price) / risk_d
                 )
-                if profit_r < 1.0:
+
+                # Nothing to do until we reach Phase 1 threshold
+                if profit_r < 2.0:
                     continue
 
-                # Minimum distance: structural trail candidates must be at least
-                # 0.5R away from current price — prevents grabbing a swing level
-                # that's right at current price and getting stopped by normal noise.
-                _min_trail_dist = 0.5 * risk_d
-
                 if direction == "LONG":
-                    _partial_tp = t.get("partial_tp")
-
-                    if profit_r >= 1.5 and swing_lows:
-                        # Phase 2: trail to the highest swing low that is:
-                        #  • above current SL (must be an improvement)
-                        #  • at or above partial_tp floor (locks in ≥1.5R on exit)
-                        #  • at least 0.5R below current price (breathing room)
-                        candidates = [p for p in swing_lows
-                                      if p > current_sl
-                                      and (_partial_tp is None or p >= _partial_tp)
-                                      and p < current_price - _min_trail_dist]
-                        if not candidates:
-                            continue   # no valid structural level — keep current SL
-                        new_sl = round(max(candidates), 8)
-                    else:
-                        # Phase 1: just move to breakeven (entry)
+                    if profit_r >= 3.0:
+                        # Phase 3: trail 0.5R below current price
+                        new_sl = round(current_price - 0.5 * risk_d, 8)
+                    elif profit_r >= 2.0:
+                        # Phase 1/2 boundary: at exactly 3R we'd jump to +1R,
+                        # but between 2R and 3R just sit at breakeven.
                         new_sl = round(entry, 8)
+                    else:
+                        continue
 
+                    # SL may only move up for a LONG
                     if new_sl > current_sl:
                         be_now = 1 if new_sl >= entry else t.get("breakeven_activated", 0)
                         db.execute(
                             "UPDATE trades SET sl=?, breakeven_activated=? WHERE id=?",
                             (new_sl, be_now, t["id"])
                         )
-                        if be_now and not t.get("breakeven_activated"):
-                            logger.info(
-                                f"[BE] {t['symbol']} {interval} SL→{new_sl:.4f} "
-                                f"(entry {entry:.4f}) at {profit_r:.1f}R — breakeven activated"
-                            )
+                        label = (
+                            f"TRAIL {profit_r:.1f}R → SL {new_sl:.6f}" if profit_r >= 3.0
+                            else f"BREAKEVEN SL→{new_sl:.6f}"
+                        )
+                        logger.info(f"[TRAIL] {t['symbol']} {interval} LONG  {label}")
                         updated.append(t["id"])
 
                 elif direction == "SHORT":
-                    _partial_tp = t.get("partial_tp")
-
-                    if profit_r >= 1.5 and swing_highs:
-                        # Phase 2: trail to the lowest swing high that is:
-                        #  • below current SL (must be an improvement)
-                        #  • at or below partial_tp floor (locks in ≥1.5R on exit)
-                        #  • at least 0.5R above current price (breathing room)
-                        candidates = [p for p in swing_highs
-                                      if p < current_sl
-                                      and (_partial_tp is None or p <= _partial_tp)
-                                      and p > current_price + _min_trail_dist]
-                        if not candidates:
-                            continue   # no valid structural level — keep current SL
-                        new_sl = round(min(candidates), 8)
-                    else:
-                        # Phase 1: just move to breakeven (entry)
+                    if profit_r >= 3.0:
+                        # Phase 3: trail 0.5R above current price
+                        new_sl = round(current_price + 0.5 * risk_d, 8)
+                    elif profit_r >= 2.0:
                         new_sl = round(entry, 8)
+                    else:
+                        continue
 
+                    # SL may only move down for a SHORT
                     if new_sl < current_sl:
                         be_now = 1 if new_sl <= entry else t.get("breakeven_activated", 0)
                         db.execute(
                             "UPDATE trades SET sl=?, breakeven_activated=? WHERE id=?",
                             (new_sl, be_now, t["id"])
                         )
-                        if be_now and not t.get("breakeven_activated"):
-                            logger.info(
-                                f"[BE] {t['symbol']} {interval} SL→{new_sl:.4f} "
-                                f"(entry {entry:.4f}) at {profit_r:.1f}R — breakeven activated"
-                            )
+                        label = (
+                            f"TRAIL {profit_r:.1f}R → SL {new_sl:.6f}" if profit_r >= 3.0
+                            else f"BREAKEVEN SL→{new_sl:.6f}"
+                        )
+                        logger.info(f"[TRAIL] {t['symbol']} {interval} SHORT {label}")
                         updated.append(t["id"])
 
             if updated:

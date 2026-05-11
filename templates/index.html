@@ -1031,7 +1031,13 @@
         <td class="tf">${t.interval || '—'}</td>
         <td>${dirBadge}</td>
         <td class="price">${fmt(t.entry)}</td>
-        <td class="price">${fmt(t.sl)}</td>
+        <td class="price">${(() => {
+          const initSl = t.initial_sl != null ? t.initial_sl : t.sl;
+          const trailSl = t.sl != null && t.initial_sl != null
+            && Math.abs(parseFloat(t.initial_sl) - parseFloat(t.sl)) > 0.000001 ? t.sl : null;
+          return fmt(initSl) + (trailSl != null
+            ? `<br><span style="color:#f97316;font-size:11px;">▶ ${fmt(trailSl)}</span>` : '');
+        })()}</td>
         <td class="price">${fmt(t.tp)}</td>
         <td class="price">${rr(t.entry, t.tp, t.sl, t.initial_sl)}</td>
         <td class="tp-src" title="${tpSrc}">${tpSrc}</td>
@@ -1101,9 +1107,13 @@
       if (trade.tp != null) {
         series.createPriceLine({ price: parseFloat(trade.tp), color: '#16a34a', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Solid, title: 'TP' });
       }
-      if (trade.sl != null) {
-        series.createPriceLine({ price: parseFloat(trade.sl), color: '#dc2626', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Solid, title: 'SL' });
-      }
+      // Always show original SL (red solid); if trail has moved, also show current SL (orange dashed)
+      const _miniInitSl = trade.initial_sl != null ? trade.initial_sl : trade.sl;
+      if (_miniInitSl != null)
+        series.createPriceLine({ price: parseFloat(_miniInitSl), color: '#dc2626', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Solid, title: 'SL' });
+      if (trade.sl != null && trade.initial_sl != null
+          && Math.abs(parseFloat(trade.initial_sl) - parseFloat(trade.sl)) > 0.000001)
+        series.createPriceLine({ price: parseFloat(trade.sl), color: '#f97316', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, title: 'Trail' });
 
       try {
         const r   = await fetch(`https://api.binance.us/api/v3/klines?symbol=${sym}&interval=${tf}&limit=500`);
@@ -1276,7 +1286,9 @@
       resBadge,
       pnlHtml ? `<span style="display:flex;align-items:center;gap:4px;">${pnlHtml}</span>` : '',
       `<span style="color:var(--text-3)">Entry <b style="color:var(--text)">${fmt(trade.entry)}</b></span>`,
-      `<span style="color:var(--text-3)">SL <b style="color:#dc2626">${fmt((!isOpen && trade.initial_sl != null) ? trade.initial_sl : trade.sl)}</b></span>`,
+      `<span style="color:var(--text-3)">SL <b style="color:#dc2626">${fmt(trade.initial_sl != null ? trade.initial_sl : trade.sl)}</b></span>`,
+      (trade.sl != null && trade.initial_sl != null && Math.abs(parseFloat(trade.initial_sl) - parseFloat(trade.sl)) > 0.000001)
+        ? `<span style="color:var(--text-3)">Trail <b style="color:#f97316">${fmt(trade.sl)}</b></span>` : '',
       `<span style="color:var(--text-3)">TP <b style="color:#16a34a">${fmt(trade.tp)}</b></span>`,
       !isOpen && trade.closed_at ? `<span style="color:var(--text-3)">Closed ${fmtTime(trade.closed_at)}</span>` : '',
     ].filter(Boolean).join('');
@@ -1359,16 +1371,16 @@
       _modalSeries.createPriceLine({ price: parseFloat(trade.entry), color: '#374151',
         lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, title: 'Entry' });
 
-    const _slPrice = (!isOpen && trade.initial_sl != null) ? trade.initial_sl : trade.sl;
-    if (_slPrice != null) {
-      _modalSeries.createPriceLine({ price: parseFloat(_slPrice), color: '#dc2626',
-        lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Solid,
-        title: (!isOpen && trade.initial_sl != null) ? 'Initial SL' : 'SL' });
-      if (!isOpen && trade.initial_sl != null && trade.sl != null
-          && Math.abs(parseFloat(trade.initial_sl) - parseFloat(trade.sl)) > 0.000001)
-        _modalSeries.createPriceLine({ price: parseFloat(trade.sl), color: '#f97316',
-          lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, title: 'Trail SL' });
-    }
+    // Always show original SL (red solid) — stays fixed at original risk level
+    const _initSl = trade.initial_sl != null ? trade.initial_sl : trade.sl;
+    if (_initSl != null)
+      _modalSeries.createPriceLine({ price: parseFloat(_initSl), color: '#dc2626',
+        lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Solid, title: 'Initial SL' });
+    // If trailing stop has moved from original, show current SL as separate orange dashed line
+    if (trade.sl != null && trade.initial_sl != null
+        && Math.abs(parseFloat(trade.initial_sl) - parseFloat(trade.sl)) > 0.000001)
+      _modalSeries.createPriceLine({ price: parseFloat(trade.sl), color: '#f97316',
+        lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, title: 'Trail SL' });
     if (trade.tp != null)
       _modalSeries.createPriceLine({ price: parseFloat(trade.tp), color: '#16a34a',
         lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Solid, title: 'TP' });
