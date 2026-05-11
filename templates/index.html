@@ -1055,17 +1055,25 @@
           series.setData(candles);
 
           // Entry candle arrow marker
-          if (trade.opened_at && candles.length) {
+          if (trade.opened_at && trade.entry != null && candles.length) {
             const intMap = {'1m':60000,'3m':180000,'5m':300000,'15m':900000,'30m':1800000,'1h':3600000,'2h':7200000,'4h':14400000,'1d':86400000};
-            const intMs      = intMap[tf] || 3600000;
-            const entryFloor = Math.floor(new Date(trade.opened_at).getTime() / intMs) * intMs;
+            const _iMs       = intMap[tf] || 3600000;
+            const entryPrice = parseFloat(trade.entry);
+            const entryFloor = Math.floor(new Date(trade.opened_at).getTime() / _iMs) * _iMs;
             const entrySecEx = Math.floor(entryFloor / 1000);
-            const entryC     = candles.find(c => c.time === entrySecEx)
+            let entryC = candles.find(c => c.time === entrySecEx)
               || candles.reduce((b, c) => Math.abs(c.time - entrySecEx) < Math.abs(b.time - entrySecEx) ? c : b, candles[0]);
+            // Prefer a nearby candle whose range contains the entry price
+            if (entryC && (entryPrice < entryC.low || entryPrice > entryC.high)) {
+              const idx    = candles.indexOf(entryC);
+              const nearby = candles.slice(Math.max(0, idx - 3), idx + 4);
+              const better = nearby.find(c => entryPrice >= c.low && entryPrice <= c.high);
+              if (better) entryC = better;
+            }
             if (entryC) {
               series.setMarkers([{
                 time:     entryC.time,
-                position: dir === 'LONG' ? 'belowBar' : 'aboveBar',
+                position: 'inBar',
                 color:    '#2563eb',
                 shape:    dir === 'LONG' ? 'arrowUp' : 'arrowDown',
                 text:     'Entry',
@@ -1208,7 +1216,7 @@
       resBadge,
       pnlHtml ? `<span style="display:flex;align-items:center;gap:4px;">${pnlHtml}</span>` : '',
       `<span style="color:var(--text-3)">Entry <b style="color:var(--text)">${fmt(trade.entry)}</b></span>`,
-      `<span style="color:var(--text-3)">SL <b style="color:#dc2626">${fmt(trade.sl)}</b></span>`,
+      `<span style="color:var(--text-3)">SL <b style="color:#dc2626">${fmt((!isOpen && trade.initial_sl != null) ? trade.initial_sl : trade.sl)}</b></span>`,
       `<span style="color:var(--text-3)">TP <b style="color:#16a34a">${fmt(trade.tp)}</b></span>`,
       !isOpen && trade.closed_at ? `<span style="color:var(--text-3)">Closed ${fmtTime(trade.closed_at)}</span>` : '',
     ].filter(Boolean).join('');
@@ -1293,11 +1301,23 @@
         lineStyle: LightweightCharts.LineStyle.Dashed, title: 'Entry',
       });
     }
-    if (trade.sl != null) {
+    // For closed trades, draw the original SL (initial_sl) so trailing moves don't distort the chart.
+    // For open trades, draw current sl (where the trailing stop actually is).
+    const _slPrice = (!isOpen && trade.initial_sl != null) ? trade.initial_sl : trade.sl;
+    if (_slPrice != null) {
       _modalSeries.createPriceLine({
-        price: parseFloat(trade.sl), color: '#dc2626', lineWidth: 1,
-        lineStyle: LightweightCharts.LineStyle.Solid, title: 'SL',
+        price: parseFloat(_slPrice), color: '#dc2626', lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Solid,
+        title: (!isOpen && trade.initial_sl != null) ? 'Initial SL' : 'SL',
       });
+      // If the trade was trailed to a different level, also show the final trailing stop as dashed
+      if (!isOpen && trade.initial_sl != null && trade.sl != null
+          && Math.abs(parseFloat(trade.initial_sl) - parseFloat(trade.sl)) > 0.000001) {
+        _modalSeries.createPriceLine({
+          price: parseFloat(trade.sl), color: '#f97316', lineWidth: 1,
+          lineStyle: LightweightCharts.LineStyle.Dashed, title: 'Trail SL',
+        });
+      }
     }
     if (trade.tp != null) {
       _modalSeries.createPriceLine({
@@ -1314,15 +1334,31 @@
       const markers = [];
 
       // Entry candle — blue arrow
-      if (trade.opened_at) {
+      // Strategy: first find the time-floored candle, then prefer a nearby candle
+      // whose range actually contains the entry price so the arrow doesn't float
+      // above/below a candle that has already moved past entry.
+      if (trade.opened_at && trade.entry != null) {
+        const entryPrice = parseFloat(trade.entry);
         const entryFloor = Math.floor(new Date(trade.opened_at).getTime() / intMs) * intMs;
         const entrySecEx = Math.floor(entryFloor / 1000);
-        const entryC = candles.find(c => c.time === entrySecEx)
+
+        // Start with time-based candidate
+        let entryC = candles.find(c => c.time === entrySecEx)
           || candles.reduce((b, c) => Math.abs(c.time - entrySecEx) < Math.abs(b.time - entrySecEx) ? c : b, candles[0]);
+
+        // If that candle's range doesn't include the entry price, look ±3 candles
+        // for one that does — avoids the arrow floating above TP on fast moves
+        if (entryC && (entryPrice < entryC.low || entryPrice > entryC.high)) {
+          const idx = candles.indexOf(entryC);
+          const nearby = candles.slice(Math.max(0, idx - 3), idx + 4);
+          const better = nearby.find(c => entryPrice >= c.low && entryPrice <= c.high);
+          if (better) entryC = better;
+        }
+
         if (entryC) {
           markers.push({
             time:     entryC.time,
-            position: dir === 'LONG' ? 'belowBar' : 'aboveBar',
+            position: 'inBar',   // inBar keeps the arrow inside the candle regardless of wick size
             color:    '#2563eb',
             shape:    dir === 'LONG' ? 'arrowUp' : 'arrowDown',
             text:     'Entry',
@@ -1337,12 +1373,12 @@
         const closeC = candles.find(c => c.time === closeSecEx)
           || candles.reduce((b, c) => Math.abs(c.time - closeSecEx) < Math.abs(b.time - closeSecEx) ? c : b, candles[0]);
         if (closeC) {
-          const isWin  = (trade.status || '').toLowerCase() === 'win';
+          const isWin = (trade.status || '').toLowerCase() === 'win';
+          // Use inBar so the marker stays inside the candle body instead of
+          // floating above/below a large wick and misleading about the exit price.
           markers.push({
             time:     closeC.time,
-            position: isWin
-              ? (dir === 'LONG' ? 'aboveBar' : 'belowBar')
-              : (dir === 'LONG' ? 'belowBar' : 'aboveBar'),
+            position: 'inBar',
             color:    isWin ? '#16a34a' : '#dc2626',
             shape:    'circle',
             text:     isWin ? 'TP' : 'SL',
