@@ -1032,17 +1032,42 @@
       }
 
       try {
-        const r    = await fetch(`/api/chart/${sym}/${tf}`);
-        const data = await r.json();
-        const raw  = Array.isArray(data.candles) ? data.candles : (Array.isArray(data) ? data : []);
-        if (raw.length) {
-          const candles = raw.map(c => ({
-            time: Math.floor(c.time), open: parseFloat(c.open),
-            high: parseFloat(c.high), low: parseFloat(c.low), close: parseFloat(c.close),
-          }));
-          candles.sort((a, b) => a.time - b.time);
+        const r   = await fetch(`https://api.binance.us/api/v3/klines?symbol=${sym}&interval=${tf}&limit=500`);
+        const raw = await r.json();
+        if (Array.isArray(raw) && raw.length) {
           const seen = new Set();
-          series.setData(candles.filter(c => { if (seen.has(c.time)) return false; seen.add(c.time); return true; }));
+          const candles = raw
+            .map(k => ({
+              time:  Math.floor(k[0] / 1000),
+              open:  parseFloat(k[1]),
+              high:  parseFloat(k[2]),
+              low:   parseFloat(k[3]),
+              close: parseFloat(k[4]),
+            }))
+            .sort((a, b) => a.time - b.time)
+            .filter(c => { if (seen.has(c.time)) return false; seen.add(c.time); return true; });
+
+          series.setData(candles);
+
+          // Entry candle arrow marker
+          if (trade.opened_at && candles.length) {
+            const intMap = {'1m':60000,'3m':180000,'5m':300000,'15m':900000,'30m':1800000,'1h':3600000,'2h':7200000,'4h':14400000,'1d':86400000};
+            const intMs      = intMap[tf] || 3600000;
+            const entryFloor = Math.floor(new Date(trade.opened_at).getTime() / intMs) * intMs;
+            const entrySecEx = Math.floor(entryFloor / 1000);
+            const entryC     = candles.find(c => c.time === entrySecEx)
+              || candles.reduce((b, c) => Math.abs(c.time - entrySecEx) < Math.abs(b.time - entrySecEx) ? c : b, candles[0]);
+            if (entryC) {
+              series.setMarkers([{
+                time:     entryC.time,
+                position: dir === 'LONG' ? 'belowBar' : 'aboveBar',
+                color:    '#2563eb',
+                shape:    dir === 'LONG' ? 'arrowUp' : 'arrowDown',
+                text:     'Entry',
+              }]);
+            }
+          }
+
           chart.timeScale().fitContent();
         }
       } catch (e) { console.error(`chart fetch error for ${sym}`, e); }
@@ -1200,14 +1225,14 @@
       const intMs = _INTERVAL_MS[tf] || 3600000;
       let url;
       if (isOpen) {
-        url = `https://api.binance.us/api/v3/klines?symbol=${sym}&interval=${tf}&limit=200`;
+        url = `https://api.binance.us/api/v3/klines?symbol=${sym}&interval=${tf}&limit=500`;
       } else {
-        // Center view on the trade: 30 bars before open, 15 bars after close
-        const openMs  = trade.opened_at ? new Date(trade.opened_at).getTime() : Date.now() - intMs * 100;
+        // Wide window: 120 bars before entry, 50 bars after close
+        const openMs  = trade.opened_at ? new Date(trade.opened_at).getTime() : Date.now() - intMs * 200;
         const closeMs = trade.closed_at ? new Date(trade.closed_at).getTime() : openMs + intMs;
-        const startMs = openMs  - 30 * intMs;
-        const endMs   = closeMs + 15 * intMs;
-        url = `https://api.binance.us/api/v3/klines?symbol=${sym}&interval=${tf}&startTime=${startMs}&endTime=${endMs}&limit=300`;
+        const startMs = openMs  - 120 * intMs;
+        const endMs   = closeMs +  50 * intMs;
+        url = `https://api.binance.us/api/v3/klines?symbol=${sym}&interval=${tf}&startTime=${startMs}&endTime=${endMs}&limit=500`;
       }
 
       const res = await fetch(url);
@@ -1278,20 +1303,40 @@
 
     _modalSeries.setData(candles);
 
+    // Entry candle marker (blue arrow)
+    if (trade.opened_at && candles.length) {
+      const intMs       = _INTERVAL_MS[tf] || 3600000;
+      const entryFloor  = Math.floor(new Date(trade.opened_at).getTime() / intMs) * intMs;
+      const entrySecExp = Math.floor(entryFloor / 1000);
+      const entryCandle = candles.find(c => c.time === entrySecExp)
+        || candles.reduce((best, c) =>
+            Math.abs(c.time - entrySecExp) < Math.abs(best.time - entrySecExp) ? c : best,
+            candles[0]);
+      if (entryCandle) {
+        _modalSeries.setMarkers([{
+          time:     entryCandle.time,
+          position: dir === 'LONG' ? 'belowBar' : 'aboveBar',
+          color:    '#2563eb',
+          shape:    dir === 'LONG' ? 'arrowUp' : 'arrowDown',
+          text:     'Entry',
+        }]);
+      }
+    }
+
     // Scroll to trade window (closed) or show latest (open)
     if (!isOpen && trade.opened_at) {
       const intMs   = _INTERVAL_MS[tf] || 3600000;
       const openMs  = new Date(trade.opened_at).getTime();
       const closeMs = trade.closed_at ? new Date(trade.closed_at).getTime() : openMs + intMs;
-      const fromSec = Math.floor((openMs  - 8 * intMs) / 1000);
-      const toSec   = Math.floor((closeMs + 8 * intMs) / 1000);
+      const fromSec = Math.floor((openMs  - 20 * intMs) / 1000);
+      const toSec   = Math.floor((closeMs + 20 * intMs) / 1000);
       try { _modalChart.timeScale().setVisibleRange({ from: fromSec, to: toSec }); } catch(e) {}
     } else {
       _modalChart.timeScale().fitContent();
     }
 
     const statusEl = document.getElementById('modal-status');
-    if (statusEl) statusEl.textContent = `${candles.length} candles · ${isOpen ? 'live' : 'historical'} · click anywhere on chart to crosshair`;
+    if (statusEl) statusEl.textContent = `${candles.length} candles · ${isOpen ? 'live' : 'historical'} · blue arrow = entry candle`;
 
     // Responsive resize
     new ResizeObserver(() => {
