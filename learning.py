@@ -530,17 +530,26 @@ def update_trailing_stops(symbol: str, interval: str, current_price: float,
                 if profit_r < 1.0:
                     continue
 
+                # Minimum distance: structural trail candidates must be at least
+                # 0.5R away from current price — prevents grabbing a swing level
+                # that's right at current price and getting stopped by normal noise.
+                _min_trail_dist = 0.5 * risk_d
+
                 if direction == "LONG":
                     _partial_tp = t.get("partial_tp")
 
                     if profit_r >= 1.5 and swing_lows:
-                        # Phase 2: trail to the highest swing low at or above partial_tp
-                        # (1.5R floor), so a trailing stop-out always locks in ≥1.5R.
+                        # Phase 2: trail to the highest swing low that is:
+                        #  • above current SL (must be an improvement)
+                        #  • at or above partial_tp floor (locks in ≥1.5R on exit)
+                        #  • at least 0.5R below current price (breathing room)
                         candidates = [p for p in swing_lows
                                       if p > current_sl
                                       and (_partial_tp is None or p >= _partial_tp)
-                                      and p < current_price]
-                        new_sl = round(max(candidates), 8) if candidates else round(entry, 8)
+                                      and p < current_price - _min_trail_dist]
+                        if not candidates:
+                            continue   # no valid structural level — keep current SL
+                        new_sl = round(max(candidates), 8)
                     else:
                         # Phase 1: just move to breakeven (entry)
                         new_sl = round(entry, 8)
@@ -562,13 +571,17 @@ def update_trailing_stops(symbol: str, interval: str, current_price: float,
                     _partial_tp = t.get("partial_tp")
 
                     if profit_r >= 1.5 and swing_highs:
-                        # Phase 2: trail to the lowest swing high at or below partial_tp
-                        # (1.5R floor), so a trailing stop-out always locks in ≥1.5R.
+                        # Phase 2: trail to the lowest swing high that is:
+                        #  • below current SL (must be an improvement)
+                        #  • at or below partial_tp floor (locks in ≥1.5R on exit)
+                        #  • at least 0.5R above current price (breathing room)
                         candidates = [p for p in swing_highs
                                       if p < current_sl
                                       and (_partial_tp is None or p <= _partial_tp)
-                                      and p > current_price]
-                        new_sl = round(min(candidates), 8) if candidates else round(entry, 8)
+                                      and p > current_price + _min_trail_dist]
+                        if not candidates:
+                            continue   # no valid structural level — keep current SL
+                        new_sl = round(min(candidates), 8)
                     else:
                         # Phase 1: just move to breakeven (entry)
                         new_sl = round(entry, 8)

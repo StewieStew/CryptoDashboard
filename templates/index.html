@@ -1288,11 +1288,12 @@
 
   // ── Load (or reload) the chart at a given display TF ──
   async function _loadModalChart(trade, displayTf) {
-    const sym    = trade.symbol    || 'BTCUSDT';
-    const dir    = (trade.direction || 'LONG').toUpperCase();
-    const st     = (trade.status    || '').toLowerCase();
-    const isOpen = st === 'open';
+    const sym      = trade.symbol    || 'BTCUSDT';
+    const dir      = (trade.direction || 'LONG').toUpperCase();
+    const st       = (trade.status    || '').toLowerCase();
+    const isOpen   = st === 'open';
     const nativeTf = trade.interval || '1h';
+    const intMsD   = _INTERVAL_MS[displayTf] || 3600000;
 
     _setActiveTfBtn(displayTf, nativeTf);
 
@@ -1306,15 +1307,14 @@
     let candles = [];
     let fetchErr = null;
     try {
-      const intMs = _INTERVAL_MS[displayTf] || 3600000;
       let url;
       if (isOpen) {
         url = `https://api.binance.us/api/v3/klines?symbol=${sym}&interval=${displayTf}&limit=500`;
       } else {
-        const openMs  = trade.opened_at ? new Date(trade.opened_at).getTime() : Date.now() - intMs * 200;
-        const closeMs = trade.closed_at ? new Date(trade.closed_at).getTime() : openMs + intMs;
-        const startMs = openMs  - 120 * intMs;
-        const endMs   = closeMs +  50 * intMs;
+        const openMs  = trade.opened_at ? new Date(trade.opened_at).getTime() : Date.now() - intMsD * 200;
+        const closeMs = trade.closed_at ? new Date(trade.closed_at).getTime() : openMs + intMsD;
+        const startMs = openMs  - 120 * intMsD;
+        const endMs   = closeMs +  50 * intMsD;
         url = `https://api.binance.us/api/v3/klines?symbol=${sym}&interval=${displayTf}&startTime=${startMs}&endTime=${endMs}&limit=500`;
       }
       const res = await fetch(url);
@@ -1374,6 +1374,28 @@
         lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Solid, title: 'TP' });
 
     _modalSeries.setData(candles);
+
+    // ── Entry candle marker (time indicator only — shows when trade opened) ──
+    if (trade.opened_at) {
+      const entryTimeSec = Math.floor(new Date(trade.opened_at).getTime() / 1000);
+      const intSec = Math.floor(intMsD / 1000);
+      let entryCandle = candles.find(c => c.time <= entryTimeSec && entryTimeSec < c.time + intSec);
+      if (!entryCandle && candles.length) {
+        // Fallback: nearest candle by time distance
+        entryCandle = candles.reduce((best, c) =>
+          Math.abs(c.time - entryTimeSec) < Math.abs(best.time - entryTimeSec) ? c : best);
+      }
+      if (entryCandle) {
+        _modalSeries.setMarkers([{
+          time:     entryCandle.time,
+          position: 'belowBar',
+          color:    '#2563eb',
+          shape:    'arrowUp',
+          text:     'Entry',
+          size:     1,
+        }]);
+      }
+    }
 
     // ── Scroll to trade window ──
     // Use a small delay so the chart finishes its initial render before we override the range.
