@@ -47,6 +47,7 @@ DEFAULT_WEIGHTS = {
 }
 DEFAULT_THRESHOLD = 7.0    # minimum score to fire a signal
 DEFAULT_STOP_MULT = 0.3    # ATR wick buffer on structural stop — 0.3×ATR gives ~3-5 pts breathing room on ETH/BTC 15m
+MAX_STOP_MULT     = 0.5    # hard ceiling — adaptation engine cannot widen stops beyond this
 ADAPT_WINDOW      = 8      # trades to look back per-factor
 MIN_SAMPLES       = 2      # minimum trades before adapting a factor
 WEIGHT_FLOOR_ABS  = 1.0    # absolute minimum — no active factor weight can drop below 1.0
@@ -110,9 +111,12 @@ def _init_db():
         db.execute("UPDATE config SET value=? WHERE key='signal_threshold' AND CAST(value AS REAL) = 8.0",
                    (str(DEFAULT_THRESHOLD),))
         # Raise stop_multiplier to new default (0.3) if still at old tight value (0.1)
-        # IMPORTANT: never reset stop_multiplier downward — let the adaptation engine control it
         db.execute("UPDATE config SET value=? WHERE key='stop_multiplier' AND CAST(value AS REAL) < 0.3",
                    (str(DEFAULT_STOP_MULT),))
+        # Cap stop_multiplier at MAX_STOP_MULT — clamp any value the adaptation engine
+        # may have pushed above the ceiling back down on redeploy.
+        db.execute("UPDATE config SET value=? WHERE key='stop_multiplier' AND CAST(value AS REAL) > ?",
+                   (str(MAX_STOP_MULT), MAX_STOP_MULT))
         db.commit()
 
         # ── Schema migrations: add new columns to existing tables ──────────
@@ -863,8 +867,8 @@ def _adapt(db) -> list:
             if r["sl"] and r["entry"]
             and abs(float(r["sl"]) - float(r["entry"])) / float(r["entry"]) < 0.01
         )
-        if tight >= 2 and stop_mult < 1.5:
-            new_mult = min(round(stop_mult + 0.1, 1), 1.0)
+        if tight >= 2 and stop_mult < MAX_STOP_MULT:
+            new_mult = min(round(stop_mult + 0.1, 1), MAX_STOP_MULT)
             if new_mult != stop_mult:
                 changes.append(
                     f"⬆ Stop multiplier {stop_mult:.1f}→{new_mult:.1f}×ATR "
