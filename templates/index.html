@@ -572,10 +572,65 @@
     }
     .modal-close:hover { background: var(--bg); }
 
+    .modal-tf-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 20px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface-2);
+    }
+
+    .modal-tf-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-3);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      white-space: nowrap;
+    }
+
+    .modal-tf-btns {
+      display: flex;
+      gap: 4px;
+      flex-wrap: wrap;
+    }
+
+    .modal-tf-btns button {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 3px 10px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-2);
+      cursor: pointer;
+      transition: background .12s, color .12s, border-color .12s;
+      font-family: inherit;
+    }
+
+    .modal-tf-btns button:hover { background: var(--bg); color: var(--text); }
+
+    .modal-tf-btns button.active {
+      background: var(--blue);
+      border-color: var(--blue);
+      color: #fff;
+    }
+
+    .modal-tf-btns button.native {
+      border-color: var(--blue);
+      color: var(--blue);
+    }
+
+    .modal-tf-btns button.native.active {
+      background: var(--blue);
+      color: #fff;
+    }
+
     .modal-chart-wrap {
       flex: 1;
       min-height: 320px;
-      height: 480px;
+      height: 440px;
       position: relative;
     }
 
@@ -753,6 +808,20 @@
       <div class="modal-title" id="modal-title">Chart</div>
       <div class="modal-meta" id="modal-meta"></div>
       <button class="modal-close" id="modal-close" title="Close (Esc)">✕</button>
+    </div>
+    <div class="modal-tf-bar" id="modal-tf-bar">
+      <span class="modal-tf-label">Timeframe</span>
+      <div class="modal-tf-btns" id="modal-tf-btns">
+        <button data-tf="1m">1m</button>
+        <button data-tf="3m">3m</button>
+        <button data-tf="5m">5m</button>
+        <button data-tf="15m">15m</button>
+        <button data-tf="30m">30m</button>
+        <button data-tf="1h">1h</button>
+        <button data-tf="2h">2h</button>
+        <button data-tf="4h">4h</button>
+        <button data-tf="1d">1d</button>
+      </div>
     </div>
     <div class="modal-chart-wrap" id="modal-chart-wrap">
       <div class="modal-loading" id="modal-loading">Loading chart data…</div>
@@ -1157,19 +1226,23 @@
     '1h':3600000,'2h':7200000,'4h':14400000,'1d':86400000
   };
 
-  let _modalChart  = null;
-  let _modalSeries = null;
+  let _modalChart       = null;
+  let _modalSeries      = null;
+  let _currentModalTrade = null;   // trade object currently displayed
+  let _modalResizeObs   = null;
 
   const _modalOverlay = document.getElementById('trade-modal');
   const _modalClose   = document.getElementById('modal-close');
 
-  // Close handlers
+  // ── Close ──
   _modalClose.addEventListener('click', _closeModal);
   _modalOverlay.addEventListener('click', e => { if (e.target === _modalOverlay) _closeModal(); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') _closeModal(); });
 
   function _closeModal() {
     _modalOverlay.classList.remove('open');
+    _currentModalTrade = null;
+    if (_modalResizeObs) { _modalResizeObs.disconnect(); _modalResizeObs = null; }
     if (_modalChart) { try { _modalChart.remove(); } catch(e) {} _modalChart = null; _modalSeries = null; }
     const wrap = document.getElementById('modal-chart-wrap');
     if (wrap) wrap.innerHTML = '<div class="modal-loading">Loading chart data…</div>';
@@ -1177,23 +1250,38 @@
     if (status) status.textContent = '';
   }
 
-  // Row click delegation
+  // ── TF switcher ──
+  document.getElementById('modal-tf-btns').addEventListener('click', e => {
+    const btn = e.target.closest('button[data-tf]');
+    if (!btn || !_currentModalTrade) return;
+    _loadModalChart(_currentModalTrade, btn.dataset.tf);
+  });
+
+  function _setActiveTfBtn(activeTf, nativeTf) {
+    document.querySelectorAll('#modal-tf-btns button').forEach(b => {
+      b.classList.toggle('native', b.dataset.tf === nativeTf);
+      b.classList.toggle('active', b.dataset.tf === activeTf);
+    });
+  }
+
+  // ── Row click delegation ──
   document.getElementById('trades-body').addEventListener('click', e => {
     const row = e.target.closest('tr[data-id]');
     if (row) _openTradeChart(row.dataset.id);
   });
 
-  async function _openTradeChart(tradeId) {
+  // ── Open modal for a trade ──
+  function _openTradeChart(tradeId) {
     const trade = _tradeMap.get(String(tradeId));
     if (!trade) return;
 
-    const sym    = trade.symbol   || 'BTCUSDT';
-    const tf     = trade.interval || '1h';
+    const sym    = trade.symbol    || 'BTCUSDT';
+    const tf     = trade.interval  || '1h';
     const dir    = (trade.direction || 'LONG').toUpperCase();
-    const st     = (trade.status   || '').toLowerCase();
+    const st     = (trade.status    || '').toLowerCase();
     const isOpen = st === 'open';
 
-    // Header
+    // Header badges + meta
     const dirBadge = dir === 'LONG'
       ? '<span class="badge badge-long">LONG</span>'
       : '<span class="badge badge-short">SHORT</span>';
@@ -1221,200 +1309,152 @@
       !isOpen && trade.closed_at ? `<span style="color:var(--text-3)">Closed ${fmtTime(trade.closed_at)}</span>` : '',
     ].filter(Boolean).join('');
 
-    document.getElementById('modal-status').textContent = '';
-
-    // Show modal
+    _currentModalTrade = trade;
     _modalOverlay.classList.add('open');
+    _loadModalChart(trade, tf);   // default to trade's own TF
+  }
+
+  // ── Load (or reload) the chart at a given display TF ──
+  async function _loadModalChart(trade, displayTf) {
+    const sym    = trade.symbol    || 'BTCUSDT';
+    const dir    = (trade.direction || 'LONG').toUpperCase();
+    const st     = (trade.status    || '').toLowerCase();
+    const isOpen = st === 'open';
+    const nativeTf = trade.interval || '1h';
+
+    _setActiveTfBtn(displayTf, nativeTf);
 
     // Destroy previous chart
+    if (_modalResizeObs) { _modalResizeObs.disconnect(); _modalResizeObs = null; }
     if (_modalChart) { try { _modalChart.remove(); } catch(e) {} _modalChart = null; _modalSeries = null; }
     const wrap = document.getElementById('modal-chart-wrap');
-    wrap.innerHTML = '<div class="modal-loading">Fetching candles…</div>';
+    wrap.innerHTML = `<div class="modal-loading">Loading ${displayTf} candles…</div>`;
 
-    // Fetch OHLCV from Binance
+    // ── Fetch candles from Binance ──
     let candles = [];
     let fetchErr = null;
     try {
-      const intMs = _INTERVAL_MS[tf] || 3600000;
+      const intMs = _INTERVAL_MS[displayTf] || 3600000;
       let url;
       if (isOpen) {
-        url = `https://api.binance.us/api/v3/klines?symbol=${sym}&interval=${tf}&limit=500`;
+        url = `https://api.binance.us/api/v3/klines?symbol=${sym}&interval=${displayTf}&limit=500`;
       } else {
-        // Wide window: 120 bars before entry, 50 bars after close
         const openMs  = trade.opened_at ? new Date(trade.opened_at).getTime() : Date.now() - intMs * 200;
         const closeMs = trade.closed_at ? new Date(trade.closed_at).getTime() : openMs + intMs;
         const startMs = openMs  - 120 * intMs;
         const endMs   = closeMs +  50 * intMs;
-        url = `https://api.binance.us/api/v3/klines?symbol=${sym}&interval=${tf}&startTime=${startMs}&endTime=${endMs}&limit=500`;
+        url = `https://api.binance.us/api/v3/klines?symbol=${sym}&interval=${displayTf}&startTime=${startMs}&endTime=${endMs}&limit=500`;
       }
-
       const res = await fetch(url);
       const raw = await res.json();
       if (Array.isArray(raw) && raw.length) {
         const seen = new Set();
         candles = raw
-          .map(k => ({
-            time:  Math.floor(k[0] / 1000),
-            open:  parseFloat(k[1]),
-            high:  parseFloat(k[2]),
-            low:   parseFloat(k[3]),
-            close: parseFloat(k[4]),
-          }))
-          .sort((a, b) => a.time - b.time)
+          .map(k => ({ time: Math.floor(k[0]/1000), open: parseFloat(k[1]),
+                       high: parseFloat(k[2]), low: parseFloat(k[3]), close: parseFloat(k[4]) }))
+          .sort((a,b) => a.time - b.time)
           .filter(c => { if (seen.has(c.time)) return false; seen.add(c.time); return true; });
       } else if (raw && raw.code) {
         fetchErr = raw.msg || 'Binance API error';
       }
-    } catch (e) {
-      fetchErr = e.message || 'Network error';
-      console.error('Modal chart fetch error', e);
-    }
+    } catch(e) { fetchErr = e.message || 'Network error'; console.error(e); }
 
     wrap.innerHTML = '';
-
     if (!candles.length) {
-      wrap.innerHTML = `<div class="modal-loading">${fetchErr ? '⚠ ' + fetchErr : 'No candle data returned.'}</div>`;
+      wrap.innerHTML = `<div class="modal-loading">${fetchErr ? '⚠ ' + fetchErr : 'No candle data.'}</div>`;
       return;
     }
 
-    // Build chart
+    // ── Build chart ──
     _modalChart = LightweightCharts.createChart(wrap, {
       layout:          { background: { color: '#ffffff' }, textColor: '#9ca3af' },
       grid:            { vertLines: { color: '#f3f4f6' }, horzLines: { color: '#f3f4f6' } },
       crosshair:       { mode: LightweightCharts.CrosshairMode.Normal },
       rightPriceScale: { borderColor: '#e5e7eb' },
       timeScale:       { borderColor: '#e5e7eb', timeVisible: true, secondsVisible: false },
-      width:           wrap.clientWidth  || 880,
-      height:          wrap.clientHeight || 480,
+      width:  wrap.clientWidth  || 880,
+      height: wrap.clientHeight || 440,
     });
 
     _modalSeries = _modalChart.addCandlestickSeries({
-      upColor:        '#16a34a', downColor:       '#dc2626',
+      upColor: '#16a34a', downColor: '#dc2626',
       borderUpColor: '#16a34a', borderDownColor: '#dc2626',
       wickUpColor:   '#16a34a', wickDownColor:   '#dc2626',
     });
 
-    // Price lines
-    if (trade.entry != null) {
-      _modalSeries.createPriceLine({
-        price: parseFloat(trade.entry), color: '#374151', lineWidth: 1,
-        lineStyle: LightweightCharts.LineStyle.Dashed, title: 'Entry',
-      });
-    }
-    // For closed trades, draw the original SL (initial_sl) so trailing moves don't distort the chart.
-    // For open trades, draw current sl (where the trailing stop actually is).
+    // ── Price lines ──
+    if (trade.entry != null)
+      _modalSeries.createPriceLine({ price: parseFloat(trade.entry), color: '#374151',
+        lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, title: 'Entry' });
+
     const _slPrice = (!isOpen && trade.initial_sl != null) ? trade.initial_sl : trade.sl;
     if (_slPrice != null) {
-      _modalSeries.createPriceLine({
-        price: parseFloat(_slPrice), color: '#dc2626', lineWidth: 1,
-        lineStyle: LightweightCharts.LineStyle.Solid,
-        title: (!isOpen && trade.initial_sl != null) ? 'Initial SL' : 'SL',
-      });
-      // If the trade was trailed to a different level, also show the final trailing stop as dashed
+      _modalSeries.createPriceLine({ price: parseFloat(_slPrice), color: '#dc2626',
+        lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Solid,
+        title: (!isOpen && trade.initial_sl != null) ? 'Initial SL' : 'SL' });
       if (!isOpen && trade.initial_sl != null && trade.sl != null
-          && Math.abs(parseFloat(trade.initial_sl) - parseFloat(trade.sl)) > 0.000001) {
-        _modalSeries.createPriceLine({
-          price: parseFloat(trade.sl), color: '#f97316', lineWidth: 1,
-          lineStyle: LightweightCharts.LineStyle.Dashed, title: 'Trail SL',
-        });
-      }
+          && Math.abs(parseFloat(trade.initial_sl) - parseFloat(trade.sl)) > 0.000001)
+        _modalSeries.createPriceLine({ price: parseFloat(trade.sl), color: '#f97316',
+          lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, title: 'Trail SL' });
     }
-    if (trade.tp != null) {
-      _modalSeries.createPriceLine({
-        price: parseFloat(trade.tp), color: '#16a34a', lineWidth: 1,
-        lineStyle: LightweightCharts.LineStyle.Solid, title: 'TP',
-      });
-    }
+    if (trade.tp != null)
+      _modalSeries.createPriceLine({ price: parseFloat(trade.tp), color: '#16a34a',
+        lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Solid, title: 'TP' });
 
     _modalSeries.setData(candles);
 
-    // Candle markers: entry + TP/SL hit (for closed trades)
-    if (candles.length) {
-      const intMs = _INTERVAL_MS[tf] || 3600000;
-      const markers = [];
+    // ── Candle markers ──
+    const intMsD = _INTERVAL_MS[displayTf] || 3600000;
+    const markers = [];
 
-      // Entry candle — blue arrow
-      // Strategy: first find the time-floored candle, then prefer a nearby candle
-      // whose range actually contains the entry price so the arrow doesn't float
-      // above/below a candle that has already moved past entry.
-      if (trade.opened_at && trade.entry != null) {
-        const entryPrice = parseFloat(trade.entry);
-        const entryFloor = Math.floor(new Date(trade.opened_at).getTime() / intMs) * intMs;
-        const entrySecEx = Math.floor(entryFloor / 1000);
-
-        // Start with time-based candidate
-        let entryC = candles.find(c => c.time === entrySecEx)
-          || candles.reduce((b, c) => Math.abs(c.time - entrySecEx) < Math.abs(b.time - entrySecEx) ? c : b, candles[0]);
-
-        // If that candle's range doesn't include the entry price, look ±3 candles
-        // for one that does — avoids the arrow floating above TP on fast moves
-        if (entryC && (entryPrice < entryC.low || entryPrice > entryC.high)) {
-          const idx = candles.indexOf(entryC);
-          const nearby = candles.slice(Math.max(0, idx - 3), idx + 4);
-          const better = nearby.find(c => entryPrice >= c.low && entryPrice <= c.high);
-          if (better) entryC = better;
-        }
-
-        if (entryC) {
-          markers.push({
-            time:     entryC.time,
-            position: 'inBar',   // inBar keeps the arrow inside the candle regardless of wick size
-            color:    '#2563eb',
-            shape:    dir === 'LONG' ? 'arrowUp' : 'arrowDown',
-            text:     'Entry',
-          });
-        }
+    if (trade.opened_at && trade.entry != null) {
+      const entryPrice = parseFloat(trade.entry);
+      const entrySecEx = Math.floor(Math.floor(new Date(trade.opened_at).getTime() / intMsD) * intMsD / 1000);
+      let entryC = candles.find(c => c.time === entrySecEx)
+        || candles.reduce((b,c) => Math.abs(c.time-entrySecEx) < Math.abs(b.time-entrySecEx) ? c : b, candles[0]);
+      if (entryC && (entryPrice < entryC.low || entryPrice > entryC.high)) {
+        const idx    = candles.indexOf(entryC);
+        const better = candles.slice(Math.max(0,idx-3), idx+4).find(c => entryPrice >= c.low && entryPrice <= c.high);
+        if (better) entryC = better;
       }
+      if (entryC) markers.push({ time: entryC.time, position: 'inBar', color: '#2563eb',
+        shape: dir === 'LONG' ? 'arrowUp' : 'arrowDown', text: 'Entry' });
+    }
 
-      // Close candle — green circle (TP) or red circle (SL) for closed trades
-      if (!isOpen && trade.closed_at) {
-        const closeFloor = Math.floor(new Date(trade.closed_at).getTime() / intMs) * intMs;
-        const closeSecEx = Math.floor(closeFloor / 1000);
-        const closeC = candles.find(c => c.time === closeSecEx)
-          || candles.reduce((b, c) => Math.abs(c.time - closeSecEx) < Math.abs(b.time - closeSecEx) ? c : b, candles[0]);
-        if (closeC) {
-          const isWin = (trade.status || '').toLowerCase() === 'win';
-          // Use inBar so the marker stays inside the candle body instead of
-          // floating above/below a large wick and misleading about the exit price.
-          markers.push({
-            time:     closeC.time,
-            position: 'inBar',
-            color:    isWin ? '#16a34a' : '#dc2626',
-            shape:    'circle',
-            text:     isWin ? 'TP' : 'SL',
-          });
-        }
-      }
-
-      if (markers.length) {
-        markers.sort((a, b) => a.time - b.time);
-        _modalSeries.setMarkers(markers);
+    if (!isOpen && trade.closed_at) {
+      const closeSecEx = Math.floor(Math.floor(new Date(trade.closed_at).getTime() / intMsD) * intMsD / 1000);
+      const closeC = candles.find(c => c.time === closeSecEx)
+        || candles.reduce((b,c) => Math.abs(c.time-closeSecEx) < Math.abs(b.time-closeSecEx) ? c : b, candles[0]);
+      if (closeC) {
+        const isWin = st === 'win';
+        markers.push({ time: closeC.time, position: 'inBar',
+          color: isWin ? '#16a34a' : '#dc2626', shape: 'circle', text: isWin ? 'TP' : 'SL' });
       }
     }
 
-    // Scroll to trade window (closed) or show latest (open)
+    if (markers.length) { markers.sort((a,b) => a.time-b.time); _modalSeries.setMarkers(markers); }
+
+    // ── Scroll to trade window ──
     if (!isOpen && trade.opened_at) {
-      const intMs   = _INTERVAL_MS[tf] || 3600000;
       const openMs  = new Date(trade.opened_at).getTime();
-      const closeMs = trade.closed_at ? new Date(trade.closed_at).getTime() : openMs + intMs;
-      const fromSec = Math.floor((openMs  - 20 * intMs) / 1000);
-      const toSec   = Math.floor((closeMs + 20 * intMs) / 1000);
+      const closeMs = trade.closed_at ? new Date(trade.closed_at).getTime() : openMs + intMsD;
+      const fromSec = Math.floor((openMs  - 20 * intMsD) / 1000);
+      const toSec   = Math.floor((closeMs + 20 * intMsD) / 1000);
       try { _modalChart.timeScale().setVisibleRange({ from: fromSec, to: toSec }); } catch(e) {}
     } else {
       _modalChart.timeScale().fitContent();
     }
 
     const statusEl = document.getElementById('modal-status');
+    const nativeNote = displayTf !== nativeTf ? ` · trade signal on ${nativeTf}` : '';
     if (statusEl) statusEl.textContent = isOpen
-      ? `${candles.length} candles · live · 🔵 blue arrow = entry candle`
-      : `${candles.length} candles · historical · 🔵 entry  🟢 TP / 🔴 SL`;
+      ? `${candles.length} candles · ${displayTf} · live${nativeNote}`
+      : `${candles.length} candles · ${displayTf} · 🔵 entry  🟢 TP / 🔴 SL${nativeNote}`;
 
-    // Responsive resize
-    new ResizeObserver(() => {
-      if (_modalChart) {
-        _modalChart.applyOptions({ width: wrap.clientWidth, height: wrap.clientHeight });
-      }
-    }).observe(wrap);
+    _modalResizeObs = new ResizeObserver(() => {
+      if (_modalChart) _modalChart.applyOptions({ width: wrap.clientWidth, height: wrap.clientHeight });
+    });
+    _modalResizeObs.observe(wrap);
   }
 
   // ── Fetch & auto-refresh ──────────────────────────────────────────────────
