@@ -1376,14 +1376,21 @@
     _modalSeries.setData(candles);
 
     // ── Scroll to trade window ──
+    // Use a small delay so the chart finishes its initial render before we override the range.
+    // Without this, the chart defaults to showing the rightmost (most recent) candles.
+    const _chartRef = _modalChart;
     if (!isOpen && trade.opened_at) {
       const openMs  = new Date(trade.opened_at).getTime();
       const closeMs = trade.closed_at ? new Date(trade.closed_at).getTime() : openMs + intMsD;
-      const fromSec = Math.floor((openMs  - 20 * intMsD) / 1000);
-      const toSec   = Math.floor((closeMs + 20 * intMsD) / 1000);
-      try { _modalChart.timeScale().setVisibleRange({ from: fromSec, to: toSec }); } catch(e) {}
+      // Show 8 bars before entry and 8 bars after close — tight enough to see the trade clearly
+      const fromSec = Math.floor((openMs  -  8 * intMsD) / 1000);
+      const toSec   = Math.floor((closeMs +  8 * intMsD) / 1000);
+      setTimeout(() => {
+        try { if (_chartRef) _chartRef.timeScale().setVisibleRange({ from: fromSec, to: toSec }); }
+        catch(e) { try { if (_chartRef) _chartRef.timeScale().fitContent(); } catch(_) {} }
+      }, 50);
     } else {
-      _modalChart.timeScale().fitContent();
+      setTimeout(() => { try { if (_chartRef) _chartRef.timeScale().fitContent(); } catch(e) {} }, 50);
     }
 
     const statusEl = document.getElementById('modal-status');
