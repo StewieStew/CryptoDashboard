@@ -1388,15 +1388,36 @@
     _modalSeries.setData(candles);
 
     // ── Entry candle marker (time indicator only — shows when trade opened) ──
-    if (trade.opened_at) {
-      const entryTimeSec = Math.floor(new Date(trade.opened_at).getTime() / 1000);
+    if (trade.opened_at || trade.entry != null) {
+      const entryPrice   = trade.entry != null ? parseFloat(trade.entry) : null;
+      const entryTimeSec = trade.opened_at
+        ? Math.floor(new Date(trade.opened_at).getTime() / 1000) : null;
       const intSec = Math.floor(intMsD / 1000);
-      let entryCandle = candles.find(c => c.time <= entryTimeSec && entryTimeSec < c.time + intSec);
-      if (!entryCandle && candles.length) {
-        // Fallback: nearest candle by time distance
+
+      let entryCandle = null;
+
+      // 1st choice: candle whose price range CONTAINS the entry price,
+      //   then pick closest in time to opened_at.
+      //   Robust against timezone offset in opened_at string.
+      if (entryPrice != null) {
+        const priceMatches = candles.filter(c => c.low <= entryPrice && entryPrice <= c.high);
+        if (priceMatches.length) {
+          entryCandle = entryTimeSec != null
+            ? priceMatches.reduce((best, c) =>
+                Math.abs(c.time - entryTimeSec) < Math.abs(best.time - entryTimeSec) ? c : best)
+            : priceMatches[0];
+        }
+      }
+
+      // 2nd choice: exact time window (opened_at falls inside the candle period)
+      if (!entryCandle && entryTimeSec != null)
+        entryCandle = candles.find(c => c.time <= entryTimeSec && entryTimeSec < c.time + intSec);
+
+      // Last resort: nearest candle by raw time distance
+      if (!entryCandle && entryTimeSec != null && candles.length)
         entryCandle = candles.reduce((best, c) =>
           Math.abs(c.time - entryTimeSec) < Math.abs(best.time - entryTimeSec) ? c : best);
-      }
+
       if (entryCandle) {
         _modalSeries.setMarkers([{
           time:     entryCandle.time,

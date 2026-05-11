@@ -362,7 +362,7 @@ def auto_close(symbol: str, interval: str, current_price: float) -> tuple:
     Trailing stop (see update_trailing_stops for full logic):
     - 2R profit → SL moves to entry (breakeven)
     - 3R profit → SL moves to +1R (locks in minimum 1R)
-    - Beyond 3R → SL trails 0.5R below/above current price
+    - Beyond 3R → structural trail: SL moves to best swing low/high ≥1R from price
 
     Trades close ONLY when price hits SL or TP. No time-based or stagnation exits.
 
@@ -494,9 +494,11 @@ def update_trailing_stops(symbol: str, interval: str, current_price: float,
     Three-phase trailing stop (R measured against initial risk, not current SL):
 
       Phase 1 — 2R profit : move SL to entry (breakeven).
-      Phase 2 — 3R profit : move SL to +1R above/below entry (locks in minimum 1R).
-      Phase 3 — beyond 3R : trail SL at exactly 0.5R below (LONG) / above (SHORT)
-                             current price, updated every cycle.
+      Phase 2 — 3R profit : move SL to +1R above/below entry (locks in 1R minimum).
+      Phase 3 — beyond 3R : structural trail — SL moves to the best swing level that:
+                               • improves on current SL
+                               • is at least 1R away from current price (breathing room)
+                             If no valid structural level exists, SL stays put.
 
     SL only ever moves in the direction of profit — never backwards.
     Returns list of trade IDs whose SL was updated.
@@ -527,20 +529,30 @@ def update_trailing_stops(symbol: str, interval: str, current_price: float,
                     else (entry - current_price) / risk_d
                 )
 
-                # Nothing to do until we reach Phase 1 threshold
+                # Nothing to do until Phase 1 threshold
                 if profit_r < 2.0:
                     continue
 
+                # Minimum distance: swing level must be at least 1R from current price
+                # so normal pullbacks don't trigger the stop before structure breaks.
+                _min_dist = 1.0 * risk_d
+
                 if direction == "LONG":
-                    if profit_r >= 3.0:
-                        # Phase 3: trail 0.5R below current price
-                        new_sl = round(current_price - 0.5 * risk_d, 8)
-                    elif profit_r >= 2.0:
-                        # Phase 1/2 boundary: at exactly 3R we'd jump to +1R,
-                        # but between 2R and 3R just sit at breakeven.
-                        new_sl = round(entry, 8)
+                    if profit_r >= 3.0 and swing_lows:
+                        # Phase 3: trail to highest swing low that:
+                        #   • is above current SL (improvement)
+                        #   • is at least 1R below current price (breathing room)
+                        candidates = [p for p in swing_lows
+                                      if p > current_sl
+                                      and p < current_price - _min_dist]
+                        if not candidates:
+                            continue   # no valid structural level — hold current SL
+                        new_sl = round(max(candidates), 8)
+                    elif profit_r >= 3.0:
+                        continue       # at Phase 3 threshold but no swing data yet
                     else:
-                        continue
+                        # Phase 1 (2-3R): breakeven
+                        new_sl = round(entry, 8)
 
                     # SL may only move up for a LONG
                     if new_sl > current_sl:
@@ -550,20 +562,27 @@ def update_trailing_stops(symbol: str, interval: str, current_price: float,
                             (new_sl, be_now, t["id"])
                         )
                         label = (
-                            f"TRAIL {profit_r:.1f}R → SL {new_sl:.6f}" if profit_r >= 3.0
+                            f"STRUCTURAL TRAIL {profit_r:.1f}R → SL {new_sl:.6f}" if profit_r >= 3.0
                             else f"BREAKEVEN SL→{new_sl:.6f}"
                         )
                         logger.info(f"[TRAIL] {t['symbol']} {interval} LONG  {label}")
                         updated.append(t["id"])
 
                 elif direction == "SHORT":
-                    if profit_r >= 3.0:
-                        # Phase 3: trail 0.5R above current price
-                        new_sl = round(current_price + 0.5 * risk_d, 8)
-                    elif profit_r >= 2.0:
-                        new_sl = round(entry, 8)
-                    else:
+                    if profit_r >= 3.0 and swing_highs:
+                        # Phase 3: trail to lowest swing high that:
+                        #   • is below current SL (improvement)
+                        #   • is at least 1R above current price (breathing room)
+                        candidates = [p for p in swing_highs
+                                      if p < current_sl
+                                      and p > current_price + _min_dist]
+                        if not candidates:
+                            continue   # no valid structural level — hold current SL
+                        new_sl = round(min(candidates), 8)
+                    elif profit_r >= 3.0:
                         continue
+                    else:
+                        new_sl = round(entry, 8)
 
                     # SL may only move down for a SHORT
                     if new_sl < current_sl:
@@ -573,7 +592,7 @@ def update_trailing_stops(symbol: str, interval: str, current_price: float,
                             (new_sl, be_now, t["id"])
                         )
                         label = (
-                            f"TRAIL {profit_r:.1f}R → SL {new_sl:.6f}" if profit_r >= 3.0
+                            f"STRUCTURAL TRAIL {profit_r:.1f}R → SL {new_sl:.6f}" if profit_r >= 3.0
                             else f"BREAKEVEN SL→{new_sl:.6f}"
                         )
                         logger.info(f"[TRAIL] {t['symbol']} {interval} SHORT {label}")
