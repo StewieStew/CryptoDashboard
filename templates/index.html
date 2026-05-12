@@ -1110,21 +1110,20 @@
   // ── Position Sizing ────────────────────────────────────────────────────────
   const _psz = { account: 1000, perTrade: 250, leverage: 1, fee: 0.1 };
 
-  // R-based dollar P&L:
-  //   perTrade = your risk per trade (1R in dollars).
-  //   Win at 3R → +$750. Loss at 1R → -$250.
-  //   Leverage multiplies your risk unit (2× leverage = risk $500 per 1R).
-  //   Fee is a flat round-trip cost on the risk unit (not tied to stop distance),
-  //   so P&L stays proportional to R across all trades.
+  // ROI-based dollar P&L:
+  //   perTrade  = capital deployed per trade (e.g. $250).
+  //   leverage  = multiplier applied to that capital (e.g. 10× → $2,500 position).
+  //   dollarPnl = positionSize × actual_price_move% − round-trip fees
+  //   A trade that moves +0.80% on a $2,500 position = +$20 (before fees).
   function _tradeDollarPnl(t) {
-    const R = calcPnlR(t);
-    if (R === null) return null;
-    const riskUnit = _psz.perTrade * _psz.leverage;   // $ risked per 1R
-    // Flat round-trip fee: fee% in, fee% out, applied to the risk unit.
-    // Using per-stop-distance fee would blow up on tight stops (e.g. 2pt stop
-    // on $2300 ETH → 0.09% SL → feeR > 2R, destroying proportionality).
-    const feeDollar = riskUnit * (_psz.fee / 100) * 2;
-    return R * riskUnit - feeDollar;
+    if (!t.close_price || !t.entry) return null;
+    const entry = parseFloat(t.entry), close = parseFloat(t.close_price);
+    if (!isFinite(entry) || !isFinite(close) || entry === 0) return null;
+    const dir = (t.direction || 'LONG').toUpperCase();
+    const roi = dir === 'LONG' ? (close - entry) / entry : (entry - close) / entry;
+    const positionSize = _psz.perTrade * _psz.leverage;
+    const feeDollar    = positionSize * (_psz.fee / 100) * 2;   // fee in, fee out
+    return positionSize * roi - feeDollar;
   }
 
   // Build a map of trade id → { dollarPnl, runningBalance } in chronological order
@@ -1181,7 +1180,8 @@
 
     // Update hint
     const hint = document.getElementById('psz-exposure-hint');
-    if (hint) hint.textContent = `Risk per trade: $${riskUnit.toLocaleString()} · 1R loss = -$${riskUnit.toLocaleString()}`;
+    const posSize = _psz.perTrade * _psz.leverage;
+    if (hint) hint.textContent = `Position size: $${posSize.toLocaleString()} · 1% move = ${posSize > 0 ? '+' : ''}$${(posSize * 0.01).toFixed(2)}`;
 
     const fmtDollar = v => {
       if (!isFinite(v)) return '—';
