@@ -498,6 +498,85 @@
     ::-webkit-scrollbar { width: 6px; height: 6px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 3px; }
+
+    /* ── POSITION SIZING ── */
+    .psz-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      padding: 20px;
+    }
+    .psz-inputs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      align-items: flex-end;
+    }
+    .psz-field {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      min-width: 130px;
+    }
+    .psz-field label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-3);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .psz-field input, .psz-field select {
+      height: 36px;
+      padding: 0 12px;
+      border: 1px solid var(--border-2);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      color: var(--text);
+      font-size: 13px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color .15s;
+    }
+    .psz-field input:focus, .psz-field select:focus { border-color: var(--blue); }
+    .psz-hint {
+      font-size: 11px;
+      color: var(--text-3);
+      padding: 6px 10px;
+      background: var(--blue-light);
+      border-radius: var(--radius-sm);
+      align-self: flex-end;
+      white-space: nowrap;
+    }
+    .psz-stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 10px;
+    }
+    .psz-stat {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 12px 14px;
+    }
+    .psz-stat-label {
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--text-3);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 5px;
+    }
+    .psz-stat-value {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--text);
+    }
+    .psz-stat-value.positive { color: var(--green); }
+    .psz-stat-value.negative { color: var(--red); }
+    .psz-stat-value.neutral  { color: var(--blue); }
+    .dollar-col { color: var(--text); font-weight: 600; font-size: 13px; }
+    .balance-col { font-size: 11px; color: var(--text-2); font-family: 'SF Mono', 'Fira Code', monospace; }
     ::-webkit-scrollbar-thumb:hover { background: var(--text-3); }
 
     /* ── TRADE CHART MODAL ── */
@@ -669,6 +748,7 @@
 
   <ul class="nav-links" id="nav-links">
     <li><a href="#overview" class="active">Overview</a></li>
+    <li><a href="#sizing">Sizing</a></li>
     <li><a href="#trades">Trades</a></li>
     <li><a href="#charts">Charts</a></li>
     <li><a href="#learning">Learning</a></li>
@@ -734,6 +814,49 @@
     </div>
   </section>
 
+  <!-- POSITION SIZING -->
+  <section id="sizing" class="section-anchor">
+    <div class="section-header">
+      <h2>Position Sizing</h2>
+    </div>
+    <div class="card">
+      <div class="psz-wrap">
+        <div class="psz-inputs">
+          <div class="psz-field">
+            <label>Account Size ($)</label>
+            <input type="number" id="psz-account" value="1000" min="1" step="100">
+          </div>
+          <div class="psz-field">
+            <label>Per-Trade ($)</label>
+            <input type="number" id="psz-pertrade" value="250" min="1" step="50">
+          </div>
+          <div class="psz-field">
+            <label>Leverage</label>
+            <select id="psz-leverage">
+              <option value="1">1× (no leverage)</option>
+              <option value="2">2×</option>
+              <option value="3">3×</option>
+              <option value="5">5×</option>
+              <option value="10">10×</option>
+              <option value="20">20×</option>
+              <option value="25">25×</option>
+              <option value="50">50×</option>
+              <option value="100">100×</option>
+            </select>
+          </div>
+          <div class="psz-field">
+            <label>Fee / side (%)</label>
+            <input type="number" id="psz-fee" value="0.1" min="0" step="0.01" max="1">
+          </div>
+          <div class="psz-hint" id="psz-exposure-hint">Position: $250</div>
+        </div>
+        <div class="psz-stats" id="psz-stats">
+          <!-- filled by JS -->
+        </div>
+      </div>
+    </div>
+  </section>
+
   <!-- TRADES -->
   <section id="trades" class="section-anchor">
     <div class="section-header">
@@ -757,12 +880,14 @@
               <th>Result</th>
               <th>P&amp;L (R)</th>
               <th>ROI %</th>
+              <th>$ P&amp;L</th>
+              <th>Balance</th>
               <th>Opened</th>
               <th>Closed</th>
             </tr>
           </thead>
           <tbody id="trades-body">
-            <tr><td colspan="14" class="empty">Loading trades…</td></tr>
+            <tr><td colspan="16" class="empty">Loading trades…</td></tr>
           </tbody>
         </table>
       </div>
@@ -982,18 +1107,132 @@
     setRoi('stat-roi-day',  roiSum(closed.filter(t => t.closed_at && (now - new Date(t.closed_at).getTime()) < DAY)));
   }
 
+  // ── Position Sizing ────────────────────────────────────────────────────────
+  const _psz = { account: 1000, perTrade: 250, leverage: 1, fee: 0.1 };
+
+  // Build a map of trade id → { dollarPnl, runningBalance } in chronological order
+  function _buildPszMap(trades) {
+    const closed = trades
+      .filter(t => (t.status === 'win' || t.status === 'loss') && t.opened_at)
+      .sort((a, b) => new Date(a.opened_at) - new Date(b.opened_at));
+
+    const map = new Map();
+    let balance = _psz.account;
+
+    for (const t of closed) {
+      if (!t.close_price || !t.entry) continue;
+      const entry = parseFloat(t.entry), close = parseFloat(t.close_price);
+      if (!isFinite(entry) || !isFinite(close) || entry === 0) continue;
+
+      const dir    = (t.direction || 'LONG').toUpperCase();
+      const roi    = dir === 'LONG' ? (close - entry) / entry : (entry - close) / entry;
+      const feePct = (_psz.fee / 100) * 2;   // round-trip: entry + exit
+      const netRoi = roi - feePct;
+      const pnl    = _psz.perTrade * _psz.leverage * netRoi;
+      balance += pnl;
+      map.set(String(t.id), { dollarPnl: pnl, runningBalance: balance });
+    }
+    return map;
+  }
+
+  function renderPositionStats(trades) {
+    const closed = trades
+      .filter(t => (t.status === 'win' || t.status === 'loss') && t.opened_at)
+      .sort((a, b) => new Date(a.opened_at) - new Date(b.opened_at));
+
+    let total = 0, balance = _psz.account, peak = _psz.account;
+    let maxDD = 0, bestTrade = -Infinity, worstTrade = Infinity;
+    let tradeCount = 0;
+
+    for (const t of closed) {
+      if (!t.close_price || !t.entry) continue;
+      const entry = parseFloat(t.entry), close = parseFloat(t.close_price);
+      if (!isFinite(entry) || !isFinite(close) || entry === 0) continue;
+      const dir    = (t.direction || 'LONG').toUpperCase();
+      const roi    = dir === 'LONG' ? (close - entry) / entry : (entry - close) / entry;
+      const feePct = (_psz.fee / 100) * 2;
+      const pnl    = _psz.perTrade * _psz.leverage * (roi - feePct);
+      total += pnl;
+      balance += pnl;
+      if (balance > peak) peak = balance;
+      const dd = peak - balance;
+      if (dd > maxDD) maxDD = dd;
+      if (pnl > bestTrade) bestTrade = pnl;
+      if (pnl < worstTrade) worstTrade = pnl;
+      tradeCount++;
+    }
+
+    const finalBal  = _psz.account + total;
+    const totalRet  = _psz.account > 0 ? (total / _psz.account * 100) : 0;
+    const exposure  = _psz.perTrade * _psz.leverage;
+
+    // Update hint
+    const hint = document.getElementById('psz-exposure-hint');
+    if (hint) hint.textContent = `Position: $${exposure.toLocaleString()} · Max loss ≈ $${(_psz.perTrade).toLocaleString()}`;
+
+    const fmtDollar = (v, always=false) => {
+      if (!isFinite(v) || (!always && v === 0)) return '—';
+      const sign = v >= 0 ? '+' : '';
+      return `${sign}$${Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    };
+
+    const stats = [
+      { label: 'Total $ P&L',    value: fmtDollar(total),    cls: total >= 0 ? 'positive' : 'negative' },
+      { label: 'Final Balance',  value: `$${finalBal.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}`, cls: finalBal >= _psz.account ? 'positive' : 'negative' },
+      { label: 'Return on Acct', value: tradeCount ? `${totalRet >= 0 ? '+' : ''}${totalRet.toFixed(1)}%` : '—', cls: totalRet >= 0 ? 'positive' : 'negative' },
+      { label: 'Max Drawdown',   value: maxDD > 0 ? `-$${maxDD.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}` : '—', cls: maxDD > 0 ? 'negative' : '' },
+      { label: 'Best Trade',     value: isFinite(bestTrade)  && tradeCount ? fmtDollar(bestTrade)  : '—', cls: 'positive' },
+      { label: 'Worst Trade',    value: isFinite(worstTrade) && tradeCount ? fmtDollar(worstTrade) : '—', cls: 'negative' },
+      { label: 'Trades',         value: tradeCount || '—', cls: 'neutral' },
+      { label: 'Exposure',       value: `$${exposure.toLocaleString()}`, cls: 'neutral' },
+    ];
+
+    const el = document.getElementById('psz-stats');
+    if (el) el.innerHTML = stats.map(s => `
+      <div class="psz-stat">
+        <div class="psz-stat-label">${s.label}</div>
+        <div class="psz-stat-value ${s.cls}">${s.value}</div>
+      </div>`).join('');
+  }
+
+  // Re-render everything when sizing inputs change
+  let _lastTrades = [];
+  function _pszRefresh() {
+    _psz.account  = Math.max(1, parseFloat(document.getElementById('psz-account').value)  || 1000);
+    _psz.perTrade = Math.max(1, parseFloat(document.getElementById('psz-pertrade').value) || 250);
+    _psz.leverage = Math.max(1, parseFloat(document.getElementById('psz-leverage').value) || 1);
+    _psz.fee      = Math.max(0, parseFloat(document.getElementById('psz-fee').value)      || 0);
+    renderPositionStats(_lastTrades);
+    renderTrades(_lastTrades);
+  }
+
+  ['psz-account','psz-pertrade','psz-leverage','psz-fee'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', _pszRefresh);
+  });
+
   // ── Trades table ───────────────────────────────────────────────────────────
   const _tradeMap = new Map(); // id → trade, populated by renderTrades
 
   function renderTrades(trades) {
+    _lastTrades = trades;
     const tbody = document.getElementById('trades-body');
     if (!trades.length) {
-      tbody.innerHTML = '<tr><td colspan="14" class="empty">No trades logged yet. Bot is scanning for setups.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="16" class="empty">No trades logged yet. Bot is scanning for setups.</td></tr>';
       return;
     }
 
     _tradeMap.clear();
     [...trades].forEach(t => { if (t.id != null) _tradeMap.set(String(t.id), t); });
+
+    // Build per-trade dollar P&L map (chronological running balance)
+    const _pszMap = _buildPszMap(trades);
+
+    const _fmtBal = v => `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const _fmtPnl = v => {
+      const sign = v >= 0 ? '+' : '';
+      return `${sign}$${Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    };
 
     tbody.innerHTML = [...trades].reverse().map(t => {
       const dir = (t.direction || '').toUpperCase();
@@ -1023,6 +1262,18 @@
         pnlCell = '<span class="pnl-nil">—</span>';
       }
 
+      // Dollar P&L + running balance columns
+      const _pszData = t.id != null ? _pszMap.get(String(t.id)) : null;
+      let dollarCell = '<span class="pnl-nil">—</span>';
+      let balanceCell = '<span class="pnl-nil">—</span>';
+      if (_pszData) {
+        const { dollarPnl, runningBalance } = _pszData;
+        dollarCell  = `<span class="${dollarPnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">${_fmtPnl(dollarPnl)}</span>`;
+        balanceCell = `<span class="balance-col" style="color:${runningBalance >= _psz.account ? 'var(--green)' : 'var(--red)'}">${_fmtBal(runningBalance)}</span>`;
+      } else if (st === 'open') {
+        dollarCell = '<span class="badge badge-open" style="font-size:10px;">open</span>';
+      }
+
       const tpSrc = (t.tp_source || 'unknown').replace(/_/g, ' ');
       const rowId = t.id != null ? ` data-id="${t.id}"` : '';
 
@@ -1045,6 +1296,8 @@
         <td>${resBadge}</td>
         <td>${pnlCell}</td>
         <td>${roiCell(t)}</td>
+        <td class="dollar-col">${dollarCell}</td>
+        <td class="balance-col">${balanceCell}</td>
         <td class="ts">${fmtTime(t.opened_at)}</td>
         <td class="ts">${fmtTime(t.closed_at)}</td>
       </tr>`;
@@ -1468,6 +1721,7 @@
       const res    = await fetch('/api/trades');
       const trades = await res.json();
       renderSummary(trades);
+      renderPositionStats(trades);
       renderTrades(trades);
       renderCharts(trades.filter(t => t.status === 'open'));
       renderLearning();
