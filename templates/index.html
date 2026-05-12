@@ -1110,6 +1110,27 @@
   // ── Position Sizing ────────────────────────────────────────────────────────
   const _psz = { account: 1000, perTrade: 250, leverage: 1, fee: 0.1 };
 
+  // R-based dollar P&L:
+  //   perTrade = your risk per trade (1R in dollars).
+  //   Win at 3R → +$750. Loss at 1R → -$250.
+  //   Leverage multiplies your risk unit (2× leverage = risk $500 per 1R).
+  //   Fee is estimated as round-trip cost relative to the trade's risk distance.
+  function _tradeDollarPnl(t) {
+    const R = calcPnlR(t);
+    if (R === null) return null;
+    const riskUnit = _psz.perTrade * _psz.leverage;   // $ risked per 1R
+    // Round-trip fee drag in R units: 2 × fee% ÷ risk%
+    // (fee is charged on position size; position size = riskUnit / riskPct)
+    const refSl  = t.initial_sl != null ? parseFloat(t.initial_sl) : (t.sl != null ? parseFloat(t.sl) : null);
+    const entry  = parseFloat(t.entry);
+    let feeR = 0;
+    if (refSl != null && isFinite(refSl) && isFinite(entry) && entry > 0) {
+      const riskPct = Math.abs(entry - refSl) / entry;
+      if (riskPct > 0) feeR = ((_psz.fee / 100) * 2) / riskPct;
+    }
+    return (R - feeR) * riskUnit;
+  }
+
   // Build a map of trade id → { dollarPnl, runningBalance } in chronological order
   function _buildPszMap(trades) {
     const closed = trades
@@ -1120,15 +1141,8 @@
     let balance = _psz.account;
 
     for (const t of closed) {
-      if (!t.close_price || !t.entry) continue;
-      const entry = parseFloat(t.entry), close = parseFloat(t.close_price);
-      if (!isFinite(entry) || !isFinite(close) || entry === 0) continue;
-
-      const dir    = (t.direction || 'LONG').toUpperCase();
-      const roi    = dir === 'LONG' ? (close - entry) / entry : (entry - close) / entry;
-      const feePct = (_psz.fee / 100) * 2;   // round-trip: entry + exit
-      const netRoi = roi - feePct;
-      const pnl    = _psz.perTrade * _psz.leverage * netRoi;
+      const pnl = _tradeDollarPnl(t);
+      if (pnl === null) continue;
       balance += pnl;
       map.set(String(t.id), { dollarPnl: pnl, runningBalance: balance });
     }
@@ -1142,18 +1156,16 @@
 
     let total = 0, balance = _psz.account, peak = _psz.account;
     let maxDD = 0, bestTrade = -Infinity, worstTrade = Infinity;
-    let tradeCount = 0;
+    let tradeCount = 0, totalR = 0, winCount = 0, lossCount = 0;
 
     for (const t of closed) {
-      if (!t.close_price || !t.entry) continue;
-      const entry = parseFloat(t.entry), close = parseFloat(t.close_price);
-      if (!isFinite(entry) || !isFinite(close) || entry === 0) continue;
-      const dir    = (t.direction || 'LONG').toUpperCase();
-      const roi    = dir === 'LONG' ? (close - entry) / entry : (entry - close) / entry;
-      const feePct = (_psz.fee / 100) * 2;
-      const pnl    = _psz.perTrade * _psz.leverage * (roi - feePct);
+      const pnl = _tradeDollarPnl(t);
+      if (pnl === null) continue;
+      const R = calcPnlR(t);
       total += pnl;
       balance += pnl;
+      totalR += R;
+      if (t.status === 'win') winCount++; else lossCount++;
       if (balance > peak) peak = balance;
       const dd = peak - balance;
       if (dd > maxDD) maxDD = dd;
@@ -1162,34 +1174,40 @@
       tradeCount++;
     }
 
-    const finalBal  = _psz.account + total;
-    const totalRet  = _psz.account > 0 ? (total / _psz.account * 100) : 0;
-    const exposure  = _psz.perTrade * _psz.leverage;
+    const finalBal    = _psz.account + total;
+    const totalRet    = _psz.account > 0 ? (total / _psz.account * 100) : 0;
+    const riskUnit    = _psz.perTrade * _psz.leverage;
+    const avgR        = tradeCount ? (totalR / tradeCount) : 0;
+    // Breakeven win rate for this R:R system
+    const avgWinR     = winCount  ? (closed.filter(t=>t.status==='win') .reduce((s,t)=>{ const r=calcPnlR(t); return r!=null?s+r:s; }, 0) / winCount)  : 0;
+    const avgLossR    = lossCount ? (closed.filter(t=>t.status==='loss').reduce((s,t)=>{ const r=calcPnlR(t); return r!=null?s+Math.abs(r):s; }, 0) / lossCount) : 0;
+    const beWR        = (avgWinR > 0 && avgLossR > 0) ? avgLossR / (avgWinR + avgLossR) * 100 : null;
 
     // Update hint
     const hint = document.getElementById('psz-exposure-hint');
-    if (hint) hint.textContent = `Position: $${exposure.toLocaleString()} · Max loss ≈ $${(_psz.perTrade).toLocaleString()}`;
+    if (hint) hint.textContent = `Risk per trade: $${riskUnit.toLocaleString()} · 1R loss = -$${riskUnit.toLocaleString()}`;
 
-    const fmtDollar = (v, always=false) => {
-      if (!isFinite(v) || (!always && v === 0)) return '—';
+    const fmtDollar = v => {
+      if (!isFinite(v)) return '—';
       const sign = v >= 0 ? '+' : '';
       return `${sign}$${Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     };
 
     const stats = [
-      { label: 'Total $ P&L',    value: fmtDollar(total),    cls: total >= 0 ? 'positive' : 'negative' },
-      { label: 'Final Balance',  value: `$${finalBal.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}`, cls: finalBal >= _psz.account ? 'positive' : 'negative' },
-      { label: 'Return on Acct', value: tradeCount ? `${totalRet >= 0 ? '+' : ''}${totalRet.toFixed(1)}%` : '—', cls: totalRet >= 0 ? 'positive' : 'negative' },
-      { label: 'Max Drawdown',   value: maxDD > 0 ? `-$${maxDD.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}` : '—', cls: maxDD > 0 ? 'negative' : '' },
-      { label: 'Best Trade',     value: isFinite(bestTrade)  && tradeCount ? fmtDollar(bestTrade)  : '—', cls: 'positive' },
-      { label: 'Worst Trade',    value: isFinite(worstTrade) && tradeCount ? fmtDollar(worstTrade) : '—', cls: 'negative' },
-      { label: 'Trades',         value: tradeCount || '—', cls: 'neutral' },
-      { label: 'Exposure',       value: `$${exposure.toLocaleString()}`, cls: 'neutral' },
+      { label: 'Total $ P&L',     value: fmtDollar(total),    cls: total >= 0 ? 'positive' : 'negative' },
+      { label: 'Final Balance',   value: `$${finalBal.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}`, cls: finalBal >= _psz.account ? 'positive' : 'negative' },
+      { label: 'Return on Acct',  value: tradeCount ? `${totalRet >= 0 ? '+' : ''}${totalRet.toFixed(1)}%` : '—', cls: totalRet >= 0 ? 'positive' : 'negative' },
+      { label: 'Max Drawdown',    value: maxDD > 0 ? `-$${maxDD.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}` : '—', cls: maxDD > 0 ? 'negative' : '' },
+      { label: 'Best Trade',      value: isFinite(bestTrade)  && tradeCount ? fmtDollar(bestTrade)  : '—', cls: 'positive' },
+      { label: 'Worst Trade',     value: isFinite(worstTrade) && tradeCount ? fmtDollar(worstTrade) : '—', cls: 'negative' },
+      { label: 'Avg R / Trade',   value: tradeCount ? `${avgR >= 0 ? '+' : ''}${avgR.toFixed(2)}R` : '—', cls: avgR >= 0 ? 'positive' : 'negative' },
+      { label: 'Breakeven WR',    value: beWR != null ? `${beWR.toFixed(0)}%` : '—', cls: 'neutral',
+        title: 'Win rate you need to break even given avg win/loss R' },
     ];
 
     const el = document.getElementById('psz-stats');
     if (el) el.innerHTML = stats.map(s => `
-      <div class="psz-stat">
+      <div class="psz-stat" ${s.title ? `title="${s.title}"` : ''}>
         <div class="psz-stat-label">${s.label}</div>
         <div class="psz-stat-value ${s.cls}">${s.value}</div>
       </div>`).join('');
