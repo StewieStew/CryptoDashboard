@@ -600,13 +600,43 @@ def confluence_score(regime, structure, vol, rsi_data, sweeps,
                         "text": f"No BOS on {tf} — price still inside structure"})
 
     # 3. Liquidity sweep (default 2 pts)
+    # Direction-aware: only a sweep that CONFIRMS the trade direction earns points.
+    # A counter-direction sweep is opposing smart money and applies a penalty.
     w = weights.get("sweep", 2.0)
-    snap["sweep"] = bool(sweeps)
-    if sweeps:
+    snap["sweep"]         = False
+    snap["counter_sweep"] = False
+
+    is_long_setup  = bool(structure and structure.get("bullish_bos"))
+    is_short_setup = bool(structure and structure.get("bearish_bos"))
+
+    aligned_sweeps  = []
+    counter_sweeps  = []
+    for s in (sweeps or []):
+        stype = s.get("type", "")
+        if is_long_setup  and stype == "bullish_sweep":
+            aligned_sweeps.append(s)
+        elif is_short_setup and stype == "bearish_sweep":
+            aligned_sweeps.append(s)
+        else:
+            counter_sweeps.append(s)
+
+    if aligned_sweeps:
+        snap["sweep"] = True
         score += w
-        s = sweeps[0]
+        s = aligned_sweeps[0]
         reasons.append({"pts": round(w, 1), "earned": True,
                         "text": f"Liquidity sweep: {s['type']} @ {s['level']} — {s['desc']}"})
+    elif counter_sweeps:
+        # Counter-direction sweep = opposing smart money at entry.
+        # Penalise the score so this setup is harder (or impossible) to fire.
+        snap["counter_sweep"] = True
+        penalty = round(min(w, 1.5), 1)
+        score  -= penalty
+        s = counter_sweeps[0]
+        reasons.append({"pts": -penalty, "earned": False,
+                        "text": (f"⚠ Counter-direction sweep: {s['type']} @ {s['level']} — "
+                                 f"smart money absorbed in opposite direction; "
+                                 f"reduces conviction ({-penalty:+.1f} pts)")})
     else:
         reasons.append({"pts": 0, "earned": False,
                         "text": f"No recent liquidity sweep on {tf}"})

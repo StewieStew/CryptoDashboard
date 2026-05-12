@@ -706,16 +706,12 @@ def _generate_analysis(trade: dict, close_price: float, status: str, roi: float)
                 "market structure creates an invisible ceiling/floor."
             )
 
-        if dirn == "SHORT" and snap.get("sweep"):
+        if snap.get("counter_sweep"):
             causes.append(
-                "A bullish liquidity sweep was present at entry — this is a double-edged signal for shorts. "
-                "While sweeps can precede reversals, they also indicate smart-money ABSORPTION of selling. "
-                "If the sweep buyers held their position, they would have reversed the move."
-            )
-        elif dirn == "LONG" and snap.get("sweep"):
-            causes.append(
-                "A bearish sweep was present — distribution may not have fully completed. "
-                "Sellers still in control could have caused the reversal after entry."
+                "A COUNTER-DIRECTION liquidity sweep was present at entry — smart money was active "
+                "in the OPPOSITE direction to this trade. This is a strong warning sign: the sweep "
+                "suggests institutional absorption against the trade bias. This setup would now be "
+                "penalised at signal time and is much harder to fire going forward."
             )
 
         if not snap.get("obv"):
