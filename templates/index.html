@@ -1114,21 +1114,17 @@
   //   perTrade = your risk per trade (1R in dollars).
   //   Win at 3R → +$750. Loss at 1R → -$250.
   //   Leverage multiplies your risk unit (2× leverage = risk $500 per 1R).
-  //   Fee is estimated as round-trip cost relative to the trade's risk distance.
+  //   Fee is a flat round-trip cost on the risk unit (not tied to stop distance),
+  //   so P&L stays proportional to R across all trades.
   function _tradeDollarPnl(t) {
     const R = calcPnlR(t);
     if (R === null) return null;
     const riskUnit = _psz.perTrade * _psz.leverage;   // $ risked per 1R
-    // Round-trip fee drag in R units: 2 × fee% ÷ risk%
-    // (fee is charged on position size; position size = riskUnit / riskPct)
-    const refSl  = t.initial_sl != null ? parseFloat(t.initial_sl) : (t.sl != null ? parseFloat(t.sl) : null);
-    const entry  = parseFloat(t.entry);
-    let feeR = 0;
-    if (refSl != null && isFinite(refSl) && isFinite(entry) && entry > 0) {
-      const riskPct = Math.abs(entry - refSl) / entry;
-      if (riskPct > 0) feeR = ((_psz.fee / 100) * 2) / riskPct;
-    }
-    return (R - feeR) * riskUnit;
+    // Flat round-trip fee: fee% in, fee% out, applied to the risk unit.
+    // Using per-stop-distance fee would blow up on tight stops (e.g. 2pt stop
+    // on $2300 ETH → 0.09% SL → feeR > 2R, destroying proportionality).
+    const feeDollar = riskUnit * (_psz.fee / 100) * 2;
+    return R * riskUnit - feeDollar;
   }
 
   // Build a map of trade id → { dollarPnl, runningBalance } in chronological order
