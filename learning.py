@@ -417,21 +417,31 @@ def auto_close(symbol: str, interval: str, current_price: float,
                     pass
 
                 # ── TP check — must run before SL check ──────────────────
-                # Use candle extremes when available so brief wicks to TP
-                # aren't missed between 60-second spot-price polls.
+                # Check BOTH the spot price AND candle extremes independently.
+                # A brief wick to TP that reverses within the same 1m candle
+                # will show in candle_low/high even if spot price has bounced.
+                tp = float(t["tp"])
+                _tp_by_spot   = False
+                _tp_by_candle = False
                 if t["direction"] == "LONG":
-                    tp_check = candle_high if candle_high is not None else current_price
-                    if tp_check >= float(t["tp"]):
-                        hit = "win"
+                    if current_price >= tp:
+                        _tp_by_spot = True
+                    if candle_high is not None and candle_high >= tp:
+                        _tp_by_candle = True
                 elif t["direction"] == "SHORT":
-                    tp_check = candle_low if candle_low is not None else current_price
-                    if tp_check <= float(t["tp"]):
-                        hit = "win"
+                    if current_price <= tp:
+                        _tp_by_spot = True
+                    if candle_low is not None and candle_low <= tp:
+                        _tp_by_candle = True
+                if _tp_by_spot or _tp_by_candle:
+                    hit = "win"
 
                 # ── SL check ──────────────────────────────────────────────
                 if not hit:
                     if t["direction"] == "LONG":
-                        sl_check = candle_low if candle_low is not None else current_price
+                        # Use worst of spot and candle_low for SL detection
+                        sl_check = min(current_price,
+                                       candle_low if candle_low is not None else current_price)
                         if sl_check <= eff_sl:
                             if not be_active:
                                 hit = "loss"
@@ -440,7 +450,9 @@ def auto_close(symbol: str, interval: str, current_price: float,
                             else:
                                 hit = "cancelled"             # SL at entry → scratch
                     elif t["direction"] == "SHORT":
-                        sl_check = candle_high if candle_high is not None else current_price
+                        # Use worst of spot and candle_high for SL detection
+                        sl_check = max(current_price,
+                                       candle_high if candle_high is not None else current_price)
                         if sl_check >= eff_sl:
                             if not be_active:
                                 hit = "loss"
@@ -455,12 +467,10 @@ def auto_close(symbol: str, interval: str, current_price: float,
                     elif hit == "cancelled":
                         close_px = float(t["entry"])         # scratch at entry
                     else:
-                        # Win: TP hit closes at TP; trailing SL hit closes at eff_sl
-                        _tp_hit = (
-                            (t["direction"] == "LONG"  and current_price >= float(t["tp"])) or
-                            (t["direction"] == "SHORT" and current_price <= float(t["tp"]))
-                        )
-                        close_px = round(float(t["tp"]), 8) if _tp_hit else round(eff_sl, 8)
+                        # Win: close at TP if TP was the trigger, else at trailing SL.
+                        # Must check candle as well as spot — TP may have been a wick.
+                        _tp_hit = _tp_by_spot or _tp_by_candle
+                        close_px = round(tp, 8) if _tp_hit else round(eff_sl, 8)
                     roi = _calc_roi(t["direction"], float(t["entry"]), close_px)
                     analysis = _generate_analysis(t, close_px, hit, roi)
                     now      = datetime.now(timezone.utc).isoformat()
