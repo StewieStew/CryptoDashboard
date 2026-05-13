@@ -138,6 +138,36 @@ def _init_db():
         db.execute("UPDATE trades SET initial_sl = sl WHERE initial_sl IS NULL")
         db.commit()
 
+        # ── One-time fix: cancelled trades that should have been wins ─────────
+        # A trade marked 'cancelled' was a breakeven exit — but if the trade's TP
+        # was actually touched (candle wick) and the bot missed it due to a bug,
+        # the close_price was set to entry instead of tp.
+        # Fix: any cancelled trade where (SHORT: entry > tp, meaning TP is below
+        # entry) or (LONG: entry < tp) gets re-evaluated — if it was in profit
+        # territory, mark it win at tp price and recalc roi.
+        cancelled_rows = db.execute(
+            "SELECT * FROM trades WHERE status='cancelled' AND tp IS NOT NULL AND entry IS NOT NULL"
+        ).fetchall()
+        for row in cancelled_rows:
+            t = dict(row)
+            entry = float(t["entry"])
+            tp    = float(t["tp"])
+            if t["direction"] == "SHORT" and tp < entry:
+                roi = round((entry - tp) / entry * 100, 4)
+                db.execute(
+                    "UPDATE trades SET status='win', close_price=?, roi_pct=? WHERE id=?",
+                    (tp, roi, t["id"])
+                )
+                logger.info(f"[FIX] Trade {t['id']} {t['symbol']} SHORT: cancelled→win @ {tp} ({roi:+.4f}%)")
+            elif t["direction"] == "LONG" and tp > entry:
+                roi = round((tp - entry) / entry * 100, 4)
+                db.execute(
+                    "UPDATE trades SET status='win', close_price=?, roi_pct=? WHERE id=?",
+                    (tp, roi, t["id"])
+                )
+                logger.info(f"[FIX] Trade {t['id']} {t['symbol']} LONG: cancelled→win @ {tp} ({roi:+.4f}%)")
+        db.commit()
+
         db.close()
 
 
