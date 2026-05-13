@@ -434,10 +434,14 @@ def auto_close(symbol: str, interval: str, current_price: float,
                 #  breakeven activates, so t["sl"] is already correct)
                 eff_sl = float(t["sl"])
 
-                # ── Minimum duration guard — 60s only, to avoid double-close race ──
-                # Previously used full candle duration (e.g. 3600s for 1h) which caused
-                # same-candle SL hits to be completely missed. Now just 60s — one monitor
-                # cycle — so real price action is respected immediately.
+                # ── Minimum duration guard ───────────────────────────────
+                # 60s: avoid race with entry.
+                # Candle extremes: only used after 90s — ensures at least one
+                # complete 1m candle has formed POST-entry before we check lows/
+                # highs. Without this guard the recent-candle data may include
+                # prices from BEFORE the trade was entered (e.g. TP was touched
+                # 30s before entry, then bounced — looks like an instant win).
+                _age = 0
                 try:
                     _opened = datetime.fromisoformat(t["opened_at"].replace("Z","+00:00"))
                     _age    = (datetime.now(timezone.utc) - _opened).total_seconds()
@@ -445,6 +449,11 @@ def auto_close(symbol: str, interval: str, current_price: float,
                         continue   # too young — avoid race with entry
                 except Exception:
                     pass
+
+                # Gate candle extremes: only apply after 90s post-entry
+                _use_candle = _age >= 90
+                _c_low  = candle_low  if _use_candle else None
+                _c_high = candle_high if _use_candle else None
 
                 # ── TP check — must run before SL check ──────────────────
                 # Check BOTH the spot price AND candle extremes independently.
@@ -456,12 +465,12 @@ def auto_close(symbol: str, interval: str, current_price: float,
                 if t["direction"] == "LONG":
                     if current_price >= tp:
                         _tp_by_spot = True
-                    if candle_high is not None and candle_high >= tp:
+                    if _c_high is not None and _c_high >= tp:
                         _tp_by_candle = True
                 elif t["direction"] == "SHORT":
                     if current_price <= tp:
                         _tp_by_spot = True
-                    if candle_low is not None and candle_low <= tp:
+                    if _c_low is not None and _c_low <= tp:
                         _tp_by_candle = True
                 if _tp_by_spot or _tp_by_candle:
                     hit = "win"
@@ -469,27 +478,25 @@ def auto_close(symbol: str, interval: str, current_price: float,
                 # ── SL check ──────────────────────────────────────────────
                 if not hit:
                     if t["direction"] == "LONG":
-                        # Use worst of spot and candle_low for SL detection
                         sl_check = min(current_price,
-                                       candle_low if candle_low is not None else current_price)
+                                       _c_low if _c_low is not None else current_price)
                         if sl_check <= eff_sl:
                             if not be_active:
                                 hit = "loss"
-                            elif eff_sl > float(t["entry"]):  # trailing SL above entry → profitable exit
+                            elif eff_sl > float(t["entry"]):
                                 hit = "win"
                             else:
-                                hit = "cancelled"             # SL at entry → scratch
+                                hit = "cancelled"
                     elif t["direction"] == "SHORT":
-                        # Use worst of spot and candle_high for SL detection
                         sl_check = max(current_price,
-                                       candle_high if candle_high is not None else current_price)
+                                       _c_high if _c_high is not None else current_price)
                         if sl_check >= eff_sl:
                             if not be_active:
                                 hit = "loss"
-                            elif eff_sl < float(t["entry"]):  # trailing SL below entry → profitable exit
+                            elif eff_sl < float(t["entry"]):
                                 hit = "win"
                             else:
-                                hit = "cancelled"             # SL at entry → scratch
+                                hit = "cancelled"
 
                 if hit:
                     if hit == "loss":
@@ -498,8 +505,7 @@ def auto_close(symbol: str, interval: str, current_price: float,
                         close_px = float(t["entry"])         # scratch at entry
                     else:
                         # Win: close at TP if TP was the trigger, else at trailing SL.
-                        # Must check candle as well as spot — TP may have been a wick.
-                        _tp_hit = _tp_by_spot or _tp_by_candle
+                        _tp_hit = _tp_by_spot or _tp_by_candle  # _tp_by_candle already respects 90s gate
                         close_px = round(tp, 8) if _tp_hit else round(eff_sl, 8)
                     roi = _calc_roi(t["direction"], float(t["entry"]), close_px)
                     analysis = _generate_analysis(t, close_px, hit, roi)
