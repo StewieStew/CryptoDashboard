@@ -355,9 +355,17 @@ def close_trade(trade_id: str, close_price: float, status: str) -> Optional[dict
 
 
 
-def auto_close(symbol: str, interval: str, current_price: float) -> tuple:
+def auto_close(symbol: str, interval: str, current_price: float,
+               candle_low: float | None = None,
+               candle_high: float | None = None) -> tuple:
     """
-    Auto-close open trades whose SL has been hit.
+    Auto-close open trades whose SL or TP has been hit.
+
+    current_price  — live spot price (60s poll).
+    candle_low     — low of the last completed 1m candle(s); used to catch
+                     brief TP wicks on SHORT trades and SL wicks on LONGs.
+    candle_high    — high of the last completed 1m candle(s); used for LONG TP
+                     and SHORT SL wick detection.
 
     Trailing stop (see update_trailing_stops for full logic):
     - 2R profit → SL moves to entry (breakeven)
@@ -409,17 +417,22 @@ def auto_close(symbol: str, interval: str, current_price: float) -> tuple:
                     pass
 
                 # ── TP check — must run before SL check ──────────────────
+                # Use candle extremes when available so brief wicks to TP
+                # aren't missed between 60-second spot-price polls.
                 if t["direction"] == "LONG":
-                    if current_price >= float(t["tp"]):
+                    tp_check = candle_high if candle_high is not None else current_price
+                    if tp_check >= float(t["tp"]):
                         hit = "win"
                 elif t["direction"] == "SHORT":
-                    if current_price <= float(t["tp"]):
+                    tp_check = candle_low if candle_low is not None else current_price
+                    if tp_check <= float(t["tp"]):
                         hit = "win"
 
                 # ── SL check ──────────────────────────────────────────────
                 if not hit:
                     if t["direction"] == "LONG":
-                        if current_price <= eff_sl:
+                        sl_check = candle_low if candle_low is not None else current_price
+                        if sl_check <= eff_sl:
                             if not be_active:
                                 hit = "loss"
                             elif eff_sl > float(t["entry"]):  # trailing SL above entry → profitable exit
@@ -427,7 +440,8 @@ def auto_close(symbol: str, interval: str, current_price: float) -> tuple:
                             else:
                                 hit = "cancelled"             # SL at entry → scratch
                     elif t["direction"] == "SHORT":
-                        if current_price >= eff_sl:
+                        sl_check = candle_high if candle_high is not None else current_price
+                        if sl_check >= eff_sl:
                             if not be_active:
                                 hit = "loss"
                             elif eff_sl < float(t["entry"]):  # trailing SL below entry → profitable exit
@@ -545,11 +559,18 @@ def update_trailing_stops(symbol: str, interval: str, current_price: float,
                         candidates = [p for p in swing_lows
                                       if p > current_sl
                                       and p < current_price - _min_dist]
-                        if not candidates:
-                            continue   # no valid structural level — hold current SL
-                        new_sl = round(max(candidates), 8)
+                        if candidates:
+                            new_sl = round(max(candidates), 8)
+                        else:
+                            # No valid structural level — fall back to breakeven.
+                            # This guards against price jumping past 3R in one candle:
+                            # without this fallback the SL stays at the original stop
+                            # and a reversal marks the trade as a loss instead of scratch.
+                            new_sl = round(entry, 8)
                     elif profit_r >= 3.0:
-                        continue       # at Phase 3 threshold but no swing data yet
+                        # Phase 3 threshold reached but no swing data supplied yet —
+                        # ensure breakeven is at least active.
+                        new_sl = round(entry, 8)
                     else:
                         # Phase 1 (2-3R): breakeven
                         new_sl = round(entry, 8)
@@ -576,11 +597,14 @@ def update_trailing_stops(symbol: str, interval: str, current_price: float,
                         candidates = [p for p in swing_highs
                                       if p < current_sl
                                       and p > current_price + _min_dist]
-                        if not candidates:
-                            continue   # no valid structural level — hold current SL
-                        new_sl = round(min(candidates), 8)
+                        if candidates:
+                            new_sl = round(min(candidates), 8)
+                        else:
+                            # No valid structural level — fall back to breakeven.
+                            new_sl = round(entry, 8)
                     elif profit_r >= 3.0:
-                        continue
+                        # Phase 3 threshold but no swing data — ensure breakeven active.
+                        new_sl = round(entry, 8)
                     else:
                         new_sl = round(entry, 8)
 
