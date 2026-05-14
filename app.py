@@ -33,7 +33,7 @@ _chart_cache = {}
 _clk         = threading.Lock()
 CHART_TTL    = 120   # 2-min chart cache
 
-VALID_INTERVALS  = ["15m", "30m", "1h", "4h", "1d", "1w"]
+VALID_INTERVALS  = ["5m", "15m", "30m", "1h", "4h", "1d", "1w"]
 DEFAULT_SYMBOLS  = [
     "BTCUSDT", "ETHUSDT", "XRPUSDT",  "DOGEUSDT",
     "SOLUSDT", "BNBUSDT", "ADAUSDT",  "AVAXUSDT",
@@ -42,10 +42,10 @@ DEFAULT_SYMBOLS  = [
 
 # Paper-trade mode: only these coins on 4H using discovery-validated params.
 PAPER_SYMBOLS   = ["BTCUSDT", "ETHUSDT", "XRPUSDT"]
-PAPER_INTERVALS = ["15m", "1h", "4h"]
+PAPER_INTERVALS = ["5m", "15m", "1h", "4h"]
 
-# Three-tier scanning: 15m (scalp), 1h (day trade — MACD primary), 4h (swing).
-SCAN_INTERVALS   = ["15m", "1h", "4h"]
+# Four-tier scanning: 5m (micro-scalp), 15m (scalp), 1h (day trade), 4h (swing).
+SCAN_INTERVALS   = ["5m", "15m", "1h", "4h"]
 
 # Grows as users view additional coins — persists for the life of the server process
 _known_symbols   = set(DEFAULT_SYMBOLS)
@@ -511,6 +511,46 @@ def _apply_discovery_params() -> None:
                 "rsi": 0.5, "adx": 0.0, "obv": 0.0,
             },
         },
+        # ── 5m micro-scalp params (conservative start — learning engine adapts) ──
+        ("BTCUSDT", "5m"): {
+            "config":           "Structure + Volume",
+            "score_threshold":  7.5,
+            "min_rr":           2.5,
+            "adx_threshold":    30,
+            "body_ratio_min":   0.35,
+            "level_touch_min":  1,
+            "weights": {
+                "bos": 2.5, "sweep": 2.0, "volume": 2.5, "obv": 1.0,
+                "regime": 1.5, "rsi": 0.0, "adx": 0.0,
+                "fvg": 0.0, "fib": 0.0, "liquidity": 0.0,
+            },
+        },
+        ("ETHUSDT", "5m"): {
+            "config":           "Structure + Volume",
+            "score_threshold":  8.0,
+            "min_rr":           2.5,
+            "adx_threshold":    30,
+            "body_ratio_min":   0.25,
+            "level_touch_min":  1,
+            "weights": {
+                "bos": 2.5, "sweep": 2.0, "volume": 2.5, "obv": 1.0,
+                "regime": 1.5, "rsi": 0.0, "adx": 0.0,
+                "fvg": 0.0, "fib": 0.0, "liquidity": 0.0,
+            },
+        },
+        ("XRPUSDT", "5m"): {
+            "config":           "Structure + Volume",
+            "score_threshold":  7.5,
+            "min_rr":           2.5,
+            "adx_threshold":    20,
+            "body_ratio_min":   0.25,
+            "level_touch_min":  1,
+            "weights": {
+                "bos": 2.5, "sweep": 2.0, "volume": 2.0, "obv": 1.0,
+                "regime": 2.0, "rsi": 1.0, "adx": 0.0,
+                "fvg": 0.0, "fib": 0.0, "liquidity": 0.0,
+            },
+        },
         # ── 15m scalp params (min_rr=2.0 — lower bar suits noise on short TF) ──
         ("BTCUSDT", "15m"): {
             "config":           "Structure + Volume",
@@ -762,14 +802,20 @@ def _auto_close_from_data(data: dict, sym: str, interval: str) -> None:
 
 
 # ── Higher-TF bias filter ─────────────────────────────────────────────────────
-def _bias_agrees(signal_dir: str, htf_data: dict) -> bool:
+def _bias_agrees(signal_dir: str, htf_data: dict, strict: bool = True) -> bool:
     """
-    Returns True only if the higher-timeframe context agrees with the signal.
-    Day (15m) signals filtered by 1h context.
-    Swing (4h) signals filtered by 1d context.
+    Check whether the higher-timeframe context agrees with a signal direction.
 
-    Agreement = HTF price above 200 EMA (for LONG) or below (for SHORT),
-                OR a confirmed BOS on the HTF in the same direction.
+    strict=True  (5m, 15m): requires EITHER above/below 200 EMA OR BOS on HTF.
+                 These short TFs are noisy so we demand explicit HTF confirmation.
+
+    strict=False (1h, 4h):  only blocks if HTF is actively against the trade —
+                 i.e. price is clearly above 200 EMA on a SHORT, or clearly
+                 below on a LONG, with NO BOS at all supporting the direction.
+                 1h/4h signals have their own structural filters so we just
+                 avoid trading directly against the HTF trend, not demand it.
+
+    Returns True if the trade is allowed.
     """
     regime    = htf_data.get("regime", {})
     structure = htf_data.get("structure", {})
@@ -777,10 +823,20 @@ def _bias_agrees(signal_dir: str, htf_data: dict) -> bool:
     bull_bos  = structure.get("bullish_bos", False) if structure else False
     bear_bos  = structure.get("bearish_bos", False) if structure else False
 
-    if signal_dir == "LONG":
-        return above_200 or bull_bos
-    else:  # SHORT
-        return (not above_200) or bear_bos
+    if strict:
+        # Must have explicit HTF agreement
+        if signal_dir == "LONG":
+            return above_200 or bull_bos
+        else:
+            return (not above_200) or bear_bos
+    else:
+        # Only block if HTF is clearly opposed AND no supporting BOS
+        if signal_dir == "LONG":
+            htf_opposed = (not above_200) and not bull_bos
+            return not htf_opposed
+        else:
+            htf_opposed = above_200 and not bear_bos
+            return not htf_opposed
 
 
 # ── Background scanner ────────────────────────────────────────────────────────
@@ -798,7 +854,7 @@ def _resolve_open_trades(sym: str, interval: str) -> int:
         return 0
 
     # Fetch enough bars to cover any open trade's max lifetime
-    lookback = {"15m": 500, "1h": 220, "4h": 120}.get(interval, 220)
+    lookback = {"5m": 500, "15m": 500, "1h": 220, "4h": 120}.get(interval, 220)
     try:
         df = analysis.fetch_ohlcv(sym, interval, lookback)
     except Exception:
@@ -898,9 +954,9 @@ def _background_scanner() -> None:
         scan_closes += _monitor_open_trades()
 
         for sym in syms:
-            # Fetch bias TFs: 1h for confirmation candle check, 1d for 4H bias
+            # Fetch bias TFs: 15m for 5m signals, 1h for 15m signals, 1d for 4H bias
             bias_cache: dict[str, dict] = {}
-            for bias_tf in ("1h", "1d"):
+            for bias_tf in ("15m", "1h", "1d"):
                 try:
                     bias_data = full_analysis(sym, bias_tf)
                     bias_cache[bias_tf] = bias_data
@@ -952,7 +1008,7 @@ def _background_scanner() -> None:
                     except Exception:
                         regime_p = {}
 
-                    htf        = "1h" if interval == "15m" else "1d"
+                    htf        = "15m" if interval == "5m" else ("1h" if interval == "15m" else "1d")
                     htf_d      = bias_cache.get(htf, {})
                     session_ok = True  # crypto is 24/7
 
@@ -1006,8 +1062,11 @@ def _background_scanner() -> None:
 
                         sig_type = sig.get("signal_type", "")
                         # Mean-reversion signals skip the HTF bias filter
-                        # (they are counter-trend by design)
-                        if sig_type not in ("MEAN_REVERSION",) and not _bias_agrees(sig["direction"], htf_d):
+                        # (they are counter-trend by design).
+                        # 5m/15m use strict bias (must have explicit HTF agreement).
+                        # 1h/4h use relaxed bias (only block if HTF is clearly opposed).
+                        _bias_strict = interval in ("5m", "15m")
+                        if sig_type not in ("MEAN_REVERSION",) and not _bias_agrees(sig["direction"], htf_d, strict=_bias_strict):
                             print(f"[SCAN] {sym} {interval}: {sig['direction']} score={sig.get('score',0):.1f} — HTF BIAS BLOCK", flush=True)
                             continue
 
