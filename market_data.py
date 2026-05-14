@@ -108,14 +108,19 @@ def get_live_price(symbol: str) -> float | None:
         return None
 
 
-def get_recent_1m_extreme(symbol: str) -> dict:
+def get_recent_1m_extreme(symbol: str, since_ms: int | None = None) -> dict:
     """
     Fetch the last 10 1m candles (including the forming one) and return merged
     {high, low}.  Used by the live monitor to catch brief TP/SL wicks that
     occur between the 60-second price checks.  10 candles gives a ~10-minute
     lookback window, ensuring a wick is still visible even if the monitor skips
     a cycle or runs slightly late.
-    Returns {} on error.
+
+    since_ms: if provided, only include candles whose open timestamp (ms) is
+              >= since_ms.  Pass the trade's opened_at milliseconds to prevent
+              pre-open candles from falsely triggering SL/TP hits.
+
+    Returns {} on error or if no qualifying candles.
     """
     try:
         r = requests.get(
@@ -127,6 +132,8 @@ def get_recent_1m_extreme(symbol: str) -> dict:
         # Include the forming candle — its low/high are real traded prices.
         # Skipping it caused missed TP wicks that happened in the live candle.
         all_bars = [b for b in bars if isinstance(b, list)]
+        if since_ms is not None:
+            all_bars = [b for b in all_bars if int(b[0]) >= since_ms]
         if not all_bars:
             return {}
         highs = [float(b[2]) for b in all_bars]

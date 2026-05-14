@@ -10,6 +10,7 @@ import threading
 from datetime import timedelta, datetime, timezone
 from typing import Optional
 import logging
+import market_data
 
 logger = logging.getLogger(__name__)
 
@@ -392,10 +393,11 @@ def auto_close(symbol: str, interval: str, current_price: float,
     Auto-close open trades whose SL or TP has been hit.
 
     current_price  — live spot price (60s poll).
-    candle_low     — low of the last completed 1m candle(s); used to catch
-                     brief TP wicks on SHORT trades and SL wicks on LONGs.
-    candle_high    — high of the last completed 1m candle(s); used for LONG TP
-                     and SHORT SL wick detection.
+    candle_low/candle_high — deprecated external params, kept for API compat.
+                             Candle extremes are now computed per-trade internally
+                             using each trade's opened_at as the since_ms filter,
+                             preventing pre-open candles from falsely triggering
+                             SL/TP hits on recently opened trades.
 
     Trailing stop (see update_trailing_stops for full logic):
     - 2R profit → SL moves to entry (breakeven)
@@ -434,26 +436,32 @@ def auto_close(symbol: str, interval: str, current_price: float,
                 #  breakeven activates, so t["sl"] is already correct)
                 eff_sl = float(t["sl"])
 
-                # ── Minimum duration guard ───────────────────────────────
+                # ── Minimum duration guard + per-trade candle extremes ───
                 # 60s: avoid race with entry.
-                # Candle extremes: only used after 90s — ensures at least one
-                # complete 1m candle has formed POST-entry before we check lows/
-                # highs. Without this guard the recent-candle data may include
-                # prices from BEFORE the trade was entered (e.g. TP was touched
-                # 30s before entry, then bounced — looks like an instant win).
-                _age = 0
+                # Candle extremes are fetched per-trade using opened_at as the
+                # since_ms filter — this prevents pre-open 1m candles (up to 10
+                # minutes back) from falsely triggering SL/TP on trades that
+                # just opened.  We only include candles whose open timestamp is
+                # >= opened_at_ms + 60s (one full minute post-entry).
+                _age         = 0
+                _opened_ms   = None
                 try:
-                    _opened = datetime.fromisoformat(t["opened_at"].replace("Z","+00:00"))
-                    _age    = (datetime.now(timezone.utc) - _opened).total_seconds()
+                    _opened    = datetime.fromisoformat(t["opened_at"].replace("Z","+00:00"))
+                    _age       = (datetime.now(timezone.utc) - _opened).total_seconds()
+                    _opened_ms = int(_opened.timestamp() * 1000)
                     if _age < 60:
                         continue   # too young — avoid race with entry
                 except Exception:
                     pass
 
-                # Gate candle extremes: only apply after 90s post-entry
-                _use_candle = _age >= 90
-                _c_low  = candle_low  if _use_candle else None
-                _c_high = candle_high if _use_candle else None
+                # Fetch per-trade candle extreme — only candles after opened_at
+                _c_low  = None
+                _c_high = None
+                if _opened_ms is not None:
+                    _since = _opened_ms + 60_000  # skip the opening minute itself
+                    ce = market_data.get_recent_1m_extreme(symbol, since_ms=_since)
+                    _c_low  = ce.get("low")
+                    _c_high = ce.get("high")
 
                 # ── TP check — must run before SL check ──────────────────
                 # Check BOTH the spot price AND candle extremes independently.

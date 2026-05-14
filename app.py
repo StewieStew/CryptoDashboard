@@ -730,19 +730,18 @@ def _monitor_open_trades() -> int:
         return 0
 
     symbols = {t["symbol"] for t in trades}
-    prices:   dict[str, float] = {}
-    extremes: dict[str, dict]  = {}
+    prices: dict[str, float] = {}
     for sym in symbols:
         px = market_data.get_live_price(sym)
         if px:
             prices[sym] = px
-        ce = market_data.get_recent_1m_extreme(sym)
-        if ce:
-            extremes[sym] = ce
 
     if not prices:
         return 0
 
+    # Candle extremes are now computed per-trade inside auto_close() using
+    # each trade's opened_at as the since_ms filter — prevents pre-open
+    # candles from falsely triggering SL/TP hits.
     checked: set[tuple[str, str]] = set()
     total_closed = 0
     for t in trades:
@@ -753,18 +752,12 @@ def _monitor_open_trades() -> int:
         px = prices.get(sym)
         if not px:
             continue
-        ce = extremes.get(sym, {})
         print(
             f"[MONITOR] {sym} {intv}: live={px:.4f}  "
-            f"candle_low={ce.get('low','?')}  candle_high={ce.get('high','?')}  "
             f"TP={t['tp']}  SL={t['sl']}",
             flush=True,
         )
-        closed, partials = learning.auto_close(
-            sym, intv, px,
-            candle_low=ce.get("low"),
-            candle_high=ce.get("high"),
-        )
+        closed, partials = learning.auto_close(sym, intv, px)
         for p in partials:
             notifications.send_partial_alert(p, p["partial_price"])
         for c in closed:
