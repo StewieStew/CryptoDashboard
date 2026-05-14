@@ -1299,7 +1299,8 @@ def _background_scanner() -> None:
         except Exception:
             pass
 
-        time.sleep(300)         # 5 minutes between full sweeps
+        time.sleep(60)          # 60s between full sweeps — matches monitor cadence,
+                                # ensures 5m candle closes are caught within 1 cycle
 
 
 threading.Thread(target=_background_scanner, daemon=True).start()
