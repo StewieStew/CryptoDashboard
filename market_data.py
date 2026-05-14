@@ -108,21 +108,68 @@ def get_live_price(symbol: str) -> float | None:
         return None
 
 
-def fetch_1m_bars_since(symbol: str, since_ms: int) -> list[dict]:
+def get_recent_1m_extreme(symbol: str) -> dict:
     """
-    Fetch 1m OHLCV bars from Binance from since_ms (epoch ms) until now.
-    Returns up to 1000 bars (~16 hours). Each bar: {high, low}.
+    Fetch the last 10 1m candles (including the forming one) and return merged
+    {high, low}.  Used by the live monitor to catch brief TP/SL wicks that
+    occur between the 60-second price checks.  10 candles gives a ~10-minute
+    lookback window, ensuring a wick is still visible even if the monitor skips
+    a cycle or runs slightly late.
+    Returns {} on error.
     """
     try:
         r = requests.get(
             f"{_BINANCE_SPOT}/klines",
-            params={"symbol": symbol, "interval": "1m", "startTime": since_ms, "limit": 1000},
-            timeout=10,
+            params={"symbol": symbol, "interval": "1m", "limit": 10},
+            timeout=5,
         )
         bars = r.json()
-        return [{"high": float(b[2]), "low": float(b[3])} for b in bars if isinstance(b, list)]
+        # Include the forming candle — its low/high are real traded prices.
+        # Skipping it caused missed TP wicks that happened in the live candle.
+        all_bars = [b for b in bars if isinstance(b, list)]
+        if not all_bars:
+            return {}
+        highs = [float(b[2]) for b in all_bars]
+        lows  = [float(b[3]) for b in all_bars]
+        return {"high": max(highs), "low": min(lows)}
     except Exception:
-        return []
+        return {}
+
+
+def fetch_1m_bars_since(symbol: str, since_ms: int) -> list[dict]:
+    """
+    Fetch ALL 1m OHLCV bars from Binance from since_ms until now.
+    Uses pagination so trades open longer than ~16 hours (1000-bar limit) are
+    fully covered.  Each bar: {high, low}.
+    """
+    result: list[dict] = []
+    start = since_ms
+    while True:
+        try:
+            r = requests.get(
+                f"{_BINANCE_SPOT}/klines",
+                params={"symbol": symbol, "interval": "1m",
+                        "startTime": start, "limit": 1000},
+                timeout=10,
+            )
+            bars = r.json()
+            if not isinstance(bars, list) or not bars:
+                break
+            parsed = [
+                {"high": float(b[2]), "low": float(b[3]), "_ts": int(b[0])}
+                for b in bars if isinstance(b, list)
+            ]
+            if not parsed:
+                break
+            result.extend(parsed)
+            if len(parsed) < 1000:
+                break   # fetched everything available — done
+            # Advance start past the last bar's open time (1-minute step)
+            start = parsed[-1]["_ts"] + 60_000
+            time.sleep(0.1)   # mild rate-limit pacing
+        except Exception:
+            break
+    return [{"high": b["high"], "low": b["low"]} for b in result]
 
 
 # ── Full context bundle ───────────────────────────────────────────────────────

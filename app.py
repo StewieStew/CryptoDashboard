@@ -584,11 +584,18 @@ def _backfill_trade(trade: dict) -> bool:
     Fetch 1m candles from Binance from this trade's opened_at until now and
     replay bar-by-bar to detect any TP or SL hit that was missed while the bot
     was down or the trade was pending.  Returns True if the trade was closed.
+
+    SL outcome mirrors auto_close logic:
+      - breakeven not active          → loss
+      - breakeven active, SL > entry  → win  (trailing SL locked in profit)
+      - breakeven active, SL == entry → cancelled (scratch at entry)
     """
     trade_id  = trade["id"]
     direction = trade["direction"]
     tp        = float(trade["tp"])
-    sl        = float(trade["sl"])
+    sl        = float(trade["sl"])   # current SL — may have been trailed
+    entry     = float(trade["entry"])
+    be_active = bool(trade.get("breakeven_activated", 0))
     sym       = trade["symbol"]
 
     try:
@@ -608,12 +615,26 @@ def _backfill_trade(trade: dict) -> bool:
             if hi >= tp:
                 outcome = "win";  close_price = tp;  break
             if lo <= sl:
-                outcome = "loss"; close_price = sl;  break
-        else:
+                close_price = sl
+                if not be_active:
+                    outcome = "loss"
+                elif sl > entry:
+                    outcome = "win"
+                else:
+                    outcome = "cancelled"
+                break
+        else:  # SHORT
             if lo <= tp:
                 outcome = "win";  close_price = tp;  break
             if hi >= sl:
-                outcome = "loss"; close_price = sl;  break
+                close_price = sl
+                if not be_active:
+                    outcome = "loss"
+                elif sl < entry:
+                    outcome = "win"
+                else:
+                    outcome = "cancelled"
+                break
 
     if not outcome:
         print(f"[BACKFILL] {sym} {trade['interval']}: still open, handed to monitor", flush=True)
@@ -660,17 +681,24 @@ def _monitor_open_trades() -> int:
     """
     Fetch the live Binance price for every open trade's symbol and immediately
     close any trade whose TP or SL has been crossed.  Returns closes count.
+
+    Also fetches the last completed 1m candle high/low per symbol so brief
+    TP/SL wicks between the 60-second polls are not missed.
     """
     trades = learning.get_open_trades()
     if not trades:
         return 0
 
     symbols = {t["symbol"] for t in trades}
-    prices: dict[str, float] = {}
+    prices:   dict[str, float] = {}
+    extremes: dict[str, dict]  = {}
     for sym in symbols:
         px = market_data.get_live_price(sym)
         if px:
             prices[sym] = px
+        ce = market_data.get_recent_1m_extreme(sym)
+        if ce:
+            extremes[sym] = ce
 
     if not prices:
         return 0
@@ -685,8 +713,18 @@ def _monitor_open_trades() -> int:
         px = prices.get(sym)
         if not px:
             continue
-        print(f"[MONITOR] {sym} {intv}: live={px:.4f}  TP={t['tp']}  SL={t['sl']}", flush=True)
-        closed, partials = learning.auto_close(sym, intv, px)
+        ce = extremes.get(sym, {})
+        print(
+            f"[MONITOR] {sym} {intv}: live={px:.4f}  "
+            f"candle_low={ce.get('low','?')}  candle_high={ce.get('high','?')}  "
+            f"TP={t['tp']}  SL={t['sl']}",
+            flush=True,
+        )
+        closed, partials = learning.auto_close(
+            sym, intv, px,
+            candle_low=ce.get("low"),
+            candle_high=ce.get("high"),
+        )
         for p in partials:
             notifications.send_partial_alert(p, p["partial_price"])
         for c in closed:
