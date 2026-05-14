@@ -1383,7 +1383,15 @@
         series.createPriceLine({ price: parseFloat(trade.sl), color: '#f97316', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, title: 'Trail' });
 
       try {
-        const r   = await fetch(`https://api.binance.us/api/v3/klines?symbol=${sym}&interval=${tf}&limit=500`);
+        // Anchor to trade open time so we always see the actual trade context,
+        // not an arbitrary window of recent candles. Show 30 candles before entry
+        // and fetch up to 120 candles forward — keeps candles a readable size on
+        // all timeframes (5m→1h) without cramming 500 bars into a small chart.
+        const _tfMs    = {'5m':300000,'15m':900000,'30m':1800000,'1h':3600000,'4h':14400000}[tf] || 900000;
+        const _openMs  = trade.opened_at ? new Date(trade.opened_at).getTime() : Date.now() - 30 * _tfMs;
+        const _startMs = _openMs - 30 * _tfMs;
+        const _miniUrl = `https://api.binance.us/api/v3/klines?symbol=${sym}&interval=${tf}&startTime=${_startMs}&limit=150`;
+        const r   = await fetch(_miniUrl);
         const raw = await r.json();
         if (Array.isArray(raw) && raw.length) {
           const seen = new Set();
@@ -1588,7 +1596,10 @@
     try {
       let url;
       if (isOpen) {
-        url = `https://api.binance.us/api/v3/klines?symbol=${sym}&interval=${displayTf}&limit=500`;
+        const _tfMsModal = {'5m':300000,'15m':900000,'30m':1800000,'1h':3600000,'4h':14400000}[displayTf] || 900000;
+        const _openMsModal = trade.opened_at ? new Date(trade.opened_at).getTime() : Date.now() - 30 * _tfMsModal;
+        const _startMsModal = _openMsModal - 30 * _tfMsModal;
+        url = `https://api.binance.us/api/v3/klines?symbol=${sym}&interval=${displayTf}&startTime=${_startMsModal}&limit=200`;
       } else {
         const openMs  = trade.opened_at ? new Date(trade.opened_at).getTime() : Date.now() - intMsD * 200;
         const closeMs = trade.closed_at ? new Date(trade.closed_at).getTime() : openMs + intMsD;
