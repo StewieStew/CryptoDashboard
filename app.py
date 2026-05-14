@@ -1680,6 +1680,49 @@ def admin_import_trade():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/admin/correct_trade", methods=["POST"])
+def admin_correct_trade():
+    """
+    Correct the outcome of a closed trade by ID.
+    Body: { "id": "...", "status": "win|loss|cancelled", "close_price": 1234.56 }
+    ROI is recalculated from the corrected close price.
+    """
+    import learning as _l
+    body = request.get_json() or {}
+    trade_id    = body.get("id")
+    new_status  = body.get("status")
+    close_price = body.get("close_price")
+    if not trade_id or not new_status or close_price is None:
+        return jsonify({"error": "id, status, close_price required"}), 400
+    try:
+        db = _l._conn()
+        row = db.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
+        if not row:
+            db.close()
+            return jsonify({"error": "trade not found"}), 404
+        t = dict(row)
+        direction   = t["direction"]
+        entry       = float(t["entry"])
+        close_price = float(close_price)
+        if direction == "LONG":
+            roi = (close_price - entry) / entry * 100
+        else:
+            roi = (entry - close_price) / entry * 100
+        # Subtract round-trip fee estimate
+        roi -= 0.2
+        db.execute(
+            "UPDATE trades SET status=?, close_price=?, roi_pct=? WHERE id=?",
+            (new_status, close_price, round(roi, 4), trade_id)
+        )
+        db.commit()
+        db.close()
+        print(f"[CORRECT] {trade_id}: {t['status']} → {new_status} @ {close_price} ({roi:+.3f}%)", flush=True)
+        return jsonify({"corrected": trade_id, "status": new_status,
+                        "close_price": close_price, "roi_pct": round(roi, 4)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/admin/set_weights", methods=["POST"])
 def admin_set_weights():
     """Directly set learning weights and threshold — admin/sync use only."""
