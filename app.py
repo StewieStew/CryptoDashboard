@@ -639,7 +639,11 @@ def _backfill_trade(trade: dict) -> bool:
     sym       = trade["symbol"]
 
     try:
-        since_ms = int(pd.Timestamp(trade["opened_at"]).timestamp() * 1000)
+        # Add 60s offset so the backfill starts on the NEXT complete 1m candle
+        # after entry.  The candle that was forming when the trade opened may
+        # have started before the entry price was live, which could produce a
+        # false TP/SL hit on the very first bar.
+        since_ms = int(pd.Timestamp(trade["opened_at"]).timestamp() * 1000) + 60_000
     except Exception:
         return False
 
@@ -1153,7 +1157,61 @@ def _background_scanner() -> None:
                             continue
 
                         trade_id = f"{sym}_{interval}_{sig['direction']}_{int(time.time())}"
-                        cur_px   = sig.get("current_price", sig["entry"])
+
+                        # ── Fetch live price for accurate entry recording ────
+                        # sig["entry"] is computed at analysis time (candle close
+                        # price), which may be minutes stale by the time all gates
+                        # pass.  The actual fill price for live trading is the
+                        # current market price — always use that for entry.
+                        actual_px = market_data.get_live_price(sym)
+                        if actual_px is None:
+                            print(f"[SKIP] {sym} {interval}: live price unavailable at entry", flush=True)
+                            continue
+
+                        _sig_entry = float(sig["entry"])
+                        _tp        = float(sig["target"])
+                        _sl        = float(sig["stop"])
+                        _dir       = sig["direction"]
+
+                        # ── Stale signal guard ───────────────────────────────
+                        # If price has already crossed the SL, the signal setup
+                        # is invalidated — don't enter a trade that's already at
+                        # a loss.
+                        if _dir == "LONG" and actual_px <= _sl:
+                            print(f"[SKIP STALE] {sym} {interval}: live {actual_px:.4f} already past SL {_sl:.4f}", flush=True)
+                            continue
+                        if _dir == "SHORT" and actual_px >= _sl:
+                            print(f"[SKIP STALE] {sym} {interval}: live {actual_px:.4f} already past SL {_sl:.4f}", flush=True)
+                            continue
+
+                        # ── R:R gate using actual live entry ─────────────────
+                        # Recalculate R:R from the actual fill price, not the
+                        # stale signal entry.  TP and SL are structural levels
+                        # and don't change.
+                        if actual_px != _sl:
+                            if _dir == "LONG":
+                                _rr = (_tp - actual_px) / (actual_px - _sl)
+                            else:
+                                _rr = (actual_px - _tp) / (_sl - actual_px)
+                            if _rr < 3.0:
+                                print(f"[SKIP RR] {sym} {interval}: R:R={_rr:.2f} < 3.0 at live px {actual_px:.4f}, skipping", flush=True)
+                                continue
+
+                        # ── Fee gate using actual live entry ─────────────────
+                        if actual_px > 0:
+                            if _dir == "LONG":
+                                _net_pct = (_tp - actual_px) / actual_px - FEE_RATE
+                            else:
+                                _net_pct = (actual_px - _tp) / actual_px - FEE_RATE
+                            if _net_pct <= 0:
+                                print(
+                                    f"[SKIP FEE] {sym} {interval}: TP distance "
+                                    f"{abs(_tp - actual_px) / actual_px * 100:.3f}% doesn't cover "
+                                    f"fees (0.2%), skipping",
+                                    flush=True,
+                                )
+                                continue
+
                         vwap_val = data.get("vwap") or 0
                         is_immediate = True   # all signals enter immediately at market price
 
@@ -1162,10 +1220,10 @@ def _background_scanner() -> None:
                             "symbol":           sym,
                             "interval":         interval,
                             "direction":        sig["direction"],
-                            "entry":            sig["entry"],
-                            "current_price":    cur_px,
-                            "tp":               sig["target"],
-                            "sl":               sig["stop"],
+                            "entry":            actual_px,          # live price at fill time
+                            "current_price":    actual_px,
+                            "tp":               _tp,
+                            "sl":               _sl,
                             "score":            sig["score"],
                             "effective_score":  sig["score"],
                             "reason":           sig.get("reason", ""),
@@ -1175,60 +1233,28 @@ def _background_scanner() -> None:
                             "opened_at":        datetime.now(timezone.utc).isoformat(),
                             "status":           "open" if is_immediate else "pending",
                             "adx_value":        data.get("adx", {}).get("value", 0),
-                            "vwap_side":        ("above" if vwap_val and cur_px > vwap_val
+                            "vwap_side":        ("above" if vwap_val and actual_px > vwap_val
                                                  else "below"),
                         }
-                        # Enforce minimum 3:1 R:R
-                        _entry = sig.get("entry") or sig.get("price")
-                        _tp    = sig.get("target")
-                        _sl    = sig.get("stop")
-                        _dir   = sig.get("direction")
-                        if _entry and _tp and _sl and _entry != _sl:
-                            if _dir == "LONG":
-                                _rr = (_tp - _entry) / (_entry - _sl)
-                            else:
-                                _rr = (_entry - _tp) / (_sl - _entry)
-                            if _rr < 3.0:
-                                print(f"[SKIP RR] {sym} {interval}: R:R={_rr:.2f} < 3.0, skipping", flush=True)
-                                continue
-
-                        # Fee-adjusted minimum profit gate
-                        # TP distance must exceed round-trip fees (0.2%) to yield any net gain
-                        _entry = sig.get("entry") or sig.get("price")
-                        _tp    = sig.get("target")
-                        _dir   = sig.get("direction")
-                        if _entry and _tp and _entry > 0:
-                            if _dir == "LONG":
-                                _net_pct = (_tp - _entry) / _entry - FEE_RATE
-                            else:
-                                _net_pct = (_entry - _tp) / _entry - FEE_RATE
-                            if _net_pct <= 0:
-                                print(
-                                    f"[SKIP FEE] {sym} {interval}: TP distance "
-                                    f"{abs(_tp - _entry) / _entry * 100:.3f}% doesn't cover "
-                                    f"fees (0.2%), skipping",
-                                    flush=True,
-                                )
-                                continue
 
                         logged = learning.log_trade(trade_data)
                         if logged:
                             scan_signals += 1
                             print(f"[SIGNAL] {sym} {interval}: {sig['direction']} score={sig['score']:.1f}"
-                                  f" entry={sig['entry']} tp={sig['target']} sl={sig['stop']}", flush=True)
+                                  f" entry={actual_px:.4f} (signal={_sig_entry:.4f}) tp={_tp} sl={_sl}", flush=True)
                             notifications.send_signal_alert({
                                 "symbol":        sym,
                                 "interval":      interval,
                                 "direction":     sig["direction"],
-                                "entry":         sig["entry"],
-                                "tp":            sig["target"],
-                                "sl":            sig["stop"],
+                                "entry":         actual_px,
+                                "tp":            _tp,
+                                "sl":            _sl,
                                 "score":         sig["score"],
                                 "reason":        sig.get("reason", ""),
                                 "target_basis":  sig.get("target_basis", ""),
                                 "ai_analysis":   {},
                                 "pending":       not is_immediate,
-                                "current_price": cur_px,
+                                "current_price": actual_px,
                             })
                             # Auto-update TradingView Pine Script clipboard
                             try:
