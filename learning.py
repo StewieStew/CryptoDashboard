@@ -128,6 +128,7 @@ def _init_db():
             ("partial_hit",         "INTEGER DEFAULT 0"),
             ("tp_source",           "TEXT DEFAULT 'unknown'"),
             ("initial_sl",          "REAL"),   # original SL at entry — never overwritten by trailing logic
+            ("tp_reached",          "INTEGER DEFAULT 0"),  # 1 = TP crossed, now in let-it-run trailing mode
         ]:
             try:
                 db.execute(f"ALTER TABLE trades ADD COLUMN {col} {defn}")
@@ -468,20 +469,52 @@ def auto_close(symbol: str, interval: str, current_price: float,
                 # A brief wick to TP that reverses within the same 1m candle
                 # will show in candle_low/high even if spot price has bounced.
                 tp = float(t["tp"])
+                _tp_reached_flag = bool(t.get("tp_reached", 0))
+                # 5m closes at TP immediately; all other intervals let it run past TP.
+                _let_it_run = (interval != "5m")
                 _tp_by_spot   = False
                 _tp_by_candle = False
-                if t["direction"] == "LONG":
-                    if current_price >= tp:
-                        _tp_by_spot = True
-                    if _c_high is not None and _c_high >= tp:
-                        _tp_by_candle = True
-                elif t["direction"] == "SHORT":
-                    if current_price <= tp:
-                        _tp_by_spot = True
-                    if _c_low is not None and _c_low <= tp:
-                        _tp_by_candle = True
-                if _tp_by_spot or _tp_by_candle:
-                    hit = "win"
+
+                if not _tp_reached_flag:
+                    # Normal TP detection
+                    if t["direction"] == "LONG":
+                        if current_price >= tp:
+                            _tp_by_spot = True
+                        if _c_high is not None and _c_high >= tp:
+                            _tp_by_candle = True
+                    elif t["direction"] == "SHORT":
+                        if current_price <= tp:
+                            _tp_by_spot = True
+                        if _c_low is not None and _c_low <= tp:
+                            _tp_by_candle = True
+
+                    if (_tp_by_spot or _tp_by_candle) and _let_it_run:
+                        # TP crossed — switch to let-it-run mode instead of closing.
+                        # Lock in 2R immediately so we always keep something.
+                        ref_sl_lr = float(t["initial_sl"]) if t.get("initial_sl") else eff_sl
+                        risk_d_lr = abs(float(t["entry"]) - ref_sl_lr)
+                        if risk_d_lr > 0:
+                            _entry_lr = float(t["entry"])
+                            if t["direction"] == "LONG":
+                                new_sl_lr = round(_entry_lr + 2.0 * risk_d_lr, 8)
+                            else:
+                                new_sl_lr = round(_entry_lr - 2.0 * risk_d_lr, 8)
+                            # SL only moves in the winning direction
+                            if (t["direction"] == "LONG" and new_sl_lr > eff_sl) or \
+                               (t["direction"] == "SHORT" and new_sl_lr < eff_sl):
+                                db.execute(
+                                    "UPDATE trades SET tp_reached=1, sl=?, breakeven_activated=1 WHERE id=?",
+                                    (new_sl_lr, t["id"])
+                                )
+                                db.commit()
+                                eff_sl = new_sl_lr   # refresh for SL check below
+                                print(f"[LET IT RUN] {t['symbol']} {t['interval']} "
+                                      f"{t['direction']}: TP {tp} crossed — SL locked "
+                                      f"at 2R ({new_sl_lr}), trailing continues", flush=True)
+                        # Don't set hit — stay open and let trailing do the work
+                    elif _tp_by_spot or _tp_by_candle:
+                        # 5m: close at TP immediately
+                        hit = "win"
 
                 # ── SL check ──────────────────────────────────────────────
                 if not hit:
@@ -509,9 +542,9 @@ def auto_close(symbol: str, interval: str, current_price: float,
                     if hit == "loss":
                         close_px = round(eff_sl, 8)         # snap to exact SL
                     else:
-                        # Win: close at TP if TP was the trigger, else at trailing SL.
-                        # If trailing SL == entry (breakeven), close_px = entry, ROI ≈ 0.
-                        _tp_hit = _tp_by_spot or _tp_by_candle
+                        # Win: close at TP only for 5m (let-it-run intervals close at
+                        # trailing SL, even if price originally crossed TP to get here).
+                        _tp_hit = (_tp_by_spot or _tp_by_candle) and not _let_it_run
                         close_px = round(tp, 8) if _tp_hit else round(eff_sl, 8)
                     roi = _calc_roi(t["direction"], float(t["entry"]), close_px)
                     analysis = _generate_analysis(t, close_px, hit, roi)
@@ -610,28 +643,24 @@ def update_trailing_stops(symbol: str, interval: str, current_price: float,
                 _min_dist = 1.0 * risk_d
 
                 if direction == "LONG":
-                    if profit_r >= 3.0 and swing_lows:
-                        # Phase 3: trail to highest swing low that:
-                        #   • is above current SL (improvement)
-                        #   • is at least 1R below current price (breathing room)
+                    # Phase minimum: entry at 2R, entry+1R at 3R.
+                    # SL never drops below this floor once set.
+                    _min_sl = round(entry + risk_d, 8) if profit_r >= 3.0 else round(entry, 8)
+
+                    # Structural trail active from 2R onwards (not just at 3R).
+                    # Find the best swing low that: is above current SL, is above
+                    # the phase minimum, and is at least 1R below current price.
+                    if swing_lows:
                         candidates = [p for p in swing_lows
                                       if p > current_sl
+                                      and p >= _min_sl
                                       and p < current_price - _min_dist]
-                        if candidates:
-                            new_sl = round(max(candidates), 8)
-                        else:
-                            # No valid structural level — fall back to breakeven.
-                            # This guards against price jumping past 3R in one candle:
-                            # without this fallback the SL stays at the original stop
-                            # and a reversal marks the trade as a loss instead of scratch.
-                            new_sl = round(entry, 8)
-                    elif profit_r >= 3.0:
-                        # Phase 3 threshold reached but no swing data supplied yet —
-                        # ensure breakeven is at least active.
-                        new_sl = round(entry, 8)
+                        new_sl = round(max(candidates), 8) if candidates else _min_sl
                     else:
-                        # Phase 1 (2-3R): breakeven
-                        new_sl = round(entry, 8)
+                        new_sl = _min_sl
+
+                    # Guarantee floor
+                    new_sl = max(new_sl, _min_sl)
 
                     # SL may only move up for a LONG
                     if new_sl > current_sl:
@@ -640,31 +669,24 @@ def update_trailing_stops(symbol: str, interval: str, current_price: float,
                             "UPDATE trades SET sl=?, breakeven_activated=? WHERE id=?",
                             (new_sl, be_now, t["id"])
                         )
-                        label = (
-                            f"STRUCTURAL TRAIL {profit_r:.1f}R → SL {new_sl:.6f}" if profit_r >= 3.0
-                            else f"BREAKEVEN SL→{new_sl:.6f}"
-                        )
+                        label = f"TRAIL {profit_r:.1f}R → SL {new_sl:.6f}"
                         logger.info(f"[TRAIL] {t['symbol']} {interval} LONG  {label}")
                         updated.append(t["id"])
 
                 elif direction == "SHORT":
-                    if profit_r >= 3.0 and swing_highs:
-                        # Phase 3: trail to lowest swing high that:
-                        #   • is below current SL (improvement)
-                        #   • is at least 1R above current price (breathing room)
+                    # Phase minimum: entry at 2R, entry-1R at 3R.
+                    _min_sl = round(entry - risk_d, 8) if profit_r >= 3.0 else round(entry, 8)
+
+                    if swing_highs:
                         candidates = [p for p in swing_highs
                                       if p < current_sl
+                                      and p <= _min_sl
                                       and p > current_price + _min_dist]
-                        if candidates:
-                            new_sl = round(min(candidates), 8)
-                        else:
-                            # No valid structural level — fall back to breakeven.
-                            new_sl = round(entry, 8)
-                    elif profit_r >= 3.0:
-                        # Phase 3 threshold but no swing data — ensure breakeven active.
-                        new_sl = round(entry, 8)
+                        new_sl = round(min(candidates), 8) if candidates else _min_sl
                     else:
-                        new_sl = round(entry, 8)
+                        new_sl = _min_sl
+
+                    new_sl = min(new_sl, _min_sl)
 
                     # SL may only move down for a SHORT
                     if new_sl < current_sl:
@@ -673,10 +695,7 @@ def update_trailing_stops(symbol: str, interval: str, current_price: float,
                             "UPDATE trades SET sl=?, breakeven_activated=? WHERE id=?",
                             (new_sl, be_now, t["id"])
                         )
-                        label = (
-                            f"STRUCTURAL TRAIL {profit_r:.1f}R → SL {new_sl:.6f}" if profit_r >= 3.0
-                            else f"BREAKEVEN SL→{new_sl:.6f}"
-                        )
+                        label = f"TRAIL {profit_r:.1f}R → SL {new_sl:.6f}"
                         logger.info(f"[TRAIL] {t['symbol']} {interval} SHORT {label}")
                         updated.append(t["id"])
 

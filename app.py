@@ -690,30 +690,47 @@ def _backfill_trade(trade: dict) -> bool:
     if not bars:
         return False
 
+    interval      = trade["interval"]
+    _let_it_run   = (interval != "5m")   # 5m closes at TP; others let it run
+    tp_reached    = bool(trade.get("tp_reached", 0))
+    initial_sl    = float(trade.get("initial_sl") or sl)
+    risk_d_bf     = abs(entry - initial_sl)
+
     outcome     = None
     close_price = None
     for bar in bars:
         hi, lo = bar["high"], bar["low"]
         if direction == "LONG":
-            if hi >= tp:
-                outcome = "win";  close_price = tp;  break
+            if not tp_reached and hi >= tp:
+                if _let_it_run and risk_d_bf > 0:
+                    # Switch to let-it-run: lock SL at 2R and keep replaying
+                    sl          = round(entry + 2.0 * risk_d_bf, 8)
+                    be_active   = True
+                    tp_reached  = True
+                    continue
+                else:
+                    outcome = "win";  close_price = tp;  break
             if lo <= sl:
                 close_price = sl
                 if not be_active:
                     outcome = "loss"
                 else:
-                    # Trailing stop fired — win whether SL is above or at entry.
                     outcome = "win"
                 break
         else:  # SHORT
-            if lo <= tp:
-                outcome = "win";  close_price = tp;  break
+            if not tp_reached and lo <= tp:
+                if _let_it_run and risk_d_bf > 0:
+                    sl          = round(entry - 2.0 * risk_d_bf, 8)
+                    be_active   = True
+                    tp_reached  = True
+                    continue
+                else:
+                    outcome = "win";  close_price = tp;  break
             if hi >= sl:
                 close_price = sl
                 if not be_active:
                     outcome = "loss"
                 else:
-                    # Trailing stop fired — win whether SL is below or at entry.
                     outcome = "win"
                 break
 
