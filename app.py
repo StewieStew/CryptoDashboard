@@ -711,11 +711,12 @@ def _backfill_trade(trade: dict) -> bool:
                 else:
                     outcome = "win";  close_price = tp;  break
             if lo <= sl:
-                close_price = sl
                 if not be_active:
-                    outcome = "loss"
+                    outcome = "loss";     close_price = sl
+                elif sl > entry:
+                    outcome = "win";      close_price = sl
                 else:
-                    outcome = "win"
+                    outcome = "breakeven"; close_price = entry
                 break
         else:  # SHORT
             if not tp_reached and lo <= tp:
@@ -727,11 +728,12 @@ def _backfill_trade(trade: dict) -> bool:
                 else:
                     outcome = "win";  close_price = tp;  break
             if hi >= sl:
-                close_price = sl
                 if not be_active:
-                    outcome = "loss"
+                    outcome = "loss";     close_price = sl
+                elif sl < entry:
+                    outcome = "win";      close_price = sl
                 else:
-                    outcome = "win"
+                    outcome = "breakeven"; close_price = entry
                 break
 
     if not outcome:
@@ -1562,7 +1564,7 @@ def close_trade(trade_id):
     body   = request.get_json() or {}
     status = body.get("status", "cancelled")
     price  = body.get("price")
-    if status not in ("win", "loss", "cancelled"):
+    if status not in ("win", "loss", "cancelled", "breakeven"):
         return jsonify({"error": "status must be win, loss, or cancelled"}), 400
     try:
         close_px = float(price) if price else 0.0
@@ -1738,7 +1740,7 @@ def admin_import_trade():
 def admin_correct_trade():
     """
     Correct the outcome of a closed trade by ID.
-    Body: { "id": "...", "status": "win|loss|cancelled", "close_price": 1234.56 }
+    Body: { "id": "...", "status": "win|loss|breakeven|cancelled", "close_price": 1234.56 }
     ROI is recalculated from the corrected close price.
     """
     import learning as _l
@@ -2399,10 +2401,11 @@ def trade_charts():
     font-weight: 600;
     text-transform: uppercase;
   }}
-  .badge-win    {{ background: #0d4a1f; color: #3fb950; border: 1px solid #238636; }}
-  .badge-loss   {{ background: #4a0d0d; color: #f85149; border: 1px solid #da3633; }}
-  .badge-open   {{ background: #0d2a4a; color: #79c0ff; border: 1px solid #1f6feb; }}
-  .badge-cancelled {{ background: #2d2d2d; color: #8b949e; border: 1px solid #484f58; }}
+  .badge-win        {{ background: #0d4a1f; color: #3fb950; border: 1px solid #238636; }}
+  .badge-loss       {{ background: #4a0d0d; color: #f85149; border: 1px solid #da3633; }}
+  .badge-open       {{ background: #0d2a4a; color: #79c0ff; border: 1px solid #1f6feb; }}
+  .badge-breakeven  {{ background: #2d2d1a; color: #e3b341; border: 1px solid #9e6a03; }}
+  .badge-cancelled  {{ background: #2d2d2d; color: #8b949e; border: 1px solid #484f58; }}
   .meta {{
     padding: 8px 16px;
     font-size: 0.78rem;
@@ -2443,6 +2446,7 @@ def trade_charts():
       <option value="open">Open</option>
       <option value="win">Wins</option>
       <option value="loss">Losses</option>
+      <option value="breakeven">Breakeven</option>
       <option value="cancelled">Cancelled</option>
     </select>
   </label>
@@ -2488,19 +2492,23 @@ function badgeClass(status) {{
 }}
 
 function buildSummary(trades) {{
-  const wins = trades.filter(t => t.status === 'win');
-  const losses = trades.filter(t => t.status === 'loss');
-  const open = trades.filter(t => t.status === 'open');
-  const closed = wins.concat(losses);
-  const winRate = closed.length ? (wins.length / closed.length * 100).toFixed(1) : '—';
-  const totalRoi = closed.reduce((s, t) => s + (t.roi_pct || 0), 0).toFixed(2);
-  const avgRoi = closed.length ? (closed.reduce((s, t) => s + (t.roi_pct || 0), 0) / closed.length).toFixed(2) : '—';
+  const wins      = trades.filter(t => t.status === 'win');
+  const losses    = trades.filter(t => t.status === 'loss');
+  const breakevens = trades.filter(t => t.status === 'breakeven');
+  const open      = trades.filter(t => t.status === 'open');
+  // Win rate = wins / (wins + losses) only — breakeven excluded from both numerator and denominator
+  const decided   = wins.concat(losses);
+  const winRate   = decided.length ? (wins.length / decided.length * 100).toFixed(1) : '—';
+  const closed    = wins.concat(losses).concat(breakevens);
+  const totalRoi  = closed.reduce((s, t) => s + (t.roi_pct || 0), 0).toFixed(2);
+  const avgRoi    = closed.length ? (closed.reduce((s, t) => s + (t.roi_pct || 0), 0) / closed.length).toFixed(2) : '—';
 
   return `
     <div class="stat"><span class="stat-label">Total</span><span class="stat-value">${{trades.length}}</span></div>
     <div class="stat"><span class="stat-label">Open</span><span class="stat-value open">${{open.length}}</span></div>
     <div class="stat"><span class="stat-label">Wins</span><span class="stat-value win">${{wins.length}}</span></div>
     <div class="stat"><span class="stat-label">Losses</span><span class="stat-value loss">${{losses.length}}</span></div>
+    ${{breakevens.length ? `<div class="stat"><span class="stat-label">Breakeven</span><span class="stat-value" style="color:#e3b341">${{breakevens.length}}</span></div>` : ''}}
     <div class="stat"><span class="stat-label">Win Rate</span><span class="stat-value">${{winRate}}%</span></div>
     <div class="stat"><span class="stat-label">Total ROI</span><span class="stat-value ${{parseFloat(totalRoi) >= 0 ? 'win' : 'loss'}}">${{totalRoi}}%</span></div>
     <div class="stat"><span class="stat-label">Avg ROI</span><span class="stat-value ${{parseFloat(avgRoi) >= 0 ? 'win' : 'loss'}}">${{avgRoi !== '—' ? avgRoi + '%' : '—'}}</span></div>

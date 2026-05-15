@@ -524,23 +524,26 @@ def auto_close(symbol: str, interval: str, current_price: float,
                         if sl_check <= eff_sl:
                             if not be_active:
                                 hit = "loss"
+                            elif eff_sl > float(t["entry"]):
+                                hit = "win"        # SL locked in real profit
                             else:
-                                # Trailing stop fired — win regardless of whether SL is
-                                # above entry (+profit locked) or at entry (breakeven).
-                                hit = "win"
+                                hit = "breakeven"  # trailing stop at entry — managed exit, not a win
                     elif t["direction"] == "SHORT":
                         sl_check = max(current_price,
                                        _c_high if _c_high is not None else current_price)
                         if sl_check >= eff_sl:
                             if not be_active:
                                 hit = "loss"
+                            elif eff_sl < float(t["entry"]):
+                                hit = "win"        # SL locked in real profit
                             else:
-                                # Trailing stop fired — win regardless of SL position.
-                                hit = "win"
+                                hit = "breakeven"  # trailing stop at entry — managed exit, not a win
 
                 if hit:
                     if hit == "loss":
                         close_px = round(eff_sl, 8)         # snap to exact SL
+                    elif hit == "breakeven":
+                        close_px = round(float(t["entry"]), 8)  # closed at entry
                     else:
                         # Win: close at TP only for 5m (let-it-run intervals close at
                         # trailing SL, even if price originally crossed TP to get here).
