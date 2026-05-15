@@ -41,7 +41,7 @@ DEFAULT_SYMBOLS  = [
 ]
 
 # Paper-trade mode: only these coins on 4H using discovery-validated params.
-PAPER_SYMBOLS   = ["BTCUSDT", "ETHUSDT", "XRPUSDT"]
+PAPER_SYMBOLS   = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "DOGEUSDT"]
 PAPER_INTERVALS = ["5m", "15m", "1h", "4h"]
 
 # Four-tier scanning: 5m (micro-scalp), 15m (scalp), 1h (day trade), 4h (swing).
@@ -591,6 +591,19 @@ def _apply_discovery_params() -> None:
                 "fvg": 0.0, "fib": 0.0, "liquidity": 0.0,
             },
         },
+        ("DOGEUSDT", "5m"): {
+            "config":           "Structure + Volume",
+            "score_threshold":  7.0,
+            "min_rr":           2.5,
+            "adx_threshold":    20,
+            "body_ratio_min":   0.25,
+            "level_touch_min":  1,
+            "weights": {
+                "bos": 2.5, "sweep": 2.0, "volume": 2.0, "obv": 1.0,
+                "regime": 1.5, "rsi": 1.0, "adx": 0.0,
+                "fvg": 0.0, "fib": 0.0, "liquidity": 0.0,
+            },
+        },
         ("DOGEUSDT", "15m"): {
             "config":           "Trend + Structure + RSI",
             "score_threshold":  5.5,
@@ -602,6 +615,32 @@ def _apply_discovery_params() -> None:
                 "bos": 2.0, "sweep": 1.0, "rsi": 2.0, "regime": 2.0,
                 "adx": 0.0, "volume": 0.0, "obv": 0.0,
                 "fvg": 0.0, "fib": 0.0, "liquidity": 0.0,
+            },
+        },
+        ("DOGEUSDT", "1h"): {
+            "config":           "Trend + S/R + RSI",
+            "score_threshold":  6.5,
+            "min_rr":           2.0,
+            "adx_threshold":    20,
+            "body_ratio_min":   0.20,
+            "level_touch_min":  1,
+            "weights": {
+                "bos": 2.0, "sweep": 1.5, "rsi": 2.0, "regime": 2.0,
+                "adx": 0.0, "volume": 1.0, "obv": 0.0,
+                "fvg": 0.0, "fib": 0.5, "liquidity": 0.0,
+            },
+        },
+        ("DOGEUSDT", "4h"): {
+            "config":           "Trend + S/R + RSI",
+            "score_threshold":  6.0,
+            "min_rr":           2.0,
+            "adx_threshold":    20,
+            "body_ratio_min":   0.20,
+            "level_touch_min":  1,
+            "weights": {
+                "bos": 2.0, "sweep": 1.5, "rsi": 2.0, "regime": 2.0,
+                "adx": 0.0, "volume": 1.0, "obv": 0.0,
+                "fvg": 0.0, "fib": 0.5, "liquidity": 0.0,
             },
         },
     }
