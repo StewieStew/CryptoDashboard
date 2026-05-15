@@ -583,6 +583,12 @@ def update_trailing_stops(symbol: str, interval: str, current_price: float,
                 current_sl = float(t["sl"])
                 direction  = t["direction"]
 
+                # 5m trades: no trailing stop — let them run cleanly to TP or SL.
+                # The 2R breakeven gate cuts 5m winners too early given the noise
+                # on short timeframes.
+                if interval == "5m":
+                    continue
+
                 # Always use initial_sl for risk distance so R stays consistent
                 # even after the SL has already moved to breakeven or beyond.
                 ref_sl = float(t["initial_sl"]) if t.get("initial_sl") else current_sl
