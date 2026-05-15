@@ -628,7 +628,7 @@ def _backfill_trade(trade: dict) -> bool:
     SL outcome mirrors auto_close logic:
       - breakeven not active          → loss
       - breakeven active, SL > entry  → win  (trailing SL locked in profit)
-      - breakeven active, SL == entry → cancelled (scratch at entry)
+      - breakeven active, SL == entry → win  (breakeven hit, treated as managed exit)
     """
     trade_id  = trade["id"]
     direction = trade["direction"]
@@ -662,10 +662,9 @@ def _backfill_trade(trade: dict) -> bool:
                 close_price = sl
                 if not be_active:
                     outcome = "loss"
-                elif sl > entry:
-                    outcome = "win"
                 else:
-                    outcome = "cancelled"
+                    # Trailing stop fired — win whether SL is above or at entry.
+                    outcome = "win"
                 break
         else:  # SHORT
             if lo <= tp:
@@ -674,10 +673,9 @@ def _backfill_trade(trade: dict) -> bool:
                 close_price = sl
                 if not be_active:
                     outcome = "loss"
-                elif sl < entry:
-                    outcome = "win"
                 else:
-                    outcome = "cancelled"
+                    # Trailing stop fired — win whether SL is below or at entry.
+                    outcome = "win"
                 break
 
     if not outcome:

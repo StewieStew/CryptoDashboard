@@ -491,29 +491,27 @@ def auto_close(symbol: str, interval: str, current_price: float,
                         if sl_check <= eff_sl:
                             if not be_active:
                                 hit = "loss"
-                            elif eff_sl > float(t["entry"]):
-                                hit = "win"
                             else:
-                                hit = "cancelled"
+                                # Trailing stop fired — win regardless of whether SL is
+                                # above entry (+profit locked) or at entry (breakeven).
+                                hit = "win"
                     elif t["direction"] == "SHORT":
                         sl_check = max(current_price,
                                        _c_high if _c_high is not None else current_price)
                         if sl_check >= eff_sl:
                             if not be_active:
                                 hit = "loss"
-                            elif eff_sl < float(t["entry"]):
-                                hit = "win"
                             else:
-                                hit = "cancelled"
+                                # Trailing stop fired — win regardless of SL position.
+                                hit = "win"
 
                 if hit:
                     if hit == "loss":
                         close_px = round(eff_sl, 8)         # snap to exact SL
-                    elif hit == "cancelled":
-                        close_px = float(t["entry"])         # scratch at entry
                     else:
                         # Win: close at TP if TP was the trigger, else at trailing SL.
-                        _tp_hit = _tp_by_spot or _tp_by_candle  # _tp_by_candle already respects 90s gate
+                        # If trailing SL == entry (breakeven), close_px = entry, ROI ≈ 0.
+                        _tp_hit = _tp_by_spot or _tp_by_candle
                         close_px = round(tp, 8) if _tp_hit else round(eff_sl, 8)
                     roi = _calc_roi(t["direction"], float(t["entry"]), close_px)
                     analysis = _generate_analysis(t, close_px, hit, roi)
