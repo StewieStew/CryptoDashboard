@@ -87,6 +87,7 @@ DAILY_LOSS_HALT_PCT = 0.05   # halt if daily loss exceeds 5%
 DRAWDOWN_REDUCE_PCT = 0.15   # reduce size if drawdown > 15%
 FEE_SLIPPAGE_PCT    = 0.001  # 0.1% fee + slippage per side (each way)
 FEE_RATE            = 0.002  # 0.1% per side × 2 sides = 0.2% round-trip fee gate
+MIN_TP_PCT          = {"5m": 0.6, "15m": 1.0, "1h": 1.5, "4h": 2.5}  # min TP distance per timeframe
 
 
 def _reset_daily_risk() -> None:
@@ -1253,17 +1254,17 @@ def _background_scanner() -> None:
                                 print(f"[SKIP RR] {sym} {interval}: R:R={_rr:.2f} < 3.0 at live px {actual_px:.4f}, skipping", flush=True)
                                 continue
 
-                        # ── Fee gate using actual live entry ─────────────────
+                        # ── Minimum TP distance gate (per timeframe) ─────────
                         if actual_px > 0:
                             if _dir == "LONG":
-                                _net_pct = (_tp - actual_px) / actual_px - FEE_RATE
+                                _tp_pct = (_tp - actual_px) / actual_px * 100
                             else:
-                                _net_pct = (actual_px - _tp) / actual_px - FEE_RATE
-                            if _net_pct <= 0:
+                                _tp_pct = (actual_px - _tp) / actual_px * 100
+                            _min_pct = MIN_TP_PCT.get(interval, 1.0)
+                            if _tp_pct < _min_pct:
                                 print(
-                                    f"[SKIP FEE] {sym} {interval}: TP distance "
-                                    f"{abs(_tp - actual_px) / actual_px * 100:.3f}% doesn't cover "
-                                    f"fees (0.2%), skipping",
+                                    f"[GATE] {sym} {interval}: TP too close: "
+                                    f"{_tp_pct:.3f}% < {_min_pct}% min, skipping",
                                     flush=True,
                                 )
                                 continue
