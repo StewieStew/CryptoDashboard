@@ -87,7 +87,7 @@ DAILY_LOSS_HALT_PCT = 0.05   # halt if daily loss exceeds 5%
 DRAWDOWN_REDUCE_PCT = 0.15   # reduce size if drawdown > 15%
 FEE_SLIPPAGE_PCT    = 0.001  # 0.1% fee + slippage per side (each way)
 FEE_RATE            = 0.002  # 0.1% per side × 2 sides = 0.2% round-trip fee gate
-MIN_TP_PCT          = {"5m": 0.6, "15m": 1.0, "1h": 1.5, "4h": 2.5}  # min TP distance per timeframe
+MIN_TP_PCT          = {"5m": 0.25, "15m": 0.35, "1h": 0.5, "4h": 0.8}  # min TP distance per timeframe (fee-coverage floors)
 
 
 def _reset_daily_risk() -> None:
