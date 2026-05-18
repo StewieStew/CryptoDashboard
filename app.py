@@ -1073,20 +1073,23 @@ def _background_scanner() -> None:
                     # (A) BOS trend-following signal — always check but only keep
                     #     in TRENDING or UNCERTAIN (with higher bar).
                     bos_sig = data.get("signal")
-                    # Checklist gate: BOS + trending regime + OBV required
+                    # Checklist gate: BOS + OBV required always; regime only required on 1h/4h
+                    _ltf = interval in ("5m", "15m")
                     if bos_sig:
                         _factors = bos_sig.get("factors_snapshot", {})
                         _checklist = (
                             _factors.get("bos") and      # Break of structure confirmed
-                            _factors.get("regime") and   # Trending/aligned market
+                            (_ltf or _factors.get("regime")) and  # Regime only gated on 1h/4h
                             _factors.get("obv")          # OBV confirming direction
                         )
                         if not _checklist:
                             _sc = bos_sig.get("score", 0)
-                            _missing = [k for k in ["bos", "regime", "obv"] if not _factors.get(k)]
+                            _chk_keys = ["bos", "obv"] if _ltf else ["bos", "regime", "obv"]
+                            _missing = [k for k in _chk_keys if not _factors.get(k)]
                             print(f"[CHECKLIST BLOCK] {sym} {interval}: score={_sc:.1f} missing={_missing}", flush=True)
                             bos_sig = None
-                    if bos_sig and regime_label in ("TRENDING", "UNCERTAIN"):
+                    # LTFs (5m/15m) pass regardless of macro regime label — structure is the signal
+                    if bos_sig and (_ltf or regime_label in ("TRENDING", "UNCERTAIN")):
                         candidate_sigs.append(bos_sig)
 
                     # (B) Mean-reversion signal — only in RANGING regime
@@ -1132,9 +1135,10 @@ def _background_scanner() -> None:
                             sym_p.get("score_threshold", learning.get_threshold()),
                         )
 
-                        # Fix 2: Regime penalty for BOS trend signals (was hard-block) ──
+                        # Fix 2: Regime penalty for BOS trend signals — 1h/4h only
+                        # LTFs (5m/15m) trade structure, not macro trend — no regime penalty
                         if sig_type not in ("MEAN_REVERSION", "VOL_SQUEEZE", "MACD_EMA_VOL"):
-                            if not factors.get("regime"):
+                            if not _ltf and not factors.get("regime"):
                                 score -= 1.5
                                 print(f"[SCAN] {sym} {interval}: {sig['direction']} score→{score:.1f} — REGIME PENALTY (-1.5)", flush=True)
 
