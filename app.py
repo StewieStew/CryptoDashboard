@@ -512,11 +512,11 @@ def _apply_discovery_params() -> None:
                 "rsi": 0.5, "adx": 0.0, "obv": 0.0,
             },
         },
-        # ── 5m micro-scalp params (conservative start — learning engine adapts) ──
+        # ── 5m micro-scalp params ──
         ("BTCUSDT", "5m"): {
             "config":           "Structure + Volume",
-            "score_threshold":  7.5,
-            "min_rr":           2.5,
+            "score_threshold":  6.5,
+            "min_rr":           3.0,
             "adx_threshold":    30,
             "body_ratio_min":   0.35,
             "level_touch_min":  1,
@@ -528,8 +528,8 @@ def _apply_discovery_params() -> None:
         },
         ("ETHUSDT", "5m"): {
             "config":           "Structure + Volume",
-            "score_threshold":  8.0,
-            "min_rr":           2.5,
+            "score_threshold":  6.5,
+            "min_rr":           3.0,
             "adx_threshold":    30,
             "body_ratio_min":   0.25,
             "level_touch_min":  1,
@@ -541,8 +541,8 @@ def _apply_discovery_params() -> None:
         },
         ("XRPUSDT", "5m"): {
             "config":           "Structure + Volume",
-            "score_threshold":  7.5,
-            "min_rr":           2.5,
+            "score_threshold":  6.5,
+            "min_rr":           3.0,
             "adx_threshold":    20,
             "body_ratio_min":   0.25,
             "level_touch_min":  1,
@@ -594,8 +594,8 @@ def _apply_discovery_params() -> None:
         },
         ("DOGEUSDT", "5m"): {
             "config":           "Structure + Volume",
-            "score_threshold":  7.0,
-            "min_rr":           2.5,
+            "score_threshold":  6.0,
+            "min_rr":           3.0,
             "adx_threshold":    20,
             "body_ratio_min":   0.25,
             "level_touch_min":  1,
@@ -1120,9 +1120,9 @@ def _background_scanner() -> None:
                         sig_type = sig.get("signal_type", "")
                         # Mean-reversion signals skip the HTF bias filter
                         # (they are counter-trend by design).
-                        # 5m/15m use strict bias (must have explicit HTF agreement).
-                        # 1h/4h use relaxed bias (only block if HTF is clearly opposed).
-                        _bias_strict = interval in ("5m", "15m")
+                        # 15m uses strict bias (must have explicit HTF agreement).
+                        # 5m/1h/4h use relaxed bias (only block if HTF is clearly opposed).
+                        _bias_strict = interval == "15m"
                         if sig_type not in ("MEAN_REVERSION",) and not _bias_agrees(sig["direction"], htf_d, strict=_bias_strict):
                             print(f"[SCAN] {sym} {interval}: {sig['direction']} score={sig.get('score',0):.1f} — HTF BIAS BLOCK", flush=True)
                             continue
