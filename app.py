@@ -1148,8 +1148,14 @@ def _background_scanner() -> None:
                             effective_threshold += 1.0
                             print(f"[SCAN] {sym} {interval}: OBV penalty → threshold={effective_threshold:.1f}", flush=True)
 
-                        # TP-source self-learning: raise threshold for historically poor sources ──
+                        # TP-source hard block — sources with 0% win rate are disabled entirely
                         _tp_src = sig.get("tp_source", "unknown")
+                        _BLOCKED_TP_SOURCES = {"forced_3r", "swing_low"}
+                        if _tp_src in _BLOCKED_TP_SOURCES:
+                            print(f"[SCAN] {sym} {interval}: TP source '{_tp_src}' is disabled (0% win rate) — skipping", flush=True)
+                            continue
+
+                        # TP-source self-learning: raise threshold for historically poor sources ──
                         _tp_adj = learning.tp_source_threshold_adjustment(_tp_src)
                         if _tp_adj > 0:
                             effective_threshold += _tp_adj

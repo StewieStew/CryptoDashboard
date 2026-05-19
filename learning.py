@@ -47,8 +47,8 @@ DEFAULT_WEIGHTS = {
     # Core max ≈ 10 pts; FVG + FIB + liquidity are bonus precision factors
 }
 DEFAULT_THRESHOLD = 7.0    # minimum score to fire a signal
-DEFAULT_STOP_MULT = 0.3    # ATR wick buffer on structural stop — 0.3×ATR gives ~3-5 pts breathing room on ETH/BTC 15m
-MAX_STOP_MULT     = 0.5    # hard ceiling — adaptation engine cannot widen stops beyond this
+DEFAULT_STOP_MULT = 1.0    # ATR wick buffer on structural stop — raised to give more breathing room vs candle noise
+MAX_STOP_MULT     = 2.0    # hard ceiling — raised so adaptation engine has room to work
 ADAPT_WINDOW      = 8      # trades to look back per-factor
 MIN_SAMPLES       = 2      # minimum trades before adapting a factor
 WEIGHT_FLOOR_ABS  = 1.0    # absolute minimum — no active factor weight can drop below 1.0
@@ -111,8 +111,8 @@ def _init_db():
         # Lower threshold from 8.0 → 7.0 (hard gates now do the heavy filtering)
         db.execute("UPDATE config SET value=? WHERE key='signal_threshold' AND CAST(value AS REAL) = 8.0",
                    (str(DEFAULT_THRESHOLD),))
-        # Raise stop_multiplier to new default (0.3) if still at old tight value (0.1)
-        db.execute("UPDATE config SET value=? WHERE key='stop_multiplier' AND CAST(value AS REAL) < 0.3",
+        # Raise stop_multiplier to new default (1.0) — gives more breathing room vs candle noise
+        db.execute("UPDATE config SET value=? WHERE key='stop_multiplier' AND CAST(value AS REAL) < 1.0",
                    (str(DEFAULT_STOP_MULT),))
         # Cap stop_multiplier at MAX_STOP_MULT — clamp any value the adaptation engine
         # may have pushed above the ceiling back down on redeploy.
