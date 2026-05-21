@@ -42,10 +42,10 @@ DEFAULT_SYMBOLS  = [
 
 # Paper-trade mode: only these coins on 4H using discovery-validated params.
 PAPER_SYMBOLS   = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "DOGEUSDT"]
-PAPER_INTERVALS = ["5m", "15m", "1h", "4h"]
+PAPER_INTERVALS = ["15m", "1h", "4h"]
 
-# Four-tier scanning: 5m (micro-scalp), 15m (scalp), 1h (day trade), 4h (swing).
-SCAN_INTERVALS   = ["5m", "15m", "1h", "4h"]
+# Three-tier scanning: 15m (scalp), 1h (day trade), 4h (swing).
+SCAN_INTERVALS   = ["15m", "1h", "4h"]
 
 # Grows as users view additional coins — persists for the life of the server process
 _known_symbols   = set(DEFAULT_SYMBOLS)
@@ -512,46 +512,6 @@ def _apply_discovery_params() -> None:
                 "rsi": 0.5, "adx": 0.0, "obv": 0.0,
             },
         },
-        # ── 5m micro-scalp params ──
-        ("BTCUSDT", "5m"): {
-            "config":           "Structure + Volume",
-            "score_threshold":  6.0,
-            "min_rr":           3.0,
-            "adx_threshold":    30,
-            "body_ratio_min":   0.35,
-            "level_touch_min":  1,
-            "weights": {
-                "bos": 2.5, "sweep": 2.0, "volume": 2.5, "obv": 1.0,
-                "regime": 1.5, "rsi": 0.0, "adx": 0.0,
-                "fvg": 0.0, "fib": 0.0, "liquidity": 0.0,
-            },
-        },
-        ("ETHUSDT", "5m"): {
-            "config":           "Structure + Volume",
-            "score_threshold":  6.0,
-            "min_rr":           3.0,
-            "adx_threshold":    30,
-            "body_ratio_min":   0.25,
-            "level_touch_min":  1,
-            "weights": {
-                "bos": 2.5, "sweep": 2.0, "volume": 2.5, "obv": 1.0,
-                "regime": 1.5, "rsi": 0.0, "adx": 0.0,
-                "fvg": 0.0, "fib": 0.0, "liquidity": 0.0,
-            },
-        },
-        ("XRPUSDT", "5m"): {
-            "config":           "Structure + Volume",
-            "score_threshold":  6.0,
-            "min_rr":           3.0,
-            "adx_threshold":    20,
-            "body_ratio_min":   0.25,
-            "level_touch_min":  1,
-            "weights": {
-                "bos": 2.5, "sweep": 2.0, "volume": 2.0, "obv": 1.0,
-                "regime": 2.0, "rsi": 1.0, "adx": 0.0,
-                "fvg": 0.0, "fib": 0.0, "liquidity": 0.0,
-            },
-        },
         # ── 15m scalp params (min_rr=2.0 — lower bar suits noise on short TF) ──
         ("BTCUSDT", "15m"): {
             "config":           "Structure + Volume",
@@ -589,19 +549,6 @@ def _apply_discovery_params() -> None:
             "weights": {
                 "bos": 2.5, "sweep": 2.0, "rsi": 2.0, "regime": 2.5,
                 "adx": 0.0, "volume": 0.0, "obv": 0.0,
-                "fvg": 0.0, "fib": 0.0, "liquidity": 0.0,
-            },
-        },
-        ("DOGEUSDT", "5m"): {
-            "config":           "Structure + Volume",
-            "score_threshold":  6.0,
-            "min_rr":           3.0,
-            "adx_threshold":    20,
-            "body_ratio_min":   0.25,
-            "level_touch_min":  1,
-            "weights": {
-                "bos": 2.5, "sweep": 2.0, "volume": 2.0, "obv": 1.0,
-                "regime": 1.5, "rsi": 1.0, "adx": 0.0,
                 "fvg": 0.0, "fib": 0.0, "liquidity": 0.0,
             },
         },
@@ -1564,7 +1511,25 @@ def chart_data(symbol, interval):
 
 @app.route("/api/trades")
 def get_trades():
-    return jsonify(learning.get_trades())
+    trades = learning.get_trades()
+    # Apply dashboard_cutoff if set — hides historical trades from UI without deleting them
+    cutoff = learning._get_cfg("dashboard_cutoff", None)
+    if cutoff:
+        trades = [t for t in trades if (t.get("opened_at") or "") >= cutoff]
+    return jsonify(trades)
+
+
+@app.route("/api/admin/clear_display", methods=["POST"])
+def clear_display():
+    """Set dashboard_cutoff to now — hides all current trades from the dashboard UI.
+    Records are kept in the DB and the learning engine still uses them."""
+    now = datetime.now(timezone.utc).isoformat()
+    with learning._conn() as db:
+        db.execute(
+            "INSERT OR REPLACE INTO config (key, value) VALUES ('dashboard_cutoff', ?)",
+            (now,)
+        )
+    return jsonify({"status": "cleared", "cutoff": now})
 
 
 @app.route("/api/trades/<trade_id>/close", methods=["POST"])
