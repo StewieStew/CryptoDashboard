@@ -340,12 +340,18 @@ def log_trade(trade: dict) -> bool:
                 )
                 return False
 
-            # ── DCA detection: flag if same symbol already has an open trade ─
+            # ── DCA block: skip if same symbol already has any open trade ────
+            # Even a winning DCA trade costs double fees and nets negative — hard block.
             _dca_check = db.execute(
                 "SELECT COUNT(*) FROM trades WHERE symbol=? AND status IN ('open','pending')",
                 (sym,)
             ).fetchone()[0]
-            is_dca = 1 if _dca_check > 0 else 0
+            if _dca_check > 0:
+                logger.info(
+                    f"[DCA BLOCK] {sym} {intv} {dirn} — already has open position on {sym}, skipping"
+                )
+                return False
+            is_dca = 0  # never DCA since we block them — kept for schema compatibility
 
             partial_tp = (round(entry_f + 1.5 * risk_dist, 8) if dirn == "LONG"
                           else round(entry_f - 1.5 * risk_dist, 8))
