@@ -437,7 +437,7 @@ def _apply_discovery_params() -> None:
         ("BTCUSDT", "4h"): {
             "config":           "Structure + Volume",
             "score_threshold":  6.0,
-            "min_rr":           2.0,
+            "min_rr":           1.5,
             "adx_threshold":    30,
             "body_ratio_min":   0.30,
             "level_touch_min":  1,
@@ -450,7 +450,7 @@ def _apply_discovery_params() -> None:
         ("ETHUSDT", "4h"): {
             "config":           "Trend + S/R + RSI",
             "score_threshold":  6.0,
-            "min_rr":           2.0,
+            "min_rr":           1.5,
             "adx_threshold":    30,
             "body_ratio_min":   0.10,
             "level_touch_min":  1,
@@ -463,7 +463,7 @@ def _apply_discovery_params() -> None:
         ("XRPUSDT", "4h"): {
             "config":           "Full Precision",
             "score_threshold":  6.0,
-            "min_rr":           2.0,
+            "min_rr":           1.5,
             "adx_threshold":    15,
             "body_ratio_min":   0.10,
             "level_touch_min":  1,
@@ -476,7 +476,7 @@ def _apply_discovery_params() -> None:
         ("BTCUSDT", "1h"): {
             "config":           "Structure + Volume",
             "score_threshold":  6.0,
-            "min_rr":           2.0,
+            "min_rr":           1.5,
             "adx_threshold":    28,
             "body_ratio_min":   0.30,
             "level_touch_min":  1,
@@ -489,7 +489,7 @@ def _apply_discovery_params() -> None:
         ("ETHUSDT", "1h"): {
             "config":           "Trend + S/R + RSI",
             "score_threshold":  6.0,
-            "min_rr":           2.0,
+            "min_rr":           1.5,
             "adx_threshold":    28,
             "body_ratio_min":   0.15,
             "level_touch_min":  1,
@@ -502,7 +502,7 @@ def _apply_discovery_params() -> None:
         ("XRPUSDT", "1h"): {
             "config":           "Full Precision",
             "score_threshold":  6.0,
-            "min_rr":           2.0,
+            "min_rr":           1.5,
             "adx_threshold":    15,
             "body_ratio_min":   0.15,
             "level_touch_min":  1,
@@ -568,7 +568,7 @@ def _apply_discovery_params() -> None:
         ("DOGEUSDT", "1h"): {
             "config":           "Trend + S/R + RSI",
             "score_threshold":  6.0,
-            "min_rr":           2.0,
+            "min_rr":           1.5,
             "adx_threshold":    20,
             "body_ratio_min":   0.20,
             "level_touch_min":  1,
@@ -581,7 +581,7 @@ def _apply_discovery_params() -> None:
         ("DOGEUSDT", "4h"): {
             "config":           "Trend + S/R + RSI",
             "score_threshold":  6.0,
-            "min_rr":           2.0,
+            "min_rr":           1.5,
             "adx_threshold":    20,
             "body_ratio_min":   0.20,
             "level_touch_min":  1,
@@ -1020,18 +1020,21 @@ def _background_scanner() -> None:
                     # (A) BOS trend-following signal — always check but only keep
                     #     in TRENDING or UNCERTAIN (with higher bar).
                     bos_sig = data.get("signal")
-                    # Checklist gate: BOS + trending regime + OBV required on all timeframes
-                    _ltf = interval in ("5m", "15m")
+                    # Checklist gate:
+                    #   15m: BOS + regime + OBV (strict — all three required)
+                    #   1h/4h: BOS + regime only (OBV less reliable on higher TFs)
+                    _ltf = interval == "15m"
                     if bos_sig:
                         _factors = bos_sig.get("factors_snapshot", {})
                         _checklist = (
                             _factors.get("bos") and      # Break of structure confirmed
-                            _factors.get("regime") and   # Trending/aligned market (all TFs)
-                            _factors.get("obv")          # OBV confirming direction
+                            _factors.get("regime") and   # Trending/aligned market
+                            (_ltf and _factors.get("obv") or not _ltf)  # OBV only required on 15m
                         )
                         if not _checklist:
                             _sc = bos_sig.get("score", 0)
-                            _missing = [k for k in ["bos", "regime", "obv"] if not _factors.get(k)]
+                            _chk_keys = ["bos", "regime", "obv"] if _ltf else ["bos", "regime"]
+                            _missing = [k for k in _chk_keys if not _factors.get(k)]
                             print(f"[CHECKLIST BLOCK] {sym} {interval}: score={_sc:.1f} missing={_missing}", flush=True)
                             bos_sig = None
                     if bos_sig and regime_label in ("TRENDING", "UNCERTAIN"):
@@ -1086,9 +1089,9 @@ def _background_scanner() -> None:
                                 score -= 1.5
                                 print(f"[SCAN] {sym} {interval}: {sig['direction']} score→{score:.1f} — REGIME PENALTY (-1.5)", flush=True)
 
-                        # Fix 5: OBV=False raises effective threshold by 1.0 for LONGs ──
+                        # Fix 5: OBV=False raises effective threshold by 1.0 for LONGs (15m only)
                         effective_threshold = base_threshold
-                        if sig["direction"] == "LONG" and not factors.get("obv"):
+                        if _ltf and sig["direction"] == "LONG" and not factors.get("obv"):
                             effective_threshold += 1.0
                             print(f"[SCAN] {sym} {interval}: OBV penalty → threshold={effective_threshold:.1f}", flush=True)
 
