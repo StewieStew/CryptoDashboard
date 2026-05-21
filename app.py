@@ -432,7 +432,11 @@ def _swing_bounce_signal(sym: str, interval: str, data: dict) -> dict | None:
             bullish      = cur > cur_o
             rejection_ok = bullish and body_ratio >= 0.30 and cur_l <= swing_low * 1.003
 
-            sl = round(swing_low - atr_val, 8)
+            _sl_raw   = swing_low - atr_val
+            _min_dist = cur * 0.003   # minimum 0.3% stop distance
+            if cur - _sl_raw < _min_dist:
+                _sl_raw = cur - _min_dist
+            sl   = round(_sl_raw, 8)
             risk = cur - sl
             if risk <= 0:
                 pass
@@ -492,7 +496,11 @@ def _swing_bounce_signal(sym: str, interval: str, data: dict) -> dict | None:
             bearish      = cur < cur_o
             rejection_ok = bearish and body_ratio >= 0.30 and cur_h >= swing_high * 0.997
 
-            sl = round(swing_high + atr_val, 8)
+            _sl_raw   = swing_high + atr_val
+            _min_dist = cur * 0.003   # minimum 0.3% stop distance
+            if _sl_raw - cur < _min_dist:
+                _sl_raw = cur + _min_dist
+            sl   = round(_sl_raw, 8)
             risk = sl - cur
             if risk <= 0:
                 return None
@@ -1702,6 +1710,11 @@ def chart_data(symbol, interval):
         return jsonify(data)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/balance")
+def get_balance():
+    return jsonify(learning.get_balance_summary())
 
 
 @app.route("/api/trades")

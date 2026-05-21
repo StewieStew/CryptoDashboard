@@ -46,9 +46,11 @@ DEFAULT_WEIGHTS = {
     "liquidity": 1.0,   # Equal highs / equal lows liquidity pool
     # Core max ≈ 10 pts; FVG + FIB + liquidity are bonus precision factors
 }
-DEFAULT_THRESHOLD = 7.0    # minimum score to fire a signal
-DEFAULT_STOP_MULT = 1.0    # ATR wick buffer on structural stop — raised to give more breathing room vs candle noise
-MAX_STOP_MULT     = 2.0    # hard ceiling — raised so adaptation engine has room to work
+DEFAULT_THRESHOLD  = 7.0    # minimum score to fire a signal
+DEFAULT_STOP_MULT  = 1.0    # ATR wick buffer on structural stop — raised to give more breathing room vs candle noise
+MAX_STOP_MULT      = 2.0    # hard ceiling — raised so adaptation engine has room to work
+STARTING_BALANCE   = 1000.0 # paper portfolio starting balance ($)
+TRADE_ALLOCATION   = 100.0  # $ allocated per trade
 ADAPT_WINDOW      = 8      # trades to look back per-factor
 MIN_SAMPLES       = 2      # minimum trades before adapting a factor
 WEIGHT_FLOOR_ABS  = 1.0    # absolute minimum — no active factor weight can drop below 1.0
@@ -129,6 +131,7 @@ def _init_db():
             ("tp_source",           "TEXT DEFAULT 'unknown'"),
             ("initial_sl",          "REAL"),   # original SL at entry — never overwritten by trailing logic
             ("tp_reached",          "INTEGER DEFAULT 0"),  # 1 = TP crossed, now in let-it-run trailing mode
+            ("is_dca",              "INTEGER DEFAULT 0"),  # 1 = opened while same symbol already had an open trade
         ]:
             try:
                 db.execute(f"ALTER TABLE trades ADD COLUMN {col} {defn}")
@@ -328,6 +331,22 @@ def log_trade(trade: dict) -> bool:
                 return False
             # ── end R:R guard ─────────────────────────────────────────────────
 
+            # ── Balance check: skip if insufficient paper capital ────────────
+            _bal = get_balance_summary()
+            if _bal["available"] < TRADE_ALLOCATION:
+                logger.info(
+                    f"[BALANCE] {sym} {intv} {dirn} — insufficient balance "
+                    f"({_bal['available']:.2f} available, need {TRADE_ALLOCATION:.2f}) — skipping"
+                )
+                return False
+
+            # ── DCA detection: flag if same symbol already has an open trade ─
+            _dca_check = db.execute(
+                "SELECT COUNT(*) FROM trades WHERE symbol=? AND status IN ('open','pending')",
+                (sym,)
+            ).fetchone()[0]
+            is_dca = 1 if _dca_check > 0 else 0
+
             partial_tp = (round(entry_f + 1.5 * risk_dist, 8) if dirn == "LONG"
                           else round(entry_f - 1.5 * risk_dist, 8))
 
@@ -337,8 +356,9 @@ def log_trade(trade: dict) -> bool:
             db.execute("""
                 INSERT INTO trades
                 (id, symbol, interval, direction, entry, tp, sl, initial_sl, score, effective_score,
-                 reason, factors_snapshot, target_basis, tp_source, opened_at, partial_tp, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 reason, factors_snapshot, target_basis, tp_source, opened_at, partial_tp, status,
+                 is_dca)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 trade["id"], sym, intv, dirn,
                 trade["entry"], trade["tp"], trade["sl"], trade["sl"],  # initial_sl = sl at entry
@@ -350,6 +370,7 @@ def log_trade(trade: dict) -> bool:
                 trade["opened_at"],
                 partial_tp,
                 initial_status,
+                is_dca,
             ))
             db.commit()
             return True
@@ -1011,6 +1032,32 @@ def _adapt(db) -> list:
         )
 
     return changes
+
+
+# ─────────────────────────────────────────────
+# PAPER BALANCE
+# ─────────────────────────────────────────────
+def get_balance_summary() -> dict:
+    """Return paper portfolio balance breakdown."""
+    db = _conn()
+    open_count = db.execute(
+        "SELECT COUNT(*) FROM trades WHERE status='open'"
+    ).fetchone()[0]
+    closed_rows = db.execute(
+        "SELECT roi_pct FROM trades WHERE status NOT IN ('open') AND roi_pct IS NOT NULL"
+    ).fetchall()
+    db.close()
+    closed_pnl = sum((r[0] / 100.0) * TRADE_ALLOCATION for r in closed_rows)
+    total      = round(STARTING_BALANCE + closed_pnl, 2)
+    in_use     = round(open_count * TRADE_ALLOCATION, 2)
+    available  = round(total - in_use, 2)
+    return {
+        "total":            total,
+        "in_use":           in_use,
+        "available":        available,
+        "trade_allocation": TRADE_ALLOCATION,
+        "open_count":       open_count,
+    }
 
 
 # ─────────────────────────────────────────────
