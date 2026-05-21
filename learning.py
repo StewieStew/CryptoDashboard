@@ -340,18 +340,33 @@ def log_trade(trade: dict) -> bool:
                 )
                 return False
 
-            # ── DCA block: skip if same symbol already has any open trade ────
-            # Even a winning DCA trade costs double fees and nets negative — hard block.
+            # ── DCA detection: flag if same symbol already has an open trade ─
+            # DCA trades are allowed but require a higher minimum TP distance
+            # to ensure fees are covered with meaningful profit margin.
             _dca_check = db.execute(
                 "SELECT COUNT(*) FROM trades WHERE symbol=? AND status IN ('open','pending')",
                 (sym,)
             ).fetchone()[0]
-            if _dca_check > 0:
-                logger.info(
-                    f"[DCA BLOCK] {sym} {intv} {dirn} — already has open position on {sym}, skipping"
-                )
-                return False
-            is_dca = 0  # never DCA since we block them — kept for schema compatibility
+            is_dca = 1 if _dca_check > 0 else 0
+
+            # ── Stricter TP gate for DCA entries ────────────────────────────
+            # Normal min TP floors: 15m=0.35%, 1h=0.5%, 4h=0.8%
+            # DCA floors (1.5× normal): 15m=0.53%, 1h=0.75%, 4h=1.2%
+            # This ensures double fees + real profit on stacked positions.
+            if is_dca:
+                _DCA_MIN_TP = {"15m": 0.53, "1h": 0.75, "4h": 1.2}
+                _intv_key = trade.get("interval", intv)
+                _dca_min  = _DCA_MIN_TP.get(_intv_key, 0.75)
+                _entry_f  = float(trade["entry"])
+                _tp_f     = float(trade["tp"])
+                _dir      = trade["direction"]
+                _tp_pct   = ((_tp_f - _entry_f) / _entry_f * 100 if _dir == "LONG"
+                             else (_entry_f - _tp_f) / _entry_f * 100)
+                if _tp_pct < _dca_min:
+                    logger.info(
+                        f"[DCA GATE] {sym} {intv} {dirn} — DCA entry TP={_tp_pct:.3f}% < {_dca_min}% min — skipping"
+                    )
+                    return False
 
             partial_tp = (round(entry_f + 1.5 * risk_dist, 8) if dirn == "LONG"
                           else round(entry_f - 1.5 * risk_dist, 8))
