@@ -47,7 +47,7 @@ DEFAULT_WEIGHTS = {
     # Core max ≈ 10 pts; FVG + FIB + liquidity are bonus precision factors
 }
 DEFAULT_THRESHOLD  = 7.0    # minimum score to fire a signal
-DEFAULT_STOP_MULT  = 1.0    # ATR wick buffer on structural stop — raised to give more breathing room vs candle noise
+DEFAULT_STOP_MULT  = 1.5    # ATR wick buffer on structural stop — 1.5× gives more breathing room vs candle noise
 MAX_STOP_MULT      = 2.0    # hard ceiling — raised so adaptation engine has room to work
 STARTING_BALANCE   = 1000.0 # paper portfolio starting balance ($)
 TRADE_ALLOCATION   = 100.0  # $ allocated per trade
@@ -110,11 +110,10 @@ def _init_db():
         db.commit()
 
         # ── Config migrations ──────────────────────────────────────────────
-        # Lower threshold from 8.0 → 7.0 (hard gates now do the heavy filtering)
-        db.execute("UPDATE config SET value=? WHERE key='signal_threshold' AND CAST(value AS REAL) = 8.0",
-                   (str(DEFAULT_THRESHOLD),))
-        # Raise stop_multiplier to new default (1.0) — gives more breathing room vs candle noise
-        db.execute("UPDATE config SET value=? WHERE key='stop_multiplier' AND CAST(value AS REAL) < 1.0",
+        # Raise stop_multiplier to new default (1.5) if it's still at the old low value
+        # (0.1 or 1.0) — gives more breathing room vs candle noise. Adapted values
+        # above 1.5 are left alone so the learning engine's work is preserved.
+        db.execute("UPDATE config SET value=? WHERE key='stop_multiplier' AND CAST(value AS REAL) < 1.5",
                    (str(DEFAULT_STOP_MULT),))
         # Cap stop_multiplier at MAX_STOP_MULT — clamp any value the adaptation engine
         # may have pushed above the ceiling back down on redeploy.
@@ -337,6 +336,19 @@ def log_trade(trade: dict) -> bool:
                 logger.info(
                     f"[BALANCE] {sym} {intv} {dirn} — insufficient balance "
                     f"({_bal['available']:.2f} available, need {TRADE_ALLOCATION:.2f}) — skipping"
+                )
+                return False
+
+            # ── Conflict guard: no opposing direction on the same symbol ────
+            # e.g. already have BTC LONG open → skip any new BTC SHORT (and vice versa).
+            # Same direction on same symbol = DCA (handled below with stricter TP gate).
+            _conflict = db.execute(
+                "SELECT COUNT(*) FROM trades WHERE symbol=? AND status IN ('open','pending') AND direction!=?",
+                (sym, dirn)
+            ).fetchone()[0]
+            if _conflict > 0:
+                logger.info(
+                    f"[CONFLICT] {sym} {intv} {dirn} — opposing direction already open — skipping"
                 )
                 return False
 
