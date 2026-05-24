@@ -909,12 +909,6 @@ def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
             target_basis = "No structural 3R target found"
             tp_source    = "no_3r_target"
 
-        # Minimum stop distance: 0.3% of entry price — prevents stops so tight
-        # that normal candle noise immediately stops the trade out.
-        _bos_min_dist = entry_price * 0.003
-        if (entry_price - inval) < _bos_min_dist:
-            inval = round(entry_price - _bos_min_dist, 6)
-
         bias       = "Long"
         inval_note = (f"{tf} close below ${inval:,.4f} — structural swing low violated, "
                       f"invalidates the bullish BOS")
@@ -1006,12 +1000,6 @@ def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
             target       = entry_price   # 0 reward → R:R = 0 → gate rejects
             target_basis = "No structural 3R target found"
             tp_source    = "no_3r_target"
-
-        # Minimum stop distance: 0.3% of entry price — prevents stops so tight
-        # that normal candle noise immediately stops the trade out.
-        _bos_min_dist = entry_price * 0.003
-        if (inval - entry_price) < _bos_min_dist:
-            inval = round(entry_price + _bos_min_dist, 6)
 
         bias       = "Short"
         inval_note = (f"{tf} close above ${inval:,.4f} — structural swing high violated, "

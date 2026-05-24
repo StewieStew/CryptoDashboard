@@ -857,35 +857,6 @@
     </div>
   </section>
 
-  <!-- BALANCE WIDGET -->
-  <section style="margin-bottom:12px;">
-    <div class="card" style="padding:16px 20px;">
-      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
-        <div style="font-weight:600;font-size:13px;color:var(--text);">📊 Paper Balance</div>
-        <div style="display:flex;gap:24px;align-items:center;flex-wrap:wrap;">
-          <div style="text-align:center;">
-            <div style="font-size:11px;color:var(--text-2);margin-bottom:2px;">Total</div>
-            <div id="bal-total" style="font-size:15px;font-weight:700;color:var(--text);">—</div>
-          </div>
-          <div style="text-align:center;">
-            <div style="font-size:11px;color:var(--text-2);margin-bottom:2px;">In Use</div>
-            <div id="bal-inuse" style="font-size:15px;font-weight:700;color:#f97316;">—</div>
-          </div>
-          <div style="text-align:center;">
-            <div style="font-size:11px;color:var(--text-2);margin-bottom:2px;">Available</div>
-            <div id="bal-avail" style="font-size:15px;font-weight:700;color:var(--green);">—</div>
-          </div>
-          <div style="min-width:160px;">
-            <div style="font-size:10px;color:var(--text-3);margin-bottom:4px;" id="bal-bar-label">— open trades × $100</div>
-            <div style="background:var(--border);border-radius:6px;height:8px;overflow:hidden;">
-              <div id="bal-bar-fill" style="height:100%;background:#f97316;border-radius:6px;transition:width .4s;width:0%;"></div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
   <!-- TRADES -->
   <section id="trades" class="section-anchor">
     <div class="section-header">
@@ -1137,7 +1108,7 @@
   }
 
   // ── Position Sizing ────────────────────────────────────────────────────────
-  const _psz = { account: 1000, perTrade: 100, leverage: 1, fee: 0.1 };
+  const _psz = { account: 1000, perTrade: 250, leverage: 1, fee: 0.1 };
 
   // ROI-based dollar P&L:
   //   perTrade  = capital deployed per trade (e.g. $250).
@@ -1321,7 +1292,7 @@
       const rowId = t.id != null ? ` data-id="${t.id}"` : '';
 
       return `<tr class="clickable"${rowId}>
-        <td class="symbol">${t.symbol || '—'}${t.is_dca ? ' <span style="background:#f97316;color:#fff;font-size:9px;font-weight:700;padding:1px 5px;border-radius:4px;vertical-align:middle;letter-spacing:.5px;">DCA</span>' : ''}</td>
+        <td class="symbol">${t.symbol || '—'}</td>
         <td class="tf">${t.interval || '—'}</td>
         <td>${dirBadge}</td>
         <td class="price">${fmt(t.entry)}</td>
@@ -1783,19 +1754,6 @@
       renderTrades(trades);
       renderCharts(trades.filter(t => t.status === 'open'));
       renderLearning();
-      // Update balance widget
-      try {
-        const bRes = await fetch('/api/balance');
-        const b    = await bRes.json();
-        const fmt$ = v => '$' + v.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
-        document.getElementById('bal-total').textContent  = fmt$(b.total);
-        document.getElementById('bal-inuse').textContent  = fmt$(b.in_use);
-        document.getElementById('bal-avail').textContent  = fmt$(b.available);
-        document.getElementById('bal-bar-label').textContent = `${b.open_count} open trade${b.open_count !== 1 ? 's' : ''} × $${b.trade_allocation}`;
-        const pct = b.total > 0 ? Math.min(100, (b.in_use / b.total) * 100) : 0;
-        document.getElementById('bal-bar-fill').style.width = pct + '%';
-        document.getElementById('bal-avail').style.color = b.available < b.trade_allocation ? 'var(--red)' : 'var(--green)';
-      } catch(e) { console.warn('balance fetch error', e); }
     } catch (e) { console.error('fetch error', e); }
     seconds = 30;
     ind.classList.remove('refreshing');

@@ -361,200 +361,6 @@ def _squeeze_signal(sym: str, interval: str, data: dict) -> dict | None:
     return None
 
 
-# ── Swing Bounce Signal ────────────────────────────────────────────────────────
-def _swing_bounce_signal(sym: str, interval: str, data: dict) -> dict | None:
-    """
-    Detects price bouncing at a known swing high/low.
-      LONG : price taps a swing LOW and forms a bullish rejection candle.
-             SL = swing_low - 1×ATR; TP = nearest swing high above entry.
-      SHORT: price taps a swing HIGH and forms a bearish rejection candle.
-             SL = swing_high + 1×ATR; TP = nearest swing low below entry.
-    Minimum 1.5:1 net R:R required.  Fires in all regime types.
-    Scoring: 5.5 base + rejection candle (+1.5) + volume (+0.5) + RSI (+0.5).
-    """
-    try:
-        candles = data.get("chart", {}).get("candles", [])
-        if len(candles) < 20:
-            return None
-
-        closes  = _np.array([c["close"]          for c in candles], dtype=float)
-        opens   = _np.array([c["open"]            for c in candles], dtype=float)
-        highs   = _np.array([c["high"]            for c in candles], dtype=float)
-        lows    = _np.array([c["low"]             for c in candles], dtype=float)
-        volumes = _np.array([c.get("volume", 0.0) for c in candles], dtype=float)
-        cur     = float(closes[-1])
-        cur_o   = float(opens[-1])
-        cur_h   = float(highs[-1])
-        cur_l   = float(lows[-1])
-
-        # ATR from analysis data (already computed)
-        atr_val = float(data.get("volatility", {}).get("current", 0.0))
-        if atr_val <= 0:
-            return None
-
-        # RSI
-        rsi_raw = data.get("rsi", {})
-        if isinstance(rsi_raw, dict):
-            rsi_val = rsi_raw.get("value")
-        else:
-            rsi_val = rsi_raw if isinstance(rsi_raw, (int, float)) else None
-        if rsi_val is None:
-            deltas = _np.diff(closes[-15:])
-            gains  = _np.where(deltas > 0, deltas, 0.0)
-            losses = _np.where(deltas < 0, -deltas, 0.0)
-            avg_g  = float(_np.mean(gains[-14:]))  if len(gains)  >= 14 else float(_np.mean(gains))
-            avg_l  = float(_np.mean(losses[-14:])) if len(losses) >= 14 else float(_np.mean(losses))
-            rsi_val = 100.0 - 100.0 / (1.0 + avg_g / avg_l) if avg_l > 0 else 50.0
-
-        # Volume ratio
-        avg_vol = float(_np.mean(volumes[-20:])) if len(volumes) >= 20 else float(_np.mean(volumes))
-        cur_vol = float(volumes[-1])
-        vol_elevated = avg_vol > 0 and cur_vol >= avg_vol * 1.2
-        vol_ratio    = round(cur_vol / avg_vol, 2) if avg_vol > 0 else 0.0
-
-        # Swing levels from full_analysis (last 5 swing highs/lows as (ts_str, price))
-        swings    = data.get("swings", {})
-        sh_prices = [v for _, v in swings.get("highs", [])]
-        sl_prices = [v for _, v in swings.get("lows",  [])]
-        if not sh_prices or not sl_prices:
-            return None
-
-        # ── LONG: tap at swing low ──────────────────────────────────────────
-        candidate_sl_levels = [p for p in sl_prices if abs(cur - p) / p <= 0.003]
-        if candidate_sl_levels:
-            swing_low = min(candidate_sl_levels, key=lambda p: abs(cur - p))
-
-            # Rejection candle: bullish body closes above the swing level,
-            # lower wick tags the level, body ≥ 30% of candle range.
-            candle_range = cur_h - cur_l
-            body         = abs(cur - cur_o)
-            body_ratio   = body / candle_range if candle_range > 0 else 0.0
-            bullish      = cur > cur_o
-            rejection_ok = bullish and body_ratio >= 0.30 and cur_l <= swing_low * 1.003
-
-            _sl_raw   = swing_low - atr_val
-            _min_dist = cur * 0.003   # minimum 0.3% stop distance
-            if cur - _sl_raw < _min_dist:
-                _sl_raw = cur - _min_dist
-            sl   = round(_sl_raw, 8)
-            risk = cur - sl
-            if risk <= 0:
-                pass
-            else:
-                # TP = nearest swing high above entry with min 1.5:1 R:R
-                sh_above = sorted([p for p in sh_prices if p > cur])
-                tp = None
-                for sh_candidate in sh_above:
-                    if _rr_after_fees(cur, sh_candidate, sl, "LONG") >= 1.5:
-                        tp = sh_candidate
-                        break
-
-                if tp is not None:
-                    net_rr = _rr_after_fees(cur, tp, sl, "LONG")
-                    score  = 5.5
-                    if rejection_ok:
-                        score += 1.5
-                    if vol_elevated:
-                        score += 0.5
-                    if rsi_val is not None and rsi_val < 45:
-                        score += 0.5
-
-                    return {
-                        "direction":        "LONG",
-                        "entry":            round(cur, 8),
-                        "target":           round(tp, 8),
-                        "stop":             round(sl, 8),
-                        "score":            round(score, 2),
-                        "signal_type":      "SWING_BOUNCE",
-                        "tp_source":        "swing_bounce",
-                        "reason":           (
-                            f"Swing low bounce at {swing_low:.4f} "
-                            f"body={body_ratio:.0%} rsi={rsi_val:.0f} "
-                            f"vol={vol_ratio}×avg RR={net_rr:.2f}"
-                        ),
-                        "current_price":    cur,
-                        "target_basis":     f"Swing high {tp:.4f}",
-                        "factors_snapshot": {
-                            "swing_level":   round(swing_low, 8),
-                            "rejection":     rejection_ok,
-                            "body_ratio":    round(body_ratio, 3),
-                            "vol_elevated":  vol_elevated,
-                            "vol_ratio":     vol_ratio,
-                            "rsi":           round(rsi_val, 1) if rsi_val else None,
-                            "net_rr":        net_rr,
-                        },
-                    }
-
-        # ── SHORT: tap at swing high ────────────────────────────────────────
-        candidate_sh_levels = [p for p in sh_prices if abs(cur - p) / p <= 0.003]
-        if candidate_sh_levels:
-            swing_high = min(candidate_sh_levels, key=lambda p: abs(cur - p))
-
-            candle_range = cur_h - cur_l
-            body         = abs(cur - cur_o)
-            body_ratio   = body / candle_range if candle_range > 0 else 0.0
-            bearish      = cur < cur_o
-            rejection_ok = bearish and body_ratio >= 0.30 and cur_h >= swing_high * 0.997
-
-            _sl_raw   = swing_high + atr_val
-            _min_dist = cur * 0.003   # minimum 0.3% stop distance
-            if _sl_raw - cur < _min_dist:
-                _sl_raw = cur + _min_dist
-            sl   = round(_sl_raw, 8)
-            risk = sl - cur
-            if risk <= 0:
-                return None
-
-            # TP = nearest swing low below entry with min 1.5:1 R:R
-            sl_below = sorted([p for p in sl_prices if p < cur], reverse=True)
-            tp = None
-            for sl_candidate in sl_below:
-                if _rr_after_fees(cur, sl_candidate, sl, "SHORT") >= 1.5:
-                    tp = sl_candidate
-                    break
-
-            if tp is None:
-                return None
-
-            net_rr = _rr_after_fees(cur, tp, sl, "SHORT")
-            score  = 5.5
-            if rejection_ok:
-                score += 1.5
-            if vol_elevated:
-                score += 0.5
-            if rsi_val is not None and rsi_val > 55:
-                score += 0.5
-
-            return {
-                "direction":        "SHORT",
-                "entry":            round(cur, 8),
-                "target":           round(tp, 8),
-                "stop":             round(sl, 8),
-                "score":            round(score, 2),
-                "signal_type":      "SWING_BOUNCE",
-                "tp_source":        "swing_bounce",
-                "reason":           (
-                    f"Swing high bounce at {swing_high:.4f} "
-                    f"body={body_ratio:.0%} rsi={rsi_val:.0f} "
-                    f"vol={vol_ratio}×avg RR={net_rr:.2f}"
-                ),
-                "current_price":    cur,
-                "target_basis":     f"Swing low {tp:.4f}",
-                "factors_snapshot": {
-                    "swing_level":   round(swing_high, 8),
-                    "rejection":     rejection_ok,
-                    "body_ratio":    round(body_ratio, 3),
-                    "vol_elevated":  vol_elevated,
-                    "vol_ratio":     vol_ratio,
-                    "rsi":           round(rsi_val, 1) if rsi_val else None,
-                    "net_rr":        net_rr,
-                },
-            }
-    except Exception:
-        pass
-    return None
-
-
 # ── Per-Config Capital Auto-Weighting ─────────────────────────────────────────
 _config_weights: dict = {}       # {(sym, interval): weight_multiplier}
 _config_weights_lock = threading.Lock()
@@ -1245,11 +1051,6 @@ def _background_scanner() -> None:
                     if sq_sig:
                         candidate_sigs.append(sq_sig)
 
-                    # (D) Swing bounce — all regimes (counter-trend capable)
-                    sb_sig = _swing_bounce_signal(sym, interval, data)
-                    if sb_sig:
-                        candidate_sigs.append(sb_sig)
-
                     # ── Process each candidate signal ─────────────────────────
                     if not candidate_sigs:
                         _conf  = data.get("confluence", {})
@@ -1270,7 +1071,7 @@ def _background_scanner() -> None:
                         # 5m/15m use strict bias (must have explicit HTF agreement).
                         # 1h/4h use relaxed bias (only block if HTF is clearly opposed).
                         _bias_strict = interval in ("5m", "15m")
-                        if sig_type not in ("MEAN_REVERSION", "SWING_BOUNCE") and not _bias_agrees(sig["direction"], htf_d, strict=_bias_strict):
+                        if sig_type not in ("MEAN_REVERSION",) and not _bias_agrees(sig["direction"], htf_d, strict=_bias_strict):
                             print(f"[SCAN] {sym} {interval}: {sig['direction']} score={sig.get('score',0):.1f} — HTF BIAS BLOCK", flush=True)
                             continue
 
@@ -1283,7 +1084,7 @@ def _background_scanner() -> None:
                         )
 
                         # Fix 2: Regime penalty for BOS trend signals (all timeframes)
-                        if sig_type not in ("MEAN_REVERSION", "VOL_SQUEEZE", "MACD_EMA_VOL", "SWING_BOUNCE"):
+                        if sig_type not in ("MEAN_REVERSION", "VOL_SQUEEZE", "MACD_EMA_VOL"):
                             if not factors.get("regime"):
                                 score -= 1.5
                                 print(f"[SCAN] {sym} {interval}: {sig['direction']} score→{score:.1f} — REGIME PENALTY (-1.5)", flush=True)
@@ -1325,9 +1126,8 @@ def _background_scanner() -> None:
                         # R:R is logged but no longer used as a gate.
 
                         # ── 1H confirmation candle for 4H / 1H swing signals ──
-                        # Mean-reversion, squeeze, and swing-bounce skip this filter
-                        # (bounce entries embed their own rejection-candle check).
-                        if sig_type not in ("MEAN_REVERSION", "VOL_SQUEEZE", "SWING_BOUNCE"):
+                        # Mean-reversion and squeeze entries skip this filter
+                        if sig_type not in ("MEAN_REVERSION", "VOL_SQUEEZE"):
                             if interval == "4h":
                                 h1_candles = bias_cache.get("1h", {}).get("chart", {}).get("candles", [])
                                 if h1_candles:
@@ -1710,11 +1510,6 @@ def chart_data(symbol, interval):
         return jsonify(data)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/balance")
-def get_balance():
-    return jsonify(learning.get_balance_summary())
 
 
 @app.route("/api/trades")
