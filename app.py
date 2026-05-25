@@ -647,7 +647,7 @@ def _backfill_trade(trade: dict) -> bool:
     outcome     = None
     close_price = None
     for bar in bars:
-        hi, lo = bar["high"], bar["low"]
+        hi, lo, cc = bar["high"], bar["low"], bar["close"]
         if direction == "LONG":
             if not tp_reached and hi >= tp:
                 if _let_it_run and risk_d_bf > 0:
@@ -658,7 +658,8 @@ def _backfill_trade(trade: dict) -> bool:
                     continue
                 else:
                     outcome = "win";  close_price = tp;  break
-            if lo <= sl:
+            # SL requires confirmed candle close below — wick alone does not stop out
+            if cc <= sl:
                 if not be_active:
                     outcome = "loss";     close_price = sl
                 elif sl > entry:
@@ -675,7 +676,8 @@ def _backfill_trade(trade: dict) -> bool:
                     continue
                 else:
                     outcome = "win";  close_price = tp;  break
-            if hi >= sl:
+            # SL requires confirmed candle close above — wick alone does not stop out
+            if cc >= sl:
                 if not be_active:
                     outcome = "loss";     close_price = sl
                 elif sl < entry:
@@ -893,16 +895,18 @@ def _resolve_open_trades(sym: str, interval: str) -> int:
         outcome     = None
         close_price = None
         for _, bar in future.iterrows():
-            hi, lo = float(bar["high"]), float(bar["low"])
+            hi, lo, cc = float(bar["high"]), float(bar["low"]), float(bar["close"])
             if direction == "LONG":
                 if hi >= tp:
                     outcome = "win";  close_price = tp;  break
-                if lo <= sl:
+                # SL requires confirmed candle close below the level — wick alone is not enough
+                if cc <= sl:
                     outcome = "loss"; close_price = sl;  break
             else:  # SHORT
                 if lo <= tp:
                     outcome = "win";  close_price = tp;  break
-                if hi >= sl:
+                # SL requires confirmed candle close above the level — wick alone is not enough
+                if cc >= sl:
                     outcome = "loss"; close_price = sl;  break
 
         if outcome:

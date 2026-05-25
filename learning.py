@@ -516,11 +516,15 @@ def auto_close(symbol: str, interval: str, current_price: float,
                         # 5m: close at TP immediately
                         hit = "win"
 
-                # ── SL check ──────────────────────────────────────────────
+                # ── SL check — close-confirmation only ────────────────────
+                # Only the live spot price (polled every 60s, close-equivalent)
+                # can trigger an SL. Candle wicks (_c_low/_c_high) are intentionally
+                # excluded here — a wick through the SL that closes back above it
+                # does NOT stop the trade out. A confirmed close below (LONG) or
+                # above (SHORT) is required.
                 if not hit:
                     if t["direction"] == "LONG":
-                        sl_check = min(current_price,
-                                       _c_low if _c_low is not None else current_price)
+                        sl_check = current_price   # close-confirmation: no wick stops
                         if sl_check <= eff_sl:
                             if not be_active:
                                 hit = "loss"
@@ -529,8 +533,7 @@ def auto_close(symbol: str, interval: str, current_price: float,
                             else:
                                 hit = "breakeven"  # trailing stop at entry — managed exit, not a win
                     elif t["direction"] == "SHORT":
-                        sl_check = max(current_price,
-                                       _c_high if _c_high is not None else current_price)
+                        sl_check = current_price   # close-confirmation: no wick stops
                         if sl_check >= eff_sl:
                             if not be_active:
                                 hit = "loss"
