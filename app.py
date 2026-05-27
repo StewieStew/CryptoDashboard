@@ -649,15 +649,9 @@ def _backfill_trade(trade: dict) -> bool:
     for bar in bars:
         hi, lo, cc = bar["high"], bar["low"], bar["close"]
         if direction == "LONG":
+            # TP hit — close immediately and book profit (no let-it-run trailing)
             if not tp_reached and hi >= tp:
-                if _let_it_run and risk_d_bf > 0:
-                    # Switch to let-it-run: lock SL at 2R and keep replaying
-                    sl          = round(entry + 2.0 * risk_d_bf, 8)
-                    be_active   = True
-                    tp_reached  = True
-                    continue
-                else:
-                    outcome = "win";  close_price = tp;  break
+                outcome = "win";  close_price = tp;  break
             # SL requires confirmed candle close below — wick alone does not stop out
             if cc <= sl:
                 if not be_active:
@@ -668,14 +662,9 @@ def _backfill_trade(trade: dict) -> bool:
                     outcome = "breakeven"; close_price = entry
                 break
         else:  # SHORT
+            # TP hit — close immediately and book profit (no let-it-run trailing)
             if not tp_reached and lo <= tp:
-                if _let_it_run and risk_d_bf > 0:
-                    sl          = round(entry - 2.0 * risk_d_bf, 8)
-                    be_active   = True
-                    tp_reached  = True
-                    continue
-                else:
-                    outcome = "win";  close_price = tp;  break
+                outcome = "win";  close_price = tp;  break
             # SL requires confirmed candle close above — wick alone does not stop out
             if cc >= sl:
                 if not be_active:

@@ -813,7 +813,20 @@ def confluence_score(regime, structure, vol, rsi_data, sweeps,
 def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
                  interval: str = "4h", stop_multiplier: float = 0.1,
                  fvgs: list | None = None,
-                 fib_data: dict | None = None) -> dict:
+                 fib_data: dict | None = None,
+                 htf_swing_highs: list | None = None,
+                 htf_swing_lows: list | None = None) -> dict:
+    """
+    htf_swing_highs / htf_swing_lows — swing levels from the next-higher timeframe
+    (e.g. 1h swings for a 15m signal, 4h swings for a 1h signal).
+    Used to:
+      • Cap TP at the nearest HTF resistance between entry and target (LONG),
+        or HTF support between entry and target (SHORT).
+      • Anchor SL below the nearest HTF support between SL and entry (LONG),
+        or above the nearest HTF resistance between SL and entry (SHORT).
+    This prevents TPs being set above a wall of HTF resistance that price can't clear,
+    and prevents SLs sitting inside an HTF S/R zone where wicks are common.
+    """
     cur        = float(df["close"].iloc[-1])
     atr_val    = float(atr(df).iloc[-1])
     ema50_val  = float(ema(df["close"], 50).iloc[-1])
@@ -909,6 +922,33 @@ def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
             target_basis = "No structural 3R target found"
             tp_source    = "no_3r_target"
 
+        # ── HTF S/R awareness — LONG ──────────────────────────────────────
+        # TP cap: if a HTF resistance sits between entry and TP, cap TP there.
+        # Only cap if the adjusted TP still gives ≥1.5R.
+        if htf_swing_highs and _tp_result:
+            _htf_res = sorted([p for _, p in htf_swing_highs
+                               if entry_price < p < target])
+            if _htf_res:
+                _htf_res_level  = _htf_res[0]   # nearest HTF resistance below TP
+                _capped_tp      = round(_htf_res_level - 0.2 * atr_val, 6)
+                _risk_cur       = abs(entry_price - inval)
+                if _risk_cur > 0 and _capped_tp > entry_price + 1.5 * _risk_cur:
+                    target       = _capped_tp
+                    target_basis = f"HTF resistance cap at {_htf_res_level:.4f} (was {target_basis})"
+                    # tp_source stays the same — structural source is still valid
+
+        # SL anchor: if a HTF support sits between computed SL and entry, move SL
+        # just below it so price can test HTF support without stopping out.
+        if htf_swing_lows:
+            _htf_sup = sorted([p for _, p in htf_swing_lows
+                               if inval < p < entry_price],
+                              reverse=True)  # highest = nearest to entry
+            if _htf_sup:
+                _htf_sup_level = _htf_sup[0]
+                _anchored_sl   = round(_htf_sup_level - stop_multiplier * atr_val, 6)
+                if _anchored_sl < inval:   # only widen, never tighten
+                    inval = _anchored_sl
+
         bias       = "Long"
         inval_note = (f"{tf} close below ${inval:,.4f} — structural swing low violated, "
                       f"invalidates the bullish BOS")
@@ -1000,6 +1040,32 @@ def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
             target       = entry_price   # 0 reward → R:R = 0 → gate rejects
             target_basis = "No structural 3R target found"
             tp_source    = "no_3r_target"
+
+        # ── HTF S/R awareness — SHORT ─────────────────────────────────────
+        # TP cap: if a HTF support sits between entry and TP (below entry for SHORT),
+        # cap TP just above that level. Only cap if ≥1.5R still achievable.
+        if htf_swing_lows and _tp_result:
+            _htf_sup = sorted([p for _, p in htf_swing_lows
+                               if target < p < entry_price],
+                              reverse=True)  # highest = nearest to TP
+            if _htf_sup:
+                _htf_sup_level = _htf_sup[0]
+                _capped_tp     = round(_htf_sup_level + 0.2 * atr_val, 6)
+                _risk_cur      = abs(entry_price - inval)
+                if _risk_cur > 0 and (entry_price - _capped_tp) > 1.5 * _risk_cur:
+                    target       = _capped_tp
+                    target_basis = f"HTF support cap at {_htf_sup_level:.4f} (was {target_basis})"
+
+        # SL anchor: if a HTF resistance sits between computed SL and entry (above entry for SHORT),
+        # move SL just above it so price can test HTF resistance without stopping out.
+        if htf_swing_highs:
+            _htf_res = sorted([p for _, p in htf_swing_highs
+                               if entry_price < p < inval])
+            if _htf_res:
+                _htf_res_level = _htf_res[0]   # nearest HTF resistance below SL
+                _anchored_sl   = round(_htf_res_level + stop_multiplier * atr_val, 6)
+                if _anchored_sl > inval:   # only widen, never tighten
+                    inval = _anchored_sl
 
         bias       = "Short"
         inval_note = (f"{tf} close above ${inval:,.4f} — structural swing high violated, "
@@ -1570,6 +1636,12 @@ def full_analysis(symbol: str, interval: str = "4h", weights: dict | None = None
     structure = detect_structure(df, sh, sl)
     sweeps    = detect_sweeps(df, sh, sl)
 
+    # HTF swing levels — used by risk_context to cap TP / anchor SL at real S/R
+    htf_n   = _swing_n(htf)
+    htf_sh, htf_sl_pts = (detect_swings(htf_df, n=htf_n)
+                          if htf_df is not None and not htf_df.empty
+                          else ([], []))
+
     # Section 3: Volume & RSI & MACD
     vol       = volume_analysis(df)
     rsi_data  = rsi_analysis(df)
@@ -1614,8 +1686,9 @@ def full_analysis(symbol: str, interval: str = "4h", weights: dict | None = None
                                   interval, adapt_weights,
                                   adx_data=adx_data)
 
-    # Section 7: Risk (uses adaptive stop multiplier)
-    risk = risk_context(df, structure, sh, sl, interval, adapt_stop_mult, fvgs=fvgs)
+    # Section 7: Risk (uses adaptive stop multiplier + HTF S/R awareness)
+    risk = risk_context(df, structure, sh, sl, interval, adapt_stop_mult, fvgs=fvgs,
+                        htf_swing_highs=htf_sh, htf_swing_lows=htf_sl_pts)
 
     # Signal (score >= adaptive threshold + BOS)
     signal = generate_signal(confluence, structure, risk, df, adapt_threshold, interval,

@@ -470,13 +470,11 @@ def auto_close(symbol: str, interval: str, current_price: float,
                 # will show in candle_low/high even if spot price has bounced.
                 tp = float(t["tp"])
                 _tp_reached_flag = bool(t.get("tp_reached", 0))
-                # 5m closes at TP immediately; all other intervals let it run past TP.
-                _let_it_run = (interval != "5m")
                 _tp_by_spot   = False
                 _tp_by_candle = False
 
                 if not _tp_reached_flag:
-                    # Normal TP detection
+                    # TP detection — close immediately on any TP touch (wick or spot)
                     if t["direction"] == "LONG":
                         if current_price >= tp:
                             _tp_by_spot = True
@@ -488,33 +486,11 @@ def auto_close(symbol: str, interval: str, current_price: float,
                         if _c_low is not None and _c_low <= tp:
                             _tp_by_candle = True
 
-                    if (_tp_by_spot or _tp_by_candle) and _let_it_run:
-                        # TP crossed — switch to let-it-run mode instead of closing.
-                        # Lock in 2R immediately so we always keep something.
-                        ref_sl_lr = float(t["initial_sl"]) if t.get("initial_sl") else eff_sl
-                        risk_d_lr = abs(float(t["entry"]) - ref_sl_lr)
-                        if risk_d_lr > 0:
-                            _entry_lr = float(t["entry"])
-                            if t["direction"] == "LONG":
-                                new_sl_lr = round(_entry_lr + 2.0 * risk_d_lr, 8)
-                            else:
-                                new_sl_lr = round(_entry_lr - 2.0 * risk_d_lr, 8)
-                            # SL only moves in the winning direction
-                            if (t["direction"] == "LONG" and new_sl_lr > eff_sl) or \
-                               (t["direction"] == "SHORT" and new_sl_lr < eff_sl):
-                                db.execute(
-                                    "UPDATE trades SET tp_reached=1, sl=?, breakeven_activated=1 WHERE id=?",
-                                    (new_sl_lr, t["id"])
-                                )
-                                db.commit()
-                                eff_sl = new_sl_lr   # refresh for SL check below
-                                print(f"[LET IT RUN] {t['symbol']} {t['interval']} "
-                                      f"{t['direction']}: TP {tp} crossed — SL locked "
-                                      f"at 2R ({new_sl_lr}), trailing continues", flush=True)
-                        # Don't set hit — stay open and let trailing do the work
-                    elif _tp_by_spot or _tp_by_candle:
-                        # 5m: close at TP immediately
+                    if _tp_by_spot or _tp_by_candle:
+                        # TP hit — close and book the profit. No trailing/let-it-run.
                         hit = "win"
+                        print(f"[TP HIT] {t['symbol']} {t['interval']} "
+                              f"{t['direction']}: TP {tp} reached — closing at profit", flush=True)
 
                 # ── SL check — close-confirmation only ────────────────────
                 # Only the live spot price (polled every 60s, close-equivalent)
