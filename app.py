@@ -40,15 +40,9 @@ DEFAULT_SYMBOLS  = [
     "LINKUSDT","LTCUSDT", "DOTUSDT",  "NEARUSDT", "ATOMUSDT",
 ]
 
-# Paper-trade mode: specific (symbol, interval) pairs validated by backtest.
-# XRP profitable on 1h and 4h; DOGE profitable on 15m. Others removed.
-PAPER_PAIRS = [
-    ("XRPUSDT",  "1h"),
-    ("XRPUSDT",  "4h"),
-    ("DOGEUSDT", "15m"),
-]
-PAPER_SYMBOLS   = list(dict.fromkeys(s for s, _ in PAPER_PAIRS))  # unique symbols, order preserved
-PAPER_INTERVALS = list(dict.fromkeys(i for _, i in PAPER_PAIRS))  # unique intervals, order preserved
+# Paper-trade mode: all 4 coins × 3 timeframes, each using discovery-tuned weights.
+PAPER_SYMBOLS   = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "DOGEUSDT"]
+PAPER_INTERVALS = ["15m", "1h", "4h"]
 
 # Three-tier scanning: 15m (scalp), 1h (day trade), 4h (swing).
 SCAN_INTERVALS   = ["15m", "1h", "4h"]
@@ -941,24 +935,19 @@ def _background_scanner() -> None:
     _warmup_complete = False   # first cycle is observation-only; no new trades logged
 
     while True:
+        syms = PAPER_SYMBOLS
         scan_signals = 0
         scan_closes  = 0
 
         # ── Daily risk reset ──────────────────────────────────────────────────
         _reset_daily_risk()
         _cycle_ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        print(f"[SCAN CYCLE] {_cycle_ts} — scanning {len(PAPER_PAIRS)} pairs: {PAPER_PAIRS}", flush=True)
+        print(f"[SCAN CYCLE] {_cycle_ts} — scanning {len(syms) * len(PAPER_INTERVALS)} configs", flush=True)
 
         # ── Real-time TP/SL check before scanning for new signals ────────────
         scan_closes += _monitor_open_trades()
 
-        # Group pairs by symbol so bias data is fetched once per symbol
-        from itertools import groupby
-        pairs_by_sym: dict[str, list[str]] = {}
-        for sym, iv in PAPER_PAIRS:
-            pairs_by_sym.setdefault(sym, []).append(iv)
-
-        for sym, intervals in pairs_by_sym.items():
+        for sym in syms:
             # Fetch bias TFs: 15m for 5m signals, 1h for 15m signals, 1d for 4H bias
             bias_cache: dict[str, dict] = {}
             for bias_tf in ("15m", "1h", "1d"):
@@ -972,7 +961,7 @@ def _background_scanner() -> None:
                     bias_cache[bias_tf] = {}
                 time.sleep(1)
 
-            for interval in intervals:
+            for interval in PAPER_INTERVALS:
                 try:
                     # ── Risk gate: skip new entries if limits breached ────────
                     if not _risk_gate_open():
@@ -1868,7 +1857,9 @@ def backtest_results(job_id: str):
 def backtest_sync():
     """
     Synchronous backtest — runs in the request thread so Render can't spin down mid-job.
-    Body (JSON): {symbol, interval, years=2, score_threshold=7.0}
+    Body (JSON): {symbol, interval, years=2, score_threshold=7.0, use_discovery_params=false}
+    When use_discovery_params=true, loads the per-symbol custom weights/thresholds found
+    during strategy discovery instead of generic defaults.
     Returns results directly (no polling needed).
     May take 60-180 seconds for long runs.
     """
@@ -1882,8 +1873,23 @@ def backtest_sync():
     if interval not in VALID_INTERVALS:
         return jsonify({"error": f"Invalid interval. Use: {VALID_INTERVALS}"}), 400
 
-    # Allow caller to override individual params (e.g. score_threshold=8.5)
+    # Start from defaults, then layer overrides
     params = dict(backtester.DEFAULT_PARAMS)
+    params_source = "defaults"
+
+    if body.get("use_discovery_params", False):
+        # Load the per-symbol weights/thresholds saved by the strategy discovery run
+        sym_p = learning.get_symbol_params(symbol, interval)
+        if sym_p:
+            params.update({k: v for k, v in sym_p.items()
+                           if k in params or k in ("weights", "score_threshold",
+                                                    "min_rr", "adx_threshold",
+                                                    "body_ratio_min", "level_touch_min")})
+            params_source = f"discovery:{sym_p.get('config', 'custom')}"
+        else:
+            params_source = "defaults (no discovery data found)"
+
+    # Manual override still wins if explicitly passed
     if "score_threshold" in body:
         params["score_threshold"] = float(body["score_threshold"])
 
@@ -1892,7 +1898,8 @@ def backtest_sync():
             symbol, interval, params, years=years
         )
         return jsonify({"status": "done", "symbol": symbol, "interval": interval,
-                        "years": years, "score_threshold": params["score_threshold"],
+                        "years": years, "params_source": params_source,
+                        "score_threshold": params.get("score_threshold"),
                         "result": result})
     except Exception as e:
         return jsonify({"status": "error", "error": str(e)}), 500
