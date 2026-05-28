@@ -256,7 +256,7 @@ def _simulate_trade(df_future: pd.DataFrame, signal: dict,
     Simulate a trade by scanning future bars for TP/SL/timeout.
 
     Handles pending-entry logic: trade activates when price reaches entry level.
-    Returns {"outcome": "win"|"loss"|"timeout", "bars_held": int, "actual_rr": float}
+    Returns outcome dict including close_ts, close_price, bars_held, actual_rr.
     """
     entry     = float(signal["entry"])
     tp        = float(signal["target"])
@@ -265,37 +265,47 @@ def _simulate_trade(df_future: pd.DataFrame, signal: dict,
     risk_d    = abs(entry - sl)
     comm_r    = (COMMISSION_RT_PCT * entry / risk_d) if risk_d > 0 else 0.0
 
-    activated = False
+    activated      = False
+    activated_ts   = None
+    last_ts        = None
+    last_close     = entry
 
     for i, bar in enumerate(df_future.itertuples(), 1):
         if i > max_bars:
             break
 
-        high  = float(bar.high)
-        low   = float(bar.low)
+        high      = float(bar.high)
+        low       = float(bar.low)
+        last_ts   = bar.Index
+        last_close = float(bar.close)
 
         # Activate pending trade when price retraces to entry
         if not activated:
             if direction == "LONG"  and low  <= entry:
-                activated = True
+                activated = True; activated_ts = bar.Index
             elif direction == "SHORT" and high >= entry:
-                activated = True
+                activated = True; activated_ts = bar.Index
             continue   # don't check TP/SL until activated
 
         if direction == "LONG":
             if high >= tp:
                 actual_rr = (tp - entry) / risk_d if risk_d > 0 else 0
-                return {"outcome": "win",  "bars_held": i, "actual_rr": round(actual_rr - comm_r, 2)}
+                return {"outcome": "win",  "bars_held": i, "actual_rr": round(actual_rr - comm_r, 2),
+                        "close_price": tp,   "close_ts": str(bar.Index), "activated_ts": str(activated_ts)}
             if low  <= sl:
-                return {"outcome": "loss", "bars_held": i, "actual_rr": round(-1.0 - comm_r, 2)}
+                return {"outcome": "loss", "bars_held": i, "actual_rr": round(-1.0 - comm_r, 2),
+                        "close_price": sl,   "close_ts": str(bar.Index), "activated_ts": str(activated_ts)}
         else:  # SHORT
             if low  <= tp:
                 actual_rr = (entry - tp) / risk_d if risk_d > 0 else 0
-                return {"outcome": "win",  "bars_held": i, "actual_rr": round(actual_rr - comm_r, 2)}
+                return {"outcome": "win",  "bars_held": i, "actual_rr": round(actual_rr - comm_r, 2),
+                        "close_price": tp,   "close_ts": str(bar.Index), "activated_ts": str(activated_ts)}
             if high >= sl:
-                return {"outcome": "loss", "bars_held": i, "actual_rr": round(-1.0 - comm_r, 2)}
+                return {"outcome": "loss", "bars_held": i, "actual_rr": round(-1.0 - comm_r, 2),
+                        "close_price": sl,   "close_ts": str(bar.Index), "activated_ts": str(activated_ts)}
 
-    return {"outcome": "timeout", "bars_held": max_bars, "actual_rr": 0.0}
+    return {"outcome": "timeout", "bars_held": max_bars, "actual_rr": 0.0,
+            "close_price": last_close, "close_ts": str(last_ts), "activated_ts": str(activated_ts)}
 
 
 # ─────────────────────────────────────────────
@@ -338,18 +348,35 @@ def run_backtest(symbol: str, interval: str, params: dict,
         signal   = _replay_signal(df_slice, interval, params, weights=weights)
 
         if signal:
+            signal_ts = str(df.index[i])
             df_future = df.iloc[i + 1:]
             result    = _simulate_trade(df_future, signal, max_bars=100)
             outcome   = result["outcome"]
 
+            trade_record = {
+                "signal_ts":   signal_ts,
+                "activated_ts":result.get("activated_ts"),
+                "close_ts":    result.get("close_ts"),
+                "direction":   signal.get("direction"),
+                "entry":       round(float(signal.get("entry", 0)), 6),
+                "tp":          round(float(signal.get("target", 0)), 6),
+                "sl":          round(float(signal.get("stop",   0)), 6),
+                "close_price": round(float(result.get("close_price", 0)), 6),
+                "tp_source":   signal.get("tp_source", ""),
+                "score":       round(float(signal.get("score", 0)), 1),
+                "outcome":     outcome,
+                "rr":          result["actual_rr"],
+                "bars_held":   result.get("bars_held", 0),
+            }
+
             if outcome == "win":
                 equity.append(equity[-1] + result["actual_rr"])
-                trades.append({"outcome": "win",     "rr": result["actual_rr"]})
+                trades.append({**trade_record, "rr": result["actual_rr"]})
             elif outcome == "loss":
                 equity.append(equity[-1] - 1.0)
-                trades.append({"outcome": "loss",    "rr": -1.0})
+                trades.append({**trade_record, "rr": -1.0})
             else:
-                trades.append({"outcome": "timeout", "rr": 0.0})
+                trades.append({**trade_record, "rr": 0.0})
 
             # Skip ahead by bars the trade was held (avoid overlapping signals)
             i += max(result.get("bars_held", 5), 1)
@@ -377,6 +404,8 @@ def run_backtest(symbol: str, interval: str, params: dict,
         if dd > max_dd:
             max_dd = dd
 
+    total_r = sum(t["rr"] for t in completed)
+
     return {
         "symbol":        symbol,
         "interval":      interval,
@@ -386,9 +415,11 @@ def run_backtest(symbol: str, interval: str, params: dict,
         "timeouts":      len([t for t in trades if t["outcome"] == "timeout"]),
         "win_rate":      round(win_rate, 3),
         "avg_rr":        round(avg_rr, 2),
+        "total_r":       round(total_r, 2),
         "max_drawdown":  round(max_dd, 2),
         "profit_factor": round(profit_factor, 2),
         "params":        params,
+        "trades_log":    trades,   # full per-trade detail with timestamps
     }
 
 
