@@ -1090,7 +1090,8 @@ def _background_scanner() -> None:
 
                         # TP-source hard block — sources with 0% win rate are disabled entirely
                         _tp_src = sig.get("tp_source", "unknown")
-                        _BLOCKED_TP_SOURCES = {"forced_3r", "swing_low"}
+                        # swing_low is the TP source for all SHORT BOS signals — must stay unblocked
+                        _BLOCKED_TP_SOURCES = {"forced_3r"}
                         if _tp_src in _BLOCKED_TP_SOURCES:
                             print(f"[SCAN] {sym} {interval}: TP source '{_tp_src}' is disabled (0% win rate) — skipping", flush=True)
                             continue
