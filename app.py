@@ -40,9 +40,15 @@ DEFAULT_SYMBOLS  = [
     "LINKUSDT","LTCUSDT", "DOTUSDT",  "NEARUSDT", "ATOMUSDT",
 ]
 
-# Paper-trade mode: only these coins on 4H using discovery-validated params.
-PAPER_SYMBOLS   = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "DOGEUSDT"]
-PAPER_INTERVALS = ["15m", "1h", "4h"]
+# Paper-trade mode: specific (symbol, interval) pairs validated by backtest.
+# XRP profitable on 1h and 4h; DOGE profitable on 15m. Others removed.
+PAPER_PAIRS = [
+    ("XRPUSDT",  "1h"),
+    ("XRPUSDT",  "4h"),
+    ("DOGEUSDT", "15m"),
+]
+PAPER_SYMBOLS   = list(dict.fromkeys(s for s, _ in PAPER_PAIRS))  # unique symbols, order preserved
+PAPER_INTERVALS = list(dict.fromkeys(i for _, i in PAPER_PAIRS))  # unique intervals, order preserved
 
 # Three-tier scanning: 15m (scalp), 1h (day trade), 4h (swing).
 SCAN_INTERVALS   = ["15m", "1h", "4h"]
@@ -935,19 +941,24 @@ def _background_scanner() -> None:
     _warmup_complete = False   # first cycle is observation-only; no new trades logged
 
     while True:
-        syms = PAPER_SYMBOLS   # paper-trade: locked to discovery-validated coins only
         scan_signals = 0
         scan_closes  = 0
 
         # ── Daily risk reset ──────────────────────────────────────────────────
         _reset_daily_risk()
         _cycle_ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        print(f"[SCAN CYCLE] {_cycle_ts} — scanning {len(syms) * len(PAPER_INTERVALS)} configs", flush=True)
+        print(f"[SCAN CYCLE] {_cycle_ts} — scanning {len(PAPER_PAIRS)} pairs: {PAPER_PAIRS}", flush=True)
 
         # ── Real-time TP/SL check before scanning for new signals ────────────
         scan_closes += _monitor_open_trades()
 
-        for sym in syms:
+        # Group pairs by symbol so bias data is fetched once per symbol
+        from itertools import groupby
+        pairs_by_sym: dict[str, list[str]] = {}
+        for sym, iv in PAPER_PAIRS:
+            pairs_by_sym.setdefault(sym, []).append(iv)
+
+        for sym, intervals in pairs_by_sym.items():
             # Fetch bias TFs: 15m for 5m signals, 1h for 15m signals, 1d for 4H bias
             bias_cache: dict[str, dict] = {}
             for bias_tf in ("15m", "1h", "1d"):
@@ -961,7 +972,7 @@ def _background_scanner() -> None:
                     bias_cache[bias_tf] = {}
                 time.sleep(1)
 
-            for interval in PAPER_INTERVALS:
+            for interval in intervals:
                 try:
                     # ── Risk gate: skip new entries if limits breached ────────
                     if not _risk_gate_open():
