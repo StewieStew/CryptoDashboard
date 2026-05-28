@@ -1857,7 +1857,7 @@ def backtest_results(job_id: str):
 def backtest_sync():
     """
     Synchronous backtest — runs in the request thread so Render can't spin down mid-job.
-    Body (JSON): {symbol, interval, years=2}
+    Body (JSON): {symbol, interval, years=2, score_threshold=7.0}
     Returns results directly (no polling needed).
     May take 60-180 seconds for long runs.
     """
@@ -1871,12 +1871,18 @@ def backtest_sync():
     if interval not in VALID_INTERVALS:
         return jsonify({"error": f"Invalid interval. Use: {VALID_INTERVALS}"}), 400
 
+    # Allow caller to override individual params (e.g. score_threshold=8.5)
+    params = dict(backtester.DEFAULT_PARAMS)
+    if "score_threshold" in body:
+        params["score_threshold"] = float(body["score_threshold"])
+
     try:
         result = backtester.run_backtest(
-            symbol, interval, backtester.DEFAULT_PARAMS, years=years
+            symbol, interval, params, years=years
         )
         return jsonify({"status": "done", "symbol": symbol, "interval": interval,
-                        "years": years, "result": result})
+                        "years": years, "score_threshold": params["score_threshold"],
+                        "result": result})
     except Exception as e:
         return jsonify({"status": "error", "error": str(e)}), 500
 
