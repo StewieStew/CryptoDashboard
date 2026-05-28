@@ -1853,6 +1853,34 @@ def backtest_results(job_id: str):
     return jsonify({"status": "done", "results": job.get("results", [])})
 
 
+@app.route("/api/backtest/sync", methods=["POST"])
+def backtest_sync():
+    """
+    Synchronous backtest — runs in the request thread so Render can't spin down mid-job.
+    Body (JSON): {symbol, interval, years=2}
+    Returns results directly (no polling needed).
+    May take 60-180 seconds for long runs.
+    """
+    body     = request.get_json() or {}
+    symbol   = body.get("symbol", "BTCUSDT").upper()
+    if not symbol.endswith("USDT"):
+        symbol += "USDT"
+    interval = body.get("interval", "4h")
+    years    = int(body.get("years", 2))
+
+    if interval not in VALID_INTERVALS:
+        return jsonify({"error": f"Invalid interval. Use: {VALID_INTERVALS}"}), 400
+
+    try:
+        result = backtester.run_backtest(
+            symbol, interval, backtester.DEFAULT_PARAMS, years=years
+        )
+        return jsonify({"status": "done", "symbol": symbol, "interval": interval,
+                        "years": years, "result": result})
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
 # ── MACD walk-forward backtest route ──────────────────────────────────────────
 
 @app.route("/api/backtest/macd", methods=["POST"])
