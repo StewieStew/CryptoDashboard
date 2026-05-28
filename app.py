@@ -40,9 +40,16 @@ DEFAULT_SYMBOLS  = [
     "LINKUSDT","LTCUSDT", "DOTUSDT",  "NEARUSDT", "ATOMUSDT",
 ]
 
-# Paper-trade mode: all 4 coins × 3 timeframes, each using discovery-tuned weights.
-PAPER_SYMBOLS   = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "DOGEUSDT"]
-PAPER_INTERVALS = ["15m", "1h", "4h"]
+# Paper-trade mode: winning pairs only, validated by discovery weights + corrected backtester.
+# XRP profitable on all 3 TFs; BTC only on 1h. ETH and DOGE removed (all losing).
+PAPER_PAIRS = [
+    ("XRPUSDT", "15m"),
+    ("XRPUSDT", "1h"),
+    ("XRPUSDT", "4h"),
+    ("BTCUSDT",  "1h"),
+]
+PAPER_SYMBOLS   = list(dict.fromkeys(s for s, _ in PAPER_PAIRS))
+PAPER_INTERVALS = list(dict.fromkeys(i for _, i in PAPER_PAIRS))
 
 # Three-tier scanning: 15m (scalp), 1h (day trade), 4h (swing).
 SCAN_INTERVALS   = ["15m", "1h", "4h"]
@@ -935,33 +942,36 @@ def _background_scanner() -> None:
     _warmup_complete = False   # first cycle is observation-only; no new trades logged
 
     while True:
-        syms = PAPER_SYMBOLS
         scan_signals = 0
         scan_closes  = 0
 
         # ── Daily risk reset ──────────────────────────────────────────────────
         _reset_daily_risk()
         _cycle_ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        print(f"[SCAN CYCLE] {_cycle_ts} — scanning {len(syms) * len(PAPER_INTERVALS)} configs", flush=True)
+        print(f"[SCAN CYCLE] {_cycle_ts} — scanning {len(PAPER_PAIRS)} pairs", flush=True)
 
         # ── Real-time TP/SL check before scanning for new signals ────────────
         scan_closes += _monitor_open_trades()
 
-        for sym in syms:
+        # Group pairs by symbol so bias data is only fetched once per symbol
+        pairs_by_sym: dict[str, list] = {}
+        for sym, iv in PAPER_PAIRS:
+            pairs_by_sym.setdefault(sym, []).append(iv)
+
+        for sym, intervals in pairs_by_sym.items():
             # Fetch bias TFs: 15m for 5m signals, 1h for 15m signals, 1d for 4H bias
             bias_cache: dict[str, dict] = {}
             for bias_tf in ("15m", "1h", "1d"):
                 try:
                     bias_data = full_analysis(sym, bias_tf)
                     bias_cache[bias_tf] = bias_data
-                    # Cache the bias data too
                     with _lock:
                         _cache[f"{sym}_{bias_tf}"] = (bias_data, time.time())
                 except Exception:
                     bias_cache[bias_tf] = {}
                 time.sleep(1)
 
-            for interval in PAPER_INTERVALS:
+            for interval in intervals:
                 try:
                     # ── Risk gate: skip new entries if limits breached ────────
                     if not _risk_gate_open():
