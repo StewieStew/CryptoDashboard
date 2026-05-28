@@ -1290,7 +1290,15 @@ def generate_signal(confluence: dict, structure, risk: dict, h4_df,
                 print(f"[SIGNAL BLOCKED] {symbol} {interval} SHORT: RSI={rsi_val:.1f} outside ({rsi_lo},{rsi_hi}]", flush=True)
                 return None
 
-    # R:R is reported in the signal but not used as a gate — natural TP/SL stands.
+    # ── No-target gate ────────────────────────────────────────────────────────
+    # If risk_context couldn't find a valid TP level, target == entry (0 reward).
+    # Entering with no reward is a guaranteed long-run drain — skip the signal.
+    if risk.get("tp_source") == "no_3r_target":
+        print(
+            f"[NO TARGET] {symbol} {interval} {direction}: no valid TP found — skipping signal",
+            flush=True,
+        )
+        return None
 
     # ── Retest confirmation gate ──────────────────────────────────────────────
     # Enter only when price has pulled back to the broken level, not at the

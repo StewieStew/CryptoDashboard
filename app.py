@@ -1866,7 +1866,7 @@ def backtest_sync():
     if not symbol.endswith("USDT"):
         symbol += "USDT"
     interval = body.get("interval", "4h")
-    years    = int(body.get("years", 2))
+    years    = float(body.get("years", 2))   # float supports 0.5, 1.5 etc.
 
     if interval not in VALID_INTERVALS:
         return jsonify({"error": f"Invalid interval. Use: {VALID_INTERVALS}"}), 400
