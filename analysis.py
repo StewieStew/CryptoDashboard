@@ -22,12 +22,14 @@ except ImportError:
 BINANCE_KLINES = "https://api.binance.us/api/v3/klines"
 
 # Maps each chart interval to (higher-TF for regime, candle limit for analysis)
+# Larger limits give more history for the historical-range-low/high TP fallback,
+# which matters most on 4h/1h where short signals need deep swing targets.
 INTERVAL_HTF = {
-    "15m": ("1h",  400),
-    "30m": ("4h",  300),
-    "1h":  ("4h",  300),
-    "4h":  ("1d",  200),
-    "1d":  ("1w",  200),
+    "15m": ("1h",  600),   # ~6 days
+    "30m": ("4h",  400),
+    "1h":  ("4h",  500),   # ~21 days
+    "4h":  ("1d",  500),   # ~83 days — enough to find pre-crash lows
+    "1d":  ("1w",  300),
     "1w":  ("1w",  200),
 }
 
@@ -975,7 +977,7 @@ def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
             [p for _, p in swing_highs if p > entry_price]
         )  # ascending = nearest to entry first
 
-        def _find_short_target(sh_price, min_rr=3.0):
+        def _find_short_target(sh_price, min_rr=2.0):
             """Return (target, basis, tp_source) ≥ min_rr from sh_price, or None."""
             _inval  = round(sh_price + stop_multiplier * atr_val, 6)
             _risk   = abs(_inval - entry_price)
@@ -1020,6 +1022,24 @@ def risk_context(df: pd.DataFrame, structure, swing_highs, swing_lows,
                     return (round(_hist_l, 6),
                             f"Historical range low ({len(df)}-candle, {_hist_rr:.1f}R)",
                             "historical_range")
+
+            # 6. Measured-move / Fibonacci extension
+            #    Project the BOS impulse leg (nearest swing high above entry → entry)
+            #    downward at 1.0×, 1.618×, and 2.0× to find a structural target.
+            _sh_refs = sorted([p for _, p in swing_highs if p > entry_price])
+            if _sh_refs:
+                _impulse = _sh_refs[0] - entry_price   # size of the impulse leg
+                if _impulse > 0:
+                    for _mult, _label in ((1.0, "1.0×"), (1.618, "1.618×"), (2.0, "2.0×")):
+                        _ext_tp  = round(entry_price - _mult * _impulse, 6)
+                        _ext_rr  = (entry_price - _ext_tp) / _risk
+                        if _ext_tp <= _min_tp and _ext_rr >= min_rr:
+                            return (
+                                _ext_tp,
+                                f"Measured-move {_label} Fibonacci extension ({_ext_rr:.1f}R)",
+                                "fib_extension",
+                            )
+
             return None
 
         # Try structural SL levels from nearest swing high to deepest
@@ -1283,7 +1303,7 @@ def generate_signal(confluence: dict, structure, risk: dict, h4_df,
             return None
     elif structure["bearish_bos"]:
         broken_level = structure.get("last_swing_low")
-        if broken_level and current < broken_level * 0.98:
+        if broken_level and current < broken_level * 0.95:
             pct = (broken_level - current) / broken_level * 100
             print(
                 f"[RETEST GATE] {symbol} {interval.upper()} SHORT: price {current:.2f} is "
