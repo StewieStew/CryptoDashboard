@@ -714,8 +714,13 @@ def confluence_score(regime, structure, vol, rsi_data, sweeps,
     snap["adx"] = adx_ok
     if adx_ok:
         score += w
-        reasons.append({"pts": round(w, 1), "earned": True,
-                        "text": f"ADX {adx_val:.1f} — strong trend confirmed (>25), signals are reliable"})
+        _di_reason = adx_data.get("di_trending", False) if adx_data else False
+        _adx_txt   = (
+            f"ADX {adx_val:.1f} — DI divergence ({adx_data.get('di_plus',0):.0f}/{adx_data.get('di_minus',0):.0f}) confirms directional move"
+            if _di_reason else
+            f"ADX {adx_val:.1f} — strong trend confirmed (>25), signals are reliable"
+        )
+        reasons.append({"pts": round(w, 1), "earned": True, "text": _adx_txt})
     else:
         reasons.append({"pts": 0, "earned": False,
                         "text": f"ADX {adx_val:.1f} — market ranging (<25), signals carry lower win rate"})
@@ -1232,10 +1237,10 @@ def generate_signal(confluence: dict, structure, risk: dict, h4_df,
     snap  = confluence.get("factors_snapshot", {})
     score = confluence["score"]
 
-    # ── Hard gate 1: ADX must confirm a trending market ──────────────────────
+    # ADX is a score factor only — no hard gate. In ranging markets, regime
+    # doesn't score (-3 pts) which naturally pulls signals below threshold.
     if not snap.get("adx"):
-        print(f"[SIGNAL BLOCKED] {symbol} {interval}: ADX gate — ranging/choppy market", flush=True)
-        return None  # Ranging/choppy — trend-following BOS signals fail here
+        print(f"[SIGNAL NOTE] {symbol} {interval}: ADX={confluence.get('adx',{}).get('value',0):.1f} below 25 (score already penalised)", flush=True)
 
     # ── Volume penalty (soft — reduces score by 0.5) ─────────────────────────
     if not snap.get("volume"):
@@ -1669,13 +1674,22 @@ def full_analysis(symbol: str, interval: str = "4h", weights: dict | None = None
 
     # Section 3b: ADX, VWAP, FVG, Order Blocks
     adx_s, di_plus_s, di_minus_s = adx_indicator(df)
-    adx_cur  = float(adx_s.iloc[-1]) if not adx_s.empty else 0.0
+    adx_cur    = float(adx_s.iloc[-1])  if not adx_s.empty    else 0.0
+    di_plus_v  = float(di_plus_s.iloc[-1])  if not di_plus_s.empty  else 0.0
+    di_minus_v = float(di_minus_s.iloc[-1]) if not di_minus_s.empty else 0.0
+    # ADX lags during fast moves — accept strong DI divergence as "trending" too.
+    # DI > 35 and dominant side ≥ 1.5× the other = clearly directional market.
+    _di_trending = (
+        (di_minus_v > 35 and di_minus_v > di_plus_v  * 1.5) or
+        (di_plus_v  > 35 and di_plus_v  > di_minus_v * 1.5)
+    )
     adx_data = {
-        "value":    round(adx_cur, 1),
-        "di_plus":  round(float(di_plus_s.iloc[-1]),  1),
-        "di_minus": round(float(di_minus_s.iloc[-1]), 1),
-        "trending": adx_cur > 25,
-        "strong":   adx_cur > 50,
+        "value":       round(adx_cur,    1),
+        "di_plus":     round(di_plus_v,  1),
+        "di_minus":    round(di_minus_v, 1),
+        "trending":    adx_cur > 25 or _di_trending,
+        "di_trending": _di_trending,   # True when DI divergence flagged it
+        "strong":      adx_cur > 50,
     }
 
     vwap_s   = vwap(df)
