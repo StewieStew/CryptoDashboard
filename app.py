@@ -649,11 +649,11 @@ def _backfill_trade(trade: dict) -> bool:
     for bar in bars:
         hi, lo, cc = bar["high"], bar["low"], bar["close"]
         if direction == "LONG":
-            # TP hit — close immediately and book profit (no let-it-run trailing)
+            # TP hit — wick touch fills a limit take-profit order
             if not tp_reached and hi >= tp:
                 outcome = "win";  close_price = tp;  break
-            # SL requires confirmed candle close below — wick alone does not stop out
-            if cc <= sl:
+            # SL hit — wick touch triggers a stop-loss order (standard behaviour)
+            if lo <= sl:
                 if not be_active:
                     outcome = "loss";     close_price = sl
                 elif sl > entry:
@@ -662,11 +662,11 @@ def _backfill_trade(trade: dict) -> bool:
                     outcome = "breakeven"; close_price = entry
                 break
         else:  # SHORT
-            # TP hit — close immediately and book profit (no let-it-run trailing)
+            # TP hit — wick touch fills a limit take-profit order
             if not tp_reached and lo <= tp:
                 outcome = "win";  close_price = tp;  break
-            # SL requires confirmed candle close above — wick alone does not stop out
-            if cc >= sl:
+            # SL hit — wick touch triggers a stop-loss order (standard behaviour)
+            if hi >= sl:
                 if not be_active:
                     outcome = "loss";     close_price = sl
                 elif sl < entry:
@@ -888,14 +888,14 @@ def _resolve_open_trades(sym: str, interval: str) -> int:
             if direction == "LONG":
                 if hi >= tp:
                     outcome = "win";  close_price = tp;  break
-                # SL requires confirmed candle close below the level — wick alone is not enough
-                if cc <= sl:
+                # SL triggered on wick touch — standard stop-loss order behaviour
+                if lo <= sl:
                     outcome = "loss"; close_price = sl;  break
             else:  # SHORT
                 if lo <= tp:
                     outcome = "win";  close_price = tp;  break
-                # SL requires confirmed candle close above the level — wick alone is not enough
-                if cc >= sl:
+                # SL triggered on wick touch — standard stop-loss order behaviour
+                if hi >= sl:
                     outcome = "loss"; close_price = sl;  break
 
         if outcome:
