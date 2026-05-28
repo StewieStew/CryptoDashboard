@@ -443,7 +443,7 @@ def _apply_discovery_params() -> None:
     best = {
         ("BTCUSDT", "4h"): {
             "config":           "Structure + Volume",
-            "score_threshold":  6.0,
+            "score_threshold":  4.5,
             "min_rr":           1.5,
             "adx_threshold":    30,
             "body_ratio_min":   0.30,
@@ -456,7 +456,7 @@ def _apply_discovery_params() -> None:
         },
         ("ETHUSDT", "4h"): {
             "config":           "Trend + S/R + RSI",
-            "score_threshold":  6.0,
+            "score_threshold":  4.5,
             "min_rr":           1.5,
             "adx_threshold":    30,
             "body_ratio_min":   0.10,
@@ -469,7 +469,7 @@ def _apply_discovery_params() -> None:
         },
         ("XRPUSDT", "4h"): {
             "config":           "Full Precision",
-            "score_threshold":  6.0,
+            "score_threshold":  4.5,
             "min_rr":           1.5,
             "adx_threshold":    15,
             "body_ratio_min":   0.10,
@@ -482,7 +482,7 @@ def _apply_discovery_params() -> None:
         },
         ("BTCUSDT", "1h"): {
             "config":           "Structure + Volume",
-            "score_threshold":  6.0,
+            "score_threshold":  4.5,
             "min_rr":           1.5,
             "adx_threshold":    28,
             "body_ratio_min":   0.30,
@@ -495,7 +495,7 @@ def _apply_discovery_params() -> None:
         },
         ("ETHUSDT", "1h"): {
             "config":           "Trend + S/R + RSI",
-            "score_threshold":  6.0,
+            "score_threshold":  4.5,
             "min_rr":           1.5,
             "adx_threshold":    28,
             "body_ratio_min":   0.15,
@@ -508,7 +508,7 @@ def _apply_discovery_params() -> None:
         },
         ("XRPUSDT", "1h"): {
             "config":           "Full Precision",
-            "score_threshold":  6.0,
+            "score_threshold":  4.5,
             "min_rr":           1.5,
             "adx_threshold":    15,
             "body_ratio_min":   0.15,
@@ -522,7 +522,7 @@ def _apply_discovery_params() -> None:
         # ── 15m scalp params (min_rr=2.0 — lower bar suits noise on short TF) ──
         ("BTCUSDT", "15m"): {
             "config":           "Structure + Volume",
-            "score_threshold":  6.0,
+            "score_threshold":  4.5,
             "min_rr":           2.0,
             "adx_threshold":    25,
             "body_ratio_min":   0.30,
@@ -535,7 +535,7 @@ def _apply_discovery_params() -> None:
         },
         ("ETHUSDT", "15m"): {
             "config":           "Structure + Volume",
-            "score_threshold":  6.0,
+            "score_threshold":  4.5,
             "min_rr":           2.0,
             "adx_threshold":    30,
             "body_ratio_min":   0.10,
@@ -548,7 +548,7 @@ def _apply_discovery_params() -> None:
         },
         ("XRPUSDT", "15m"): {
             "config":           "Trend + S/R + RSI",
-            "score_threshold":  6.0,
+            "score_threshold":  4.5,
             "min_rr":           2.0,
             "adx_threshold":    15,
             "body_ratio_min":   0.20,
@@ -561,7 +561,7 @@ def _apply_discovery_params() -> None:
         },
         ("DOGEUSDT", "15m"): {
             "config":           "Trend + Structure + RSI",
-            "score_threshold":  6.0,
+            "score_threshold":  4.5,
             "min_rr":           2.0,
             "adx_threshold":    20,
             "body_ratio_min":   0.30,
@@ -574,7 +574,7 @@ def _apply_discovery_params() -> None:
         },
         ("DOGEUSDT", "1h"): {
             "config":           "Trend + S/R + RSI",
-            "score_threshold":  6.0,
+            "score_threshold":  4.5,
             "min_rr":           1.5,
             "adx_threshold":    20,
             "body_ratio_min":   0.20,
@@ -587,7 +587,7 @@ def _apply_discovery_params() -> None:
         },
         ("DOGEUSDT", "4h"): {
             "config":           "Trend + S/R + RSI",
-            "score_threshold":  6.0,
+            "score_threshold":  4.5,
             "min_rr":           1.5,
             "adx_threshold":    20,
             "body_ratio_min":   0.20,
