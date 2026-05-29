@@ -1306,13 +1306,6 @@ def _background_scanner() -> None:
                                 pass
                         scan_closes += len(closed)
 
-                        # Trailing stop: after 2R, trail SL to structural swing
-                        swings     = data.get("swings", {})
-                        sw_highs   = [v for _, v in swings.get("highs", [])]
-                        sw_lows    = [v for _, v in swings.get("lows",  [])]
-                        learning.update_trailing_stops(
-                            sym, interval, float(cur_price), sw_highs, sw_lows
-                        )
 
                 except Exception:
                     pass
