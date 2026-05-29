@@ -51,6 +51,15 @@ PAPER_PAIRS = [
 PAPER_SYMBOLS   = list(dict.fromkeys(s for s, _ in PAPER_PAIRS))
 PAPER_INTERVALS = list(dict.fromkeys(i for _, i in PAPER_PAIRS))
 
+# Dip/pump recovery scanner — runs on all 4 coins, separate from BOS strategy.
+DIP_COINS = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "DOGEUSDT"]
+DIP_DROP_PCT   = 5.0   # minimum 24h drop % to trigger LONG
+DIP_PUMP_PCT   = 5.0   # minimum 24h pump % to trigger SHORT
+DIP_RSI_LONG   = 38    # RSI must be below this to confirm oversold (LONG)
+DIP_RSI_SHORT  = 62    # RSI must be above this to confirm overbought (SHORT)
+DIP_TP_RECOVER = 0.55  # TP recovers 55% of the move back toward prior price
+DIP_SL_PCT     = 0.03  # hard stop 3% below entry (LONG) / above entry (SHORT)
+
 # Three-tier scanning: 15m (scalp), 1h (day trade), 4h (swing).
 SCAN_INTERVALS   = ["15m", "1h", "4h"]
 
@@ -266,6 +275,121 @@ def _mean_reversion_signal(sym: str, interval: str, data: dict) -> dict | None:
                 "target_basis":     "BB midband",
                 "factors_snapshot": {"bb_upper": round(upper_bb, 8), "rsi": round(rsi_val, 1), "net_rr": net_rr},
             }
+    except Exception:
+        pass
+    return None
+
+
+# ── Dip / Pump Recovery Signal ────────────────────────────────────────────────
+def _dip_recovery_signal(sym: str, candles: list) -> dict | None:
+    """
+    Mean-reversion strategy based on 24h price change.
+
+    LONG : price dropped ≥ DIP_DROP_PCT% over last 24 1h-bars AND RSI < DIP_RSI_LONG
+           Entry  = current price
+           TP     = entry + (drop_amount × DIP_TP_RECOVER)   [recover 55% of drop]
+           SL     = entry × (1 - DIP_SL_PCT)                 [3% hard stop]
+
+    SHORT: price pumped ≥ DIP_PUMP_PCT% over last 24 1h-bars AND RSI > DIP_RSI_SHORT
+           Entry  = current price
+           TP     = entry - (pump_amount × DIP_TP_RECOVER)   [pull back 55% of pump]
+           SL     = entry × (1 + DIP_SL_PCT)                 [3% hard stop]
+
+    Requires min R:R 1.5 after fees.
+    """
+    try:
+        if len(candles) < 74:   # need 72h of 1h bars + buffer
+            return None
+
+        closes = _np.array([c["close"] for c in candles], dtype=float)
+        cur    = float(closes[-1])
+
+        # Check change over 24h, 48h, and 72h — trigger on the biggest move
+        lookbacks = {
+            "24h": float(closes[-25]),
+            "48h": float(closes[-49]),
+            "72h": float(closes[-73]),
+        }
+        best_drop  = 0.0   # most negative change (biggest dip)
+        best_pump  = 0.0   # most positive change (biggest pump)
+        best_label = "24h"
+        ref_price  = lookbacks["24h"]
+
+        for label, prev_px in lookbacks.items():
+            chg = (cur - prev_px) / prev_px * 100.0
+            if chg < best_drop:
+                best_drop  = chg
+                best_label = label
+                ref_price  = prev_px
+            if chg > best_pump:
+                best_pump  = chg
+                best_label = label
+                ref_price  = prev_px
+
+        # ── RSI (14-period) ──────────────────────────────────────────────────
+        deltas = _np.diff(closes[-16:])
+        gains  = _np.where(deltas > 0, deltas, 0.0)
+        losses = _np.where(deltas < 0, -deltas, 0.0)
+        avg_g  = float(_np.mean(gains[-14:]))
+        avg_l  = float(_np.mean(losses[-14:]))
+        rsi    = 100.0 - 100.0 / (1.0 + avg_g / avg_l) if avg_l > 0 else 50.0
+
+        # ── LONG: buy the dip ───────────────────────────────────────────────
+        if best_drop <= -DIP_DROP_PCT and rsi < DIP_RSI_LONG:
+            drop_amt = abs(cur - ref_price)
+            tp  = round(cur + drop_amt * DIP_TP_RECOVER, 8)
+            sl  = round(cur * (1.0 - DIP_SL_PCT), 8)
+            rr  = _rr_after_fees(cur, tp, sl, "LONG")
+            if rr < 1.5 or tp <= cur or sl >= cur:
+                return None
+            return {
+                "direction":        "LONG",
+                "entry":            round(cur, 8),
+                "target":           tp,
+                "stop":             sl,
+                "score":            7.0,
+                "signal_type":      "DIP_RECOVERY",
+                "reason":           f"Dip {best_drop:.1f}% over {best_label}, RSI={rsi:.0f} — recovery trade",
+                "current_price":    cur,
+                "target_basis":     "dip_recovery",
+                "tp_source":        "dip_recovery",
+                "factors_snapshot": {
+                    "change_pct":  round(best_drop, 2),
+                    "lookback":    best_label,
+                    "rsi":         round(rsi, 1),
+                    "ref_price":   round(ref_price, 8),
+                    "rr":          rr,
+                },
+            }
+
+        # ── SHORT: sell the pump ─────────────────────────────────────────────
+        if best_pump >= DIP_PUMP_PCT and rsi > DIP_RSI_SHORT:
+            pump_amt = abs(cur - ref_price)
+            tp  = round(cur - pump_amt * DIP_TP_RECOVER, 8)
+            sl  = round(cur * (1.0 + DIP_SL_PCT), 8)
+            rr  = _rr_after_fees(cur, tp, sl, "SHORT")
+            if rr < 1.5 or tp >= cur or sl <= cur:
+                return None
+            return {
+                "direction":        "SHORT",
+                "entry":            round(cur, 8),
+                "target":           tp,
+                "stop":             sl,
+                "score":            7.0,
+                "signal_type":      "DIP_RECOVERY",
+                "reason":           f"Pump +{best_pump:.1f}% over {best_label}, RSI={rsi:.0f} — pullback trade",
+                "current_price":    cur,
+                "target_basis":     "pump_pullback",
+                "tp_source":        "pump_pullback",
+                "factors_snapshot": {
+                    "change_pct":  round(best_pump, 2),
+                    "lookback":    best_label,
+                    "rsi":         round(rsi, 1),
+                    "ref_price":   round(ref_price, 8),
+                    "rr":          rr,
+                },
+            }
+
     except Exception:
         pass
     return None
@@ -1335,6 +1459,134 @@ def _background_scanner() -> None:
 
 threading.Thread(target=_background_scanner, daemon=True).start()
 threading.Thread(target=_price_monitor_loop, daemon=True).start()
+
+
+# ── Dip / Pump Recovery Scanner ───────────────────────────────────────────────
+
+def _dip_scanner_loop():
+    """
+    Runs every 5 minutes. Checks DIP_COINS on 1h candles for 24h dip/pump setups.
+    Completely independent from the BOS/structure strategy.
+    """
+    import requests as _req
+
+    BINANCE_KLINES = "https://api.binance.us/api/v3/klines"
+
+    def _fetch_1h_candles(symbol: str, limit: int = 30) -> list:
+        try:
+            r = _req.get(
+                BINANCE_KLINES,
+                params={"symbol": symbol, "interval": "1h", "limit": limit},
+                timeout=10,
+            )
+            rows = r.json()
+            return [
+                {
+                    "open":   float(row[1]),
+                    "high":   float(row[2]),
+                    "low":    float(row[3]),
+                    "close":  float(row[4]),
+                    "volume": float(row[5]),
+                }
+                for row in rows
+            ]
+        except Exception:
+            return []
+
+    # Cooldown: track last signal time per coin+direction to avoid spamming
+    _last_signal: dict = {}   # key: "BTCUSDT_LONG" → epoch seconds
+
+    time.sleep(30)  # stagger startup away from main scanner
+
+    while True:
+        try:
+            for sym in DIP_COINS:
+                candles = _fetch_1h_candles(sym, limit=80)
+                if not candles:
+                    continue
+
+                sig = _dip_recovery_signal(sym, candles)
+                if not sig:
+                    continue
+
+                direction = sig["direction"]
+                cooldown_key = f"{sym}_{direction}"
+                now_ts = time.time()
+
+                # Skip if we fired this same coin+direction within the last 6 hours
+                if now_ts - _last_signal.get(cooldown_key, 0) < 6 * 3600:
+                    continue
+
+                # Skip if risk gate is closed (daily loss limit hit)
+                if not _risk_gate_open():
+                    print(f"[DIP] Risk gate closed — skipping {sym} {direction}", flush=True)
+                    continue
+
+                # Skip if already have an open trade for this coin + direction
+                if learning.has_active_trade(sym, "1h", direction):
+                    continue
+
+                # Use actual live price as entry
+                cur_price = candles[-1]["close"]
+                if cur_price <= 0:
+                    continue
+
+                trade_id = str(uuid.uuid4())
+                trade_data = {
+                    "id":               trade_id,
+                    "symbol":           sym,
+                    "interval":         "1h",
+                    "direction":        direction,
+                    "entry":            cur_price,
+                    "current_price":    cur_price,
+                    "tp":               sig["target"],
+                    "sl":               sig["stop"],
+                    "score":            sig["score"],
+                    "effective_score":  sig["score"],
+                    "reason":           sig["reason"],
+                    "factors_snapshot": sig.get("factors_snapshot", {}),
+                    "target_basis":     sig.get("target_basis", ""),
+                    "tp_source":        sig.get("tp_source", "dip_recovery"),
+                    "opened_at":        datetime.now(timezone.utc).isoformat(),
+                    "status":           "open",
+                    "adx_value":        0,
+                    "vwap_side":        "unknown",
+                }
+
+                logged = learning.log_trade(trade_data)
+                if logged:
+                    _last_signal[cooldown_key] = now_ts
+                    change = sig["factors_snapshot"].get("change_24h_pct", 0)
+                    rsi    = sig["factors_snapshot"].get("rsi", 0)
+                    print(
+                        f"[DIP] {sym} {direction}  24h={change:+.1f}%  RSI={rsi:.0f}"
+                        f"  entry={cur_price:.6f}  tp={sig['target']:.6f}  sl={sig['stop']:.6f}",
+                        flush=True,
+                    )
+                    notifications.send_signal_alert({
+                        "symbol":       sym,
+                        "interval":     "1h",
+                        "direction":    direction,
+                        "entry":        cur_price,
+                        "tp":           sig["target"],
+                        "sl":           sig["stop"],
+                        "score":        sig["score"],
+                        "reason":       sig["reason"],
+                        "target_basis": sig.get("target_basis", ""),
+                        "ai_analysis":  {},
+                        "pending":      False,
+                        "current_price": cur_price,
+                    })
+
+                time.sleep(1)   # rate-limit between coins
+
+        except Exception as _e:
+            print(f"[DIP SCANNER] error: {_e}", flush=True)
+
+        time.sleep(300)   # scan every 5 minutes
+
+
+threading.Thread(target=_dip_scanner_loop, daemon=True).start()
 
 
 # ── Weekly review job ─────────────────────────────────────────────────────────
