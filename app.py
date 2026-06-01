@@ -1085,7 +1085,7 @@ def _background_scanner() -> None:
         for sym, intervals in pairs_by_sym.items():
             # Fetch bias TFs: 15m for 5m signals, 1h for 15m signals, 1d for 4H bias
             bias_cache: dict[str, dict] = {}
-            for bias_tf in ("15m", "1h", "1d"):
+            for bias_tf in ("15m", "1h", "4h", "1d"):
                 try:
                     bias_data = full_analysis(sym, bias_tf)
                     bias_cache[bias_tf] = bias_data
@@ -1136,7 +1136,10 @@ def _background_scanner() -> None:
                     except Exception:
                         regime_p = {}
 
-                    htf        = "15m" if interval == "5m" else ("1h" if interval == "15m" else "1d")
+                    # HTF bias: 15m → 1h, 1h → 4h, 4h → 1d
+                    # Using 4h as the bias for 1h signals (not 1d) so we catch
+                    # intraday trend direction, not just the multi-week trend.
+                    htf        = "15m" if interval == "5m" else ("1h" if interval == "15m" else ("4h" if interval == "1h" else "1d"))
                     htf_d      = bias_cache.get(htf, {})
                     session_ok = True  # crypto is 24/7
 
@@ -1197,7 +1200,9 @@ def _background_scanner() -> None:
                         # (they are counter-trend by design).
                         # 5m/15m use strict bias (must have explicit HTF agreement).
                         # 1h/4h use relaxed bias (only block if HTF is clearly opposed).
-                        _bias_strict = interval in ("5m", "15m")
+                        # 15m and 1h both use strict bias — require explicit HTF alignment.
+                        # 4h uses relaxed bias (only blocks if daily is clearly opposed).
+                        _bias_strict = interval in ("5m", "15m", "1h")
                         if sig_type not in ("MEAN_REVERSION",) and not _bias_agrees(sig["direction"], htf_d, strict=_bias_strict):
                             print(f"[SCAN] {sym} {interval}: {sig['direction']} score={sig.get('score',0):.1f} — HTF BIAS BLOCK", flush=True)
                             continue
