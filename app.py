@@ -51,8 +51,8 @@ PAPER_PAIRS = [
 PAPER_SYMBOLS   = list(dict.fromkeys(s for s, _ in PAPER_PAIRS))
 PAPER_INTERVALS = list(dict.fromkeys(i for _, i in PAPER_PAIRS))
 
-# Dip/pump recovery scanner — runs on all 4 coins, separate from BOS strategy.
-DIP_COINS = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "DOGEUSDT"]
+# Dip/pump recovery scanner — runs on 5 major coins, separate from BOS strategy.
+DIP_COINS = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "DOGEUSDT", "SOLUSDT"]
 DIP_DROP_PCT   = 5.0   # minimum 24h drop % to trigger LONG
 DIP_PUMP_PCT   = 5.0   # minimum 24h pump % to trigger SHORT
 DIP_RSI_LONG   = 38    # RSI must be below this to confirm oversold (LONG)
