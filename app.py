@@ -340,7 +340,7 @@ def _dip_recovery_signal(sym: str, candles: list) -> dict | None:
             tp  = round(cur + drop_amt * DIP_TP_RECOVER, 8)
             sl  = round(cur * (1.0 - DIP_SL_PCT), 8)
             rr  = _rr_after_fees(cur, tp, sl, "LONG")
-            if rr < 1.5 or tp <= cur or sl >= cur:
+            if tp <= cur or sl >= cur:
                 return None
             return {
                 "direction":        "LONG",
@@ -368,7 +368,7 @@ def _dip_recovery_signal(sym: str, candles: list) -> dict | None:
             tp  = round(cur - pump_amt * DIP_TP_RECOVER, 8)
             sl  = round(cur * (1.0 + DIP_SL_PCT), 8)
             rr  = _rr_after_fees(cur, tp, sl, "SHORT")
-            if rr < 1.5 or tp >= cur or sl <= cur:
+            if tp >= cur or sl <= cur:
                 return None
             return {
                 "direction":        "SHORT",
