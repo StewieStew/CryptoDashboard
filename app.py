@@ -58,7 +58,7 @@ DIP_PUMP_PCT   = 5.0   # minimum 24h pump % to trigger SHORT
 DIP_RSI_LONG   = 38    # RSI must be below this to confirm oversold (LONG)
 DIP_RSI_SHORT  = 62    # RSI must be above this to confirm overbought (SHORT)
 DIP_TP_RECOVER = 0.55  # TP recovers 55% of the move back toward prior price
-DIP_SL_PCT     = 0.03  # hard stop 3% below entry (LONG) / above entry (SHORT)
+DIP_SL_PCT     = 0.05  # hard stop 5% below entry (LONG) / above entry (SHORT)
 
 # Three-tier scanning: 15m (scalp), 1h (day trade), 4h (swing).
 SCAN_INTERVALS   = ["15m", "1h", "4h"]
@@ -301,8 +301,27 @@ def _dip_recovery_signal(sym: str, candles: list) -> dict | None:
         if len(candles) < 74:   # need 72h of 1h bars + buffer
             return None
 
-        closes = _np.array([c["close"] for c in candles], dtype=float)
-        cur    = float(closes[-1])
+        closes  = _np.array([c["close"] for c in candles], dtype=float)
+        opens   = _np.array([c["open"]  for c in candles], dtype=float)
+        highs   = _np.array([c["high"]  for c in candles], dtype=float)
+        lows    = _np.array([c["low"]   for c in candles], dtype=float)
+        volumes = _np.array([c.get("volume", 0.0) for c in candles], dtype=float)
+        cur     = float(closes[-1])
+
+        # ── Stabilization check: require 2 consecutive green candles ─────────
+        # This confirms buyers have stepped in before we enter — avoids catching
+        # a falling knife mid-crash.
+        # LONG  needs: last 2 candles close > open (green) with decent body size
+        # SHORT needs: last 2 candles close < open (red)   with decent body size
+        _c1_green = closes[-1] > opens[-1]
+        _c2_green = closes[-2] > opens[-2]
+        _c1_red   = closes[-1] < opens[-1]
+        _c2_red   = closes[-2] < opens[-2]
+
+        # Also require volume on the last green/red candle to be above the 10-bar avg
+        # (confirms conviction, not just a dead-cat bounce on low volume)
+        _vol_avg  = float(_np.mean(volumes[-11:-1])) if len(volumes) >= 11 else 0.0
+        _vol_ok   = float(volumes[-1]) >= _vol_avg * 0.8  # at least 80% of avg volume
 
         # Check change over 24h, 48h, and 72h — trigger on the biggest move
         lookbacks = {
@@ -336,6 +355,11 @@ def _dip_recovery_signal(sym: str, candles: list) -> dict | None:
 
         # ── LONG: buy the dip ───────────────────────────────────────────────
         if best_drop <= -DIP_DROP_PCT and rsi < DIP_RSI_LONG:
+            # Stabilization: need 2 consecutive green candles + volume confirmation
+            if not (_c1_green and _c2_green and _vol_ok):
+                print(f"[DIP] {sym} LONG blocked — waiting for stabilization "
+                      f"(green1={_c1_green} green2={_c2_green} vol_ok={_vol_ok})", flush=True)
+                return None
             drop_amt = abs(cur - ref_price)
             tp  = round(cur + drop_amt * DIP_TP_RECOVER, 8)
             sl  = round(cur * (1.0 - DIP_SL_PCT), 8)
@@ -349,7 +373,7 @@ def _dip_recovery_signal(sym: str, candles: list) -> dict | None:
                 "stop":             sl,
                 "score":            7.0,
                 "signal_type":      "DIP_RECOVERY",
-                "reason":           f"Dip {best_drop:.1f}% over {best_label}, RSI={rsi:.0f} — recovery trade",
+                "reason":           f"Dip {best_drop:.1f}% over {best_label}, RSI={rsi:.0f}, 2 green candles — stabilized",
                 "current_price":    cur,
                 "target_basis":     "dip_recovery",
                 "tp_source":        "dip_recovery",
@@ -359,11 +383,17 @@ def _dip_recovery_signal(sym: str, candles: list) -> dict | None:
                     "rsi":         round(rsi, 1),
                     "ref_price":   round(ref_price, 8),
                     "rr":          rr,
+                    "stabilized":  True,
                 },
             }
 
         # ── SHORT: sell the pump ─────────────────────────────────────────────
         if best_pump >= DIP_PUMP_PCT and rsi > DIP_RSI_SHORT:
+            # Stabilization: need 2 consecutive red candles + volume confirmation
+            if not (_c1_red and _c2_red and _vol_ok):
+                print(f"[DIP] {sym} SHORT blocked — waiting for stabilization "
+                      f"(red1={_c1_red} red2={_c2_red} vol_ok={_vol_ok})", flush=True)
+                return None
             pump_amt = abs(cur - ref_price)
             tp  = round(cur - pump_amt * DIP_TP_RECOVER, 8)
             sl  = round(cur * (1.0 + DIP_SL_PCT), 8)
@@ -377,7 +407,7 @@ def _dip_recovery_signal(sym: str, candles: list) -> dict | None:
                 "stop":             sl,
                 "score":            7.0,
                 "signal_type":      "DIP_RECOVERY",
-                "reason":           f"Pump +{best_pump:.1f}% over {best_label}, RSI={rsi:.0f} — pullback trade",
+                "reason":           f"Pump +{best_pump:.1f}% over {best_label}, RSI={rsi:.0f}, 2 red candles — fading",
                 "current_price":    cur,
                 "target_basis":     "pump_pullback",
                 "tp_source":        "pump_pullback",
