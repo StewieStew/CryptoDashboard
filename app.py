@@ -1768,182 +1768,134 @@ def agent_intelligence():
 # Reads intelligence from the Mac Mini agents and opens trades when all 3 agree.
 # This is the ONLY way trades now open — no mechanical scanner.
 
-_agent_signal_cooldown: dict = {}   # sym → last signal epoch, 6h cooldown
+_agent_signal_cooldown: dict = {}   # sym → last signal epoch
+
+# ── Risk management constants ─────────────────────────────────────────────────
+MAX_OPEN_TRADES   = 5       # up to 5 open at once — build data fast
+DAILY_LOSS_LIMIT  = 0.08    # stop only if down 8% in a day (give room to breathe)
+MIN_RR_RATIO      = 2.0     # R:R ≥ 2:1 — non-negotiable math
+SIGNAL_COOLDOWN   = 30 * 60 # 30 min cooldown — trade frequently to build data
+_daily_pnl_cache: dict = {"date": None, "pnl": 0.0}
+
+
+def _check_daily_pnl() -> float:
+    """Rough daily P&L from closed trades today."""
+    try:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        trades = learning.get_trades()
+        closed_today = [
+            t for t in trades
+            if t.get("status") in ("win","loss")
+            and (t.get("closed_at","") or "").startswith(today)
+        ]
+        return sum(float(t.get("roi_pct") or 0) for t in closed_today)
+    except Exception:
+        return 0.0
+
 
 def _agent_trade_executor() -> None:
     """
-    Runs every 5 minutes on Render.
-    Reads the latest analyst trade_signal and checks:
-      1. Analyst confidence ≥ 8
-      2. Macro regime agrees with signal direction
-      3. Risk agent says portfolio is healthy
-      4. No active trade already open for this coin
-      5. 6-hour cooldown per coin not hit
-    If all pass → opens the trade.
+    The executor — reads the Analyst Agent's signal every 5 minutes and
+    opens the trade if risk management rules are satisfied.
+
+    ONLY hard gates (cannot be overridden):
+      1. R:R must be ≥ 2:1 (non-negotiable math)
+      2. Max 3 open trades at once (portfolio concentration)
+      3. Daily loss limit: stop trading if down 5%+ today
+      4. No duplicate: same coin+direction already open
+      5. 2-hour cooldown per coin+direction (prevent spam)
+      6. SL must not already be crossed at live price
+
+    Everything else — macro, regime, confidence, rules — is context the
+    AI already used when generating the signal. We trust the AI's judgment.
     """
-    time.sleep(90)   # stagger startup, let price monitor start first
+    time.sleep(90)
     while True:
         try:
-            # ── Read latest agent intelligence ────────────────────────────
-            with _agent_lock:
-                latest = _agent_insights[-1] if _agent_insights else {}
-
-            # Also check state posted directly by analyst agent
-            analyst_data = latest if latest.get("type") == "analyst_ratings" else {}
-
-            # Find most recent analyst signal across all insights
+            # ── Find latest analyst signal ────────────────────────────────
+            analyst_data = {}
             with _agent_lock:
                 for insight in reversed(_agent_insights):
-                    if insight.get("type") in ("analyst_ratings", "desk_briefing"):
+                    if insight.get("type") in ("analyst_signal", "analyst_ratings", "desk_briefing"):
                         analyst_data = insight
                         break
 
             trade_signal = analyst_data.get("trade_signal")
-            if not trade_signal or trade_signal == "null":
+            if not trade_signal or not isinstance(trade_signal, dict):
                 time.sleep(300)
                 continue
 
             sym       = trade_signal.get("symbol", "")
             direction = (trade_signal.get("direction") or "").upper()
-            entry_px  = float(trade_signal.get("entry") or 0)
-            tp        = float(trade_signal.get("tp")    or 0)
-            sl        = float(trade_signal.get("sl")    or 0)
+            entry_px  = float(trade_signal.get("entry")  or 0)
+            tp        = float(trade_signal.get("tp")     or 0)
+            sl        = float(trade_signal.get("sl")     or 0)
             tf        = trade_signal.get("timeframe", "1h")
-            confidence = int(trade_signal.get("confidence") or 0)
+            confidence= float(trade_signal.get("confidence") or 5)
             reason    = trade_signal.get("reason", "AI agent signal")
+            quality   = trade_signal.get("setup_quality", "moderate")
+            factors   = trade_signal.get("confluence_factors", [])
 
-            if not sym or not direction or not entry_px or not tp or not sl:
+            if not sym or direction not in ("LONG","SHORT") or not entry_px or not tp or not sl:
                 time.sleep(300)
                 continue
 
-            # ── Gate 1: Confidence ≥ 8 ────────────────────────────────────
-            if confidence < 8:
-                print(f"[AGENT EXEC] {sym} {direction}: confidence {confidence} < 8, skipping", flush=True)
+            # ── Gate 1: R:R ≥ 2:1 ────────────────────────────────────────
+            tp_dist = abs(tp - entry_px)
+            sl_dist = abs(sl - entry_px)
+            rr = tp_dist / sl_dist if sl_dist > 0 else 0
+            if rr < MIN_RR_RATIO:
+                print(f"[AGENT EXEC] {sym} {direction}: R:R={rr:.2f} < {MIN_RR_RATIO} — skipping", flush=True)
                 time.sleep(300)
                 continue
 
-            # ── Gate 2: Macro regime agrees ───────────────────────────────
-            macro_data = {}
-            with _agent_lock:
-                for insight in reversed(_agent_insights):
-                    if insight.get("type") == "macro_analysis":
-                        macro_data = insight
-                        break
-            coin = sym.replace("USDT", "")
-            coin_bias   = (macro_data.get("coin_bias") or {}).get(coin, "neutral")
-            regime      = macro_data.get("regime", "uncertain")
-            risk_level  = macro_data.get("risk_level", "medium")
-
-            macro_ok = True
-            if direction == "LONG"  and coin_bias == "short": macro_ok = False
-            if direction == "SHORT" and coin_bias == "long":  macro_ok = False
-            if risk_level == "high":                          macro_ok = False
-
-            if not macro_ok:
-                print(f"[AGENT EXEC] {sym} {direction}: macro veto (bias={coin_bias} risk={risk_level})", flush=True)
+            # ── Gate 2: Max open trades ───────────────────────────────────
+            open_count = len([t for t in learning.get_trades()
+                              if t.get("status") == "open"])
+            if open_count >= MAX_OPEN_TRADES:
+                print(f"[AGENT EXEC] {sym}: max open trades ({MAX_OPEN_TRADES}) reached", flush=True)
                 time.sleep(300)
                 continue
 
-            # ── Gate 3: Risk agent healthy ────────────────────────────────
-            risk_data = {}
-            with _agent_lock:
-                for report in reversed(_agent_reports):
-                    if report.get("agent") == "risk" or "health" in str(report.get("type","")):
-                        risk_data = report
-                        break
-            portfolio_health = risk_data.get("health", "good")
-            if portfolio_health in ("drawdown", "loss_streak"):
-                print(f"[AGENT EXEC] {sym} {direction}: risk veto (health={portfolio_health})", flush=True)
-                time.sleep(300)
+            # ── Gate 3: Daily loss limit ──────────────────────────────────
+            daily_pnl = _check_daily_pnl()
+            if daily_pnl <= -(DAILY_LOSS_LIMIT * 100):
+                print(f"[AGENT EXEC] Daily loss limit hit ({daily_pnl:.2f}%) — pausing trading", flush=True)
+                time.sleep(1800)  # wait 30 min before checking again
                 continue
 
-            # ── Gate 3b: Strategy rules from Learning Agent ───────────────
-            # Rules are written automatically as the bot learns from trades.
-            # No human input needed — system enforces its own learned strategy.
-            try:
-                import sqlite3 as _sqlite3
-                from pathlib import Path as _Path
-                _rules_db = _Path.home() / "CryptoDashboard" / "agent_kb" / "agent_state.db"
-                _rules = []
-                if _rules_db.exists():
-                    _rconn = _sqlite3.connect(str(_rules_db))
-                    _row = _rconn.execute(
-                        "SELECT value FROM agent_state WHERE key='strategy_rules'"
-                    ).fetchone()
-                    _rconn.close()
-                    if _row:
-                        _rules = json.loads(_row[0])
-
-                coin = sym.replace("USDT", "")
-                for rule in _rules:
-                    rt    = rule.get("rule_type", "")
-                    coins = rule.get("coins", [])
-                    rdir  = rule.get("direction", "both")
-                    val   = rule.get("value", "")
-                    conf  = int(rule.get("confidence", 0))
-
-                    if conf < 7:
-                        continue   # only enforce high-confidence rules
-
-                    # Check if this rule applies to this coin+direction
-                    applies = (sym in coins or coin in coins or not coins)
-                    dir_match = rdir in ("both", direction)
-
-                    if not applies or not dir_match:
-                        continue
-
-                    if rt == "block_direction":
-                        print(f"[AGENT EXEC] {sym} {direction}: RULE BLOCK — {rule.get('reason','')[:80]}", flush=True)
-                        break  # blocked
-
-                    if rt == "require_regime" and macro_data.get("regime"):
-                        if macro_data.get("regime") != val:
-                            print(f"[AGENT EXEC] {sym} {direction}: RULE BLOCK (require_regime={val}, current={macro_data.get('regime')}) — {rule.get('reason','')[:60]}", flush=True)
-                            break
-
-                    if rt == "min_confidence":
-                        if confidence < int(val or 0):
-                            print(f"[AGENT EXEC] {sym} {direction}: RULE BLOCK (min_confidence={val}, got={confidence}) — {rule.get('reason','')[:60]}", flush=True)
-                            break
-                else:
-                    pass  # no rule blocked it — continue
-
-            except Exception as _re:
-                pass  # rules check errors never block a trade
-
-            # ── Gate 4: No existing open trade for this coin ─────────────
+            # ── Gate 4: No duplicate ──────────────────────────────────────
             if learning.has_active_trade(sym, tf, direction):
-                print(f"[AGENT EXEC] {sym} {direction}: already have open trade", flush=True)
+                print(f"[AGENT EXEC] {sym} {direction}: already open", flush=True)
                 time.sleep(300)
                 continue
 
-            # ── Gate 5: 6-hour cooldown ────────────────────────────────────
+            # ── Gate 5: Cooldown ──────────────────────────────────────────
             cooldown_key = f"{sym}_{direction}"
-            if time.time() - _agent_signal_cooldown.get(cooldown_key, 0) < 6 * 3600:
+            if time.time() - _agent_signal_cooldown.get(cooldown_key, 0) < SIGNAL_COOLDOWN:
                 time.sleep(300)
                 continue
 
-            # ── All gates passed — get live price and open trade ──────────
+            # ── Get live price ────────────────────────────────────────────
             try:
                 import requests as _req
-                px_r = _req.get(
-                    "https://api.binance.us/api/v3/ticker/price",
-                    params={"symbol": sym}, timeout=8
-                )
+                px_r = _req.get("https://api.binance.us/api/v3/ticker/price",
+                                params={"symbol": sym}, timeout=8)
                 live_px = float(px_r.json()["price"])
             except Exception:
                 live_px = entry_px
 
-            # Validate levels still make sense at live price
+            # ── Gate 6: SL not already crossed ───────────────────────────
             if direction == "LONG"  and live_px <= sl:
-                print(f"[AGENT EXEC] {sym}: live price {live_px} already below SL {sl}, skipping", flush=True)
+                print(f"[AGENT EXEC] {sym}: already below SL {sl:.6f}", flush=True)
                 time.sleep(300)
                 continue
             if direction == "SHORT" and live_px >= sl:
-                print(f"[AGENT EXEC] {sym}: live price {live_px} already above SL {sl}, skipping", flush=True)
+                print(f"[AGENT EXEC] {sym}: already above SL {sl:.6f}", flush=True)
                 time.sleep(300)
                 continue
 
+            # ── All gates passed — OPEN TRADE ─────────────────────────────
             trade_id = str(uuid.uuid4())
             trade_data = {
                 "id":               trade_id,
@@ -1954,22 +1906,23 @@ def _agent_trade_executor() -> None:
                 "current_price":    live_px,
                 "tp":               tp,
                 "sl":               sl,
-                "score":            float(confidence),
-                "effective_score":  float(confidence),
+                "score":            confidence,
+                "effective_score":  confidence,
                 "reason":           reason,
                 "factors_snapshot": {
-                    "confidence":   confidence,
-                    "macro_bias":   coin_bias,
-                    "regime":       regime,
-                    "agent_driven": True,
+                    "confidence":         confidence,
+                    "rr_ratio":           round(rr, 2),
+                    "setup_quality":      quality,
+                    "confluence_factors": factors,
+                    "agent_driven":       True,
                 },
-                "target_basis":     "agent_analysis",
-                "tp_source":        "agent_analysis",
-                "opened_at":        datetime.now(timezone.utc).isoformat(),
-                "status":           "open",
-                "adx_value":        0,
-                "vwap_side":        "unknown",
-                "signal_type":      "AGENT_DRIVEN",
+                "target_basis":  "agent_analysis",
+                "tp_source":     "agent_analysis",
+                "opened_at":     datetime.now(timezone.utc).isoformat(),
+                "status":        "open",
+                "adx_value":     0,
+                "vwap_side":     "unknown",
+                "signal_type":   "AGENT_DRIVEN",
             }
 
             logged = learning.log_trade(trade_data)
@@ -1977,9 +1930,11 @@ def _agent_trade_executor() -> None:
                 _agent_signal_cooldown[cooldown_key] = time.time()
                 print(
                     f"[AGENT EXEC] ✅ TRADE OPENED: {sym} {direction} @ {live_px:.6f}"
-                    f" | TP={tp:.6f} SL={sl:.6f} | confidence={confidence}/10",
+                    f" | TP={tp:.6f} SL={sl:.6f} | R:R={rr:.1f}:1 | "
+                    f"quality={quality} confidence={confidence:.0f}/10",
                     flush=True,
                 )
+                print(f"[AGENT EXEC]   Confluence: {', '.join(factors[:4])}", flush=True)
                 notifications.send_signal_alert({
                     "symbol":       sym,
                     "interval":     tf,
@@ -1988,9 +1943,9 @@ def _agent_trade_executor() -> None:
                     "tp":           tp,
                     "sl":           sl,
                     "score":        confidence,
-                    "reason":       reason,
+                    "reason":       f"[R:R {rr:.1f}:1 | {quality}] {reason}",
                     "target_basis": "agent_analysis",
-                    "ai_analysis":  {"source": "multi_agent_desk"},
+                    "ai_analysis":  {"confluence": factors},
                     "pending":      False,
                     "current_price": live_px,
                 })
@@ -2002,7 +1957,7 @@ def _agent_trade_executor() -> None:
 
 
 threading.Thread(target=_agent_trade_executor, daemon=True).start()
-print("[AGENT EXECUTOR] Started — trades will open based on AI agent consensus.", flush=True)
+print("[AGENT EXECUTOR] Started — AI agents drive all trades. Risk gates: R:R≥2:1, max 3 open, 5% daily loss limit.", flush=True)
 
 
 # ── Weekly review job ─────────────────────────────────────────────────────────

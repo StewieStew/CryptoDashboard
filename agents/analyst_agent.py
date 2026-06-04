@@ -1,8 +1,15 @@
 """
 ANALYST AGENT — runs every 15 minutes
-Job: Deep price action analysis per coin. Identify key levels, structure,
-     liquidity clusters, orderbook imbalances. Rate each coin for setup quality.
-Output: coin ratings 1-10, key levels, liquidity map, setup quality
+Job: Read the market like a real trader. Assess confluence across all available
+     data. Always produce the single best available trade — even in choppy
+     markets, pick the highest-probability setup and note the context.
+
+Philosophy:
+  - 40% win rate + 2.5:1 R:R = profitable. We don't need perfect setups.
+  - Confluence over perfection: 3+ factors agreeing beats waiting for 10/10.
+  - Always trade, always learn, always improve.
+
+Output: best trade signal with full confluence reasoning, key levels, risk notes
 """
 from __future__ import annotations
 import json, os, time
@@ -13,11 +20,12 @@ import anthropic
 import numpy as np
 
 from agents.state import (set_state, get_state, add_report, add_knowledge,
-                          post_to_render)
+                           post_to_render)
 
-COINS        = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "DOGEUSDT", "SOLUSDT"]
+COINS         = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "DOGEUSDT", "SOLUSDT"]
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 BINANCE_BASE  = "https://api.binance.us/api/v3"
+MIN_RR        = 2.0   # minimum risk:reward — non-negotiable
 
 
 def _claude():
@@ -28,11 +36,9 @@ def _claude():
 
 def fetch_candles(symbol: str, interval: str, limit: int) -> list:
     try:
-        r = requests.get(
-            f"{BINANCE_BASE}/klines",
-            params={"symbol": symbol, "interval": interval, "limit": limit},
-            timeout=10,
-        )
+        r = requests.get(f"{BINANCE_BASE}/klines",
+                         params={"symbol": symbol, "interval": interval, "limit": limit},
+                         timeout=10)
         return [{"time": c[0], "open": float(c[1]), "high": float(c[2]),
                  "low": float(c[3]), "close": float(c[4]), "volume": float(c[5])}
                 for c in r.json()]
@@ -40,10 +46,10 @@ def fetch_candles(symbol: str, interval: str, limit: int) -> list:
         return []
 
 
-def fetch_orderbook(symbol: str, limit: int = 50) -> dict:
+def fetch_orderbook(symbol: str) -> dict:
     try:
         r = requests.get(f"{BINANCE_BASE}/depth",
-                         params={"symbol": symbol, "limit": limit}, timeout=8)
+                         params={"symbol": symbol, "limit": 50}, timeout=8)
         return r.json()
     except Exception:
         return {}
@@ -52,7 +58,7 @@ def fetch_orderbook(symbol: str, limit: int = 50) -> dict:
 def calc_rsi(closes: list, period: int = 14) -> float:
     if len(closes) < period + 1:
         return 50.0
-    deltas = np.diff(closes[-(period+2):])
+    deltas = np.diff(closes[-(period + 2):])
     gains  = np.where(deltas > 0, deltas, 0.0)
     losses = np.where(deltas < 0, -deltas, 0.0)
     avg_g  = np.mean(gains[-period:])
@@ -60,299 +66,364 @@ def calc_rsi(closes: list, period: int = 14) -> float:
     return float(100.0 - 100.0 / (1.0 + avg_g / avg_l)) if avg_l > 0 else 50.0
 
 
-def find_liquidity_clusters(candles: list, price: float) -> list:
-    """Detect equal highs/lows within 0.3% of each other."""
-    clusters = []
-    try:
-        highs = [c["high"] for c in candles[-150:]]
-        lows  = [c["low"]  for c in candles[-150:]]
-
-        seen = set()
-        for h in highs:
-            key = round(h / price * 1000)
-            if key in seen:
-                continue
-            count = sum(1 for hh in highs if abs(hh - h) / h < 0.003)
-            if count >= 2:
-                seen.add(key)
-                clusters.append({
-                    "type": "sell_stops",
-                    "price": round(h, 8),
-                    "strength": count,
-                    "dist_pct": round(abs(h - price) / price * 100, 2),
-                    "side": "above" if h > price else "below",
-                })
-
-        seen = set()
-        for l in lows:
-            key = round(l / price * 1000)
-            if key in seen:
-                continue
-            count = sum(1 for ll in lows if abs(ll - l) / l < 0.003)
-            if count >= 2:
-                seen.add(key)
-                clusters.append({
-                    "type": "buy_stops",
-                    "price": round(l, 8),
-                    "strength": count,
-                    "dist_pct": round(abs(l - price) / price * 100, 2),
-                    "side": "above" if l > price else "below",
-                })
-
-        clusters.sort(key=lambda x: x["dist_pct"])
-        return clusters[:10]
-    except Exception:
-        return []
+def calc_atr(candles: list, period: int = 14) -> float:
+    if len(candles) < period + 1:
+        return 0.0
+    trs = []
+    for i in range(1, len(candles)):
+        h = candles[i]["high"]
+        l = candles[i]["low"]
+        pc = candles[i-1]["close"]
+        trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+    return float(np.mean(trs[-period:]))
 
 
-def analyze_orderbook(ob: dict, price: float) -> dict:
-    try:
-        bids = [(float(p), float(q)) for p, q in ob.get("bids", [])[:30]]
-        asks = [(float(p), float(q)) for p, q in ob.get("asks", [])[:30]]
-
-        bid_vol = sum(q for _, q in bids)
-        ask_vol = sum(q for _, q in asks)
-        ratio   = bid_vol / ask_vol if ask_vol > 0 else 1.0
-
-        # Largest walls
-        top_bid = max(bids, key=lambda x: x[1]) if bids else (0, 0)
-        top_ask = min(asks, key=lambda x: x[1]) if asks else (0, 0)  # lowest ask with most volume
-        top_ask = max(asks, key=lambda x: x[1]) if asks else (0, 0)
-
-        return {
-            "bid_ask_ratio": round(ratio, 3),
-            "pressure":      "buy" if ratio > 1.3 else "sell" if ratio < 0.7 else "neutral",
-            "largest_bid":   {"price": top_bid[0], "size": round(top_bid[1], 2)},
-            "largest_ask":   {"price": top_ask[0], "size": round(top_ask[1], 2)},
-            "spread_pct":    round((asks[0][0] - bids[0][0]) / price * 100, 4) if bids and asks else 0,
-        }
-    except Exception:
+def find_swing_levels(candles: list) -> dict:
+    """Find recent swing highs and lows — natural support/resistance."""
+    if len(candles) < 10:
         return {}
+    highs = [c["high"]  for c in candles]
+    lows  = [c["low"]   for c in candles]
+    price = candles[-1]["close"]
+
+    # Find swing highs above price (resistance)
+    resistances = sorted(
+        [h for h in highs[-50:] if h > price],
+        key=lambda x: abs(x - price)
+    )[:3]
+
+    # Find swing lows below price (support)
+    supports = sorted(
+        [l for l in lows[-50:] if l < price],
+        key=lambda x: abs(x - price)
+    )[:3]
+
+    return {
+        "price":       price,
+        "resistance":  resistances[0] if resistances else price * 1.03,
+        "support":     supports[0]    if supports    else price * 0.97,
+        "resistances": resistances,
+        "supports":    supports,
+    }
 
 
-def format_candles_brief(candles: list, n: int = 20) -> str:
+def find_liquidity_clusters(candles: list, price: float) -> list:
+    clusters = []
+    if len(candles) < 20:
+        return clusters
+    highs = [c["high"] for c in candles[-100:]]
+    lows  = [c["low"]  for c in candles[-100:]]
+    seen  = set()
+    for h in highs:
+        key = round(h / price * 500)
+        if key in seen:
+            continue
+        count = sum(1 for hh in highs if abs(hh - h) / h < 0.005)
+        if count >= 2 and abs(h - price) / price < 0.10:
+            seen.add(key)
+            clusters.append({"type": "sell_stops", "price": round(h, 8),
+                              "strength": count, "side": "above" if h > price else "below"})
+    seen = set()
+    for l in lows:
+        key = round(l / price * 500)
+        if key in seen:
+            continue
+        count = sum(1 for ll in lows if abs(ll - l) / l < 0.005)
+        if count >= 2 and abs(l - price) / price < 0.10:
+            seen.add(key)
+            clusters.append({"type": "buy_stops", "price": round(l, 8),
+                              "strength": count, "side": "above" if l > price else "below"})
+    return sorted(clusters, key=lambda x: abs(x["price"] - price))[:6]
+
+
+def fmt_candles(candles: list, n: int = 20) -> str:
     lines = []
     for c in candles[-n:]:
-        chg = (c["close"] - c["open"]) / c["open"] * 100
-        lines.append(f"O={c['open']:.4f} H={c['high']:.4f} L={c['low']:.4f} "
-                     f"C={c['close']:.4f} V={c.get('volume',0):,.0f} ({chg:+.2f}%)")
+        chg  = (c["close"] - c["open"]) / c["open"] * 100
+        body = abs(c["close"] - c["open"])
+        wick_up   = c["high"]  - max(c["close"], c["open"])
+        wick_down = min(c["close"], c["open"]) - c["low"]
+        lines.append(
+            f"O={c['open']:.4f} H={c['high']:.4f} L={c['low']:.4f} "
+            f"C={c['close']:.4f} V={c['volume']:,.0f} ({chg:+.2f}%) "
+            f"{'▲' if c['close'] > c['open'] else '▼'}"
+        )
     return "\n".join(lines)
 
 
 def run() -> dict:
-    """Execute analyst pass on all coins."""
     print("[ANALYST AGENT] Running...", flush=True)
 
-    macro = get_state("macro_regime", {})
+    macro        = get_state("macro_regime", {})
     macro_regime = macro.get("regime_type", "uncertain")
     coin_bias    = macro.get("coin_bias", {})
+    btc_onchain  = macro.get("btc_onchain", {})
+    defi_tvl     = macro.get("defi_tvl", {})
+    fear_greed   = macro.get("fear_greed", {}).get("current", {})
+    whales       = macro.get("whales", [])
 
-    all_ratings  = {}
-    coin_details = {}
+    # Learning agent rules (informational context, not hard blocks)
+    strategy_rules = get_state("strategy_rules", [])
+    rules_str = ""
+    if strategy_rules:
+        rules_str = "LEARNED STRATEGY RULES (from past trades — use as context):\n"
+        for r in strategy_rules[:8]:
+            rules_str += f"  [{r.get('rule_type')}] {r.get('coins',[])} {r.get('direction','')} — {r.get('reason','')[:80]}\n"
+
+    # Gather full market data for all coins
+    coin_blocks = []
+    coin_data   = {}
 
     for sym in COINS:
         coin = sym.replace("USDT", "")
-        print(f"[ANALYST AGENT]   Analyzing {sym}...", flush=True)
-
-        c1h  = fetch_candles(sym, "1h",  100)
-        c4h  = fetch_candles(sym, "4h",   50)
-        c1d  = fetch_candles(sym, "1d",   30)
-        ob   = fetch_orderbook(sym, 50)
+        c1h  = fetch_candles(sym, "1h", 100)
+        c4h  = fetch_candles(sym, "4h",  50)
+        c1d  = fetch_candles(sym, "1d",  30)
+        ob   = fetch_orderbook(sym)
 
         if not c1h:
+            time.sleep(0.5)
             continue
 
-        price    = c1h[-1]["close"]
-        closes1h = [c["close"] for c in c1h]
-        closes4h = [c["close"] for c in c4h]
+        price   = c1h[-1]["close"]
+        closes  = [c["close"] for c in c1h]
+        closes4h= [c["close"] for c in c4h]
+        closes1d= [c["close"] for c in c1d]
 
-        rsi_1h = calc_rsi(closes1h)
-        rsi_4h = calc_rsi(closes4h)
+        rsi_1h  = calc_rsi(closes)
+        rsi_4h  = calc_rsi(closes4h)
+        rsi_1d  = calc_rsi(closes1d)
+        atr_1h  = calc_atr(c1h)
 
-        change_24h = (price - closes1h[-25]) / closes1h[-25] * 100 if len(closes1h) >= 25 else 0
-        change_7d  = (price - closes1h[-169]) / closes1h[-169] * 100 if len(closes1h) >= 169 else 0
+        chg_1h  = (price - closes[-2])  / closes[-2]  * 100 if len(closes)  >= 2  else 0
+        chg_24h = (price - closes[-25]) / closes[-25] * 100 if len(closes)  >= 25 else 0
+        chg_7d  = (price - closes1d[-8])/ closes1d[-8]* 100 if len(closes1d)>=  8 else 0
 
-        clusters   = find_liquidity_clusters(c1h, price)
-        ob_analysis = analyze_orderbook(ob, price)
+        levels   = find_swing_levels(c1h)
+        clusters = find_liquidity_clusters(c1h, price)
 
-        # Detect BOS
-        recent_high = max(c["high"]  for c in c1h[-20:])
-        prior_high  = max(c["high"]  for c in c1h[-40:-20])
-        recent_low  = min(c["low"]   for c in c1h[-20:])
-        prior_low   = min(c["low"]   for c in c1h[-40:-20])
-        bullish_bos = price > prior_high
-        bearish_bos = price < prior_low
+        # Order book
+        bids = [(float(p), float(q)) for p, q in ob.get("bids", [])[:30]]
+        asks = [(float(p), float(q)) for p, q in ob.get("asks", [])[:30]]
+        bid_vol = sum(q for _, q in bids)
+        ask_vol = sum(q for _, q in asks)
+        ob_ratio = bid_vol / ask_vol if ask_vol > 0 else 1.0
+        ob_pressure = "BUY" if ob_ratio > 1.3 else "SELL" if ob_ratio < 0.7 else "NEUTRAL"
 
-        bias = coin_bias.get(coin, "neutral")
+        # Trend: is price above/below key MAs?
+        ema20_1h = float(np.mean(closes[-20:])) if len(closes) >= 20 else price
+        ema50_1h = float(np.mean(closes[-50:])) if len(closes) >= 50 else price
+        ema20_4h = float(np.mean(closes4h[-20:])) if len(closes4h) >= 20 else price
 
-        coin_details[sym] = {
-            "price":        price,
-            "change_24h":   round(change_24h, 2),
-            "change_7d":    round(change_7d, 2),
-            "rsi_1h":       round(rsi_1h, 1),
-            "rsi_4h":       round(rsi_4h, 1),
-            "bullish_bos":  bullish_bos,
-            "bearish_bos":  bearish_bos,
-            "ob":           ob_analysis,
-            "clusters":     clusters[:5],
-            "macro_bias":   bias,
-            "candles_brief_1h": format_candles_brief(c1h, 15),
-            "candles_brief_4h": format_candles_brief(c4h, 8),
+        # Volume trend
+        vols   = [c["volume"] for c in c1h[-20:]]
+        vol_avg= float(np.mean(vols[:-3]))
+        vol_now= float(np.mean(vols[-3:]))
+        vol_trend = "expanding" if vol_now > vol_avg * 1.2 else "contracting" if vol_now < vol_avg * 0.8 else "normal"
+
+        coin_data[sym] = {
+            "price": price, "rsi_1h": rsi_1h, "rsi_4h": rsi_4h, "rsi_1d": rsi_1d,
+            "atr_1h": atr_1h, "chg_1h": chg_1h, "chg_24h": chg_24h, "chg_7d": chg_7d,
+            "levels": levels, "clusters": clusters, "ob_ratio": ob_ratio,
+            "ob_pressure": ob_pressure, "ema20_1h": ema20_1h, "ema50_1h": ema50_1h,
+            "ema20_4h": ema20_4h, "vol_trend": vol_trend, "bias": coin_bias.get(coin, "neutral"),
         }
-        time.sleep(1)
 
-    # ── Ask Claude to rate all coins and identify best setups ──────────────
-    coins_prompt = ""
-    for sym, d in coin_details.items():
-        coin = sym.replace("USDT", "")
         liq_str = "\n".join(
-            f"    {c['type']} @ {c['price']:.6f} (strength={c['strength']}, {c['dist_pct']:.1f}% away, {c['side']})"
-            for c in d.get("clusters", [])[:4]
-        ) or "    None detected"
+            f"  {c['type']} @ {c['price']:.6f} (x{c['strength']}, {c['side']})"
+            for c in clusters[:3]
+        ) or "  None clear"
 
-        coins_prompt += f"""
-── {sym} ──────────────────────
-Price: ${d['price']:.6f} | 24h: {d['change_24h']:+.1f}% | 7d: {d['change_7d']:+.1f}%
-RSI 1h: {d['rsi_1h']:.0f} | RSI 4h: {d['rsi_4h']:.0f}
-Structure: {'BULLISH BOS ✓' if d['bullish_bos'] else ''} {'BEARISH BOS ✓' if d['bearish_bos'] else ''} {'No BOS' if not d['bullish_bos'] and not d['bearish_bos'] else ''}
-Order book pressure: {d['ob'].get('pressure','?')} (bid/ask ratio: {d['ob'].get('bid_ask_ratio','?')})
-Macro bias from Macro Agent: {d['macro_bias'].upper()}
+        whale_for_coin = [w for w in whales if w.get("symbol") == coin]
+        whale_str = "\n".join(
+            f"  {'🔴' if w['signal']=='BEARISH_INFLOW' else '🟢'} ${w['amount_usd']}M {w['from']}→{w['to']} ({w['signal']})"
+            for w in whale_for_coin[:2]
+        ) or "  No whale activity"
+
+        coin_blocks.append(f"""
+══ {sym} ══════════════════════════════════════
+Price: ${price:.6f}  |  1h: {chg_1h:+.2f}%  |  24h: {chg_24h:+.2f}%  |  7d: {chg_7d:+.2f}%
+RSI: 1h={rsi_1h:.0f}  4h={rsi_4h:.0f}  1d={rsi_1d:.0f}
+Trend: {'ABOVE' if price > ema20_1h else 'BELOW'} 20EMA(1h)  |  {'ABOVE' if price > ema50_1h else 'BELOW'} 50EMA(1h)  |  {'ABOVE' if price > ema20_4h else 'BELOW'} 20EMA(4h)
+Volume: {vol_trend}  |  Order book pressure: {ob_pressure} (ratio={ob_ratio:.2f})
+ATR(1h): {atr_1h:.6f}  |  Macro bias: {coin_bias.get(coin,'neutral').upper()}
+Support: ${levels.get('support',0):.6f}  |  Resistance: ${levels.get('resistance',0):.6f}
 
 Liquidity clusters:
 {liq_str}
 
-1H candles (last 15):
-{d.get('candles_brief_1h','')}
+Whale activity:
+{whale_str}
+
+1H candles (last 20):
+{fmt_candles(c1h, 20)}
 
 4H candles (last 8):
-{d.get('candles_brief_4h','')}
-"""
+{fmt_candles(c4h, 8)}
+
+1D candles (last 5):
+{fmt_candles(c1d, 5)}
+""")
+        time.sleep(0.5)
+
+    # Load prior trades for context
+    try:
+        import requests as _r
+        render_url = os.environ.get("RENDER_URL", "https://cryptodashboard-nuf5.onrender.com")
+        trades_r = _r.get(f"{render_url}/api/trades", timeout=10)
+        all_trades = trades_r.json() if trades_r.status_code == 200 else []
+    except Exception:
+        all_trades = []
+
+    closed = [t for t in all_trades if t.get("status") in ("win","loss")]
+    open_t = [t for t in all_trades if t.get("status") == "open"]
+
+    trade_ctx = f"Open positions: {len(open_t)} | Closed trades: {len(closed)}"
+    if closed:
+        wins = sum(1 for t in closed if t.get("status") == "win")
+        trade_ctx += f" | Win rate: {wins/len(closed)*100:.0f}%"
+        recent = closed[-5:]
+        trade_ctx += "\nRecent: " + " ".join(
+            f"{'W' if t.get('status')=='win' else 'L'}({t.get('symbol','').replace('USDT','')})"
+            for t in recent
+        )
+
+    open_str = ""
+    if open_t:
+        open_str = "CURRENTLY OPEN (do NOT duplicate these):\n"
+        for t in open_t:
+            open_str += f"  {t.get('symbol')} {t.get('direction')} @ {t.get('entry')} (TP={t.get('tp')} SL={t.get('sl')})\n"
+
+    # Postmortems context
+    postmortems = get_knowledge("loss_patterns", 5) + get_knowledge("win_patterns", 5)
+    pm_str = "\n".join(
+        f"  [{p.get('pattern','')}] {p.get('lesson','')[:80]}"
+        for p in postmortems if p.get("pattern")
+    ) or "  Still building — no patterns yet."
 
     client = _claude()
-    ratings = {}
+    result = {}
+
     if client:
-        prompt = f"""You are the Lead Technical Analyst on a crypto trading desk.
-Macro regime: {macro_regime}
+        prompt = f"""You are a professional crypto trader checking the market. Your job is to find the single best trade available RIGHT NOW and execute it with proper risk management.
 
-Analyze all 5 coins and rate each for trade setup quality RIGHT NOW.
+MARKET CONTEXT:
+Macro regime: {macro_regime} | Fear & Greed: {fear_greed.get('value','?')} ({fear_greed.get('label','?')})
+DeFi TVL: ${defi_tvl.get('total_tvl_bn',0):.1f}B ({defi_tvl.get('tvl_change_24h',0):+.1f}% 24h) — {defi_tvl.get('tvl_signal','?')}
+BTC active addresses: {btc_onchain.get('active_addresses',0):,} ({btc_onchain.get('active_addr_change',0):+.1f}% vs yesterday)
 
-{coins_prompt}
+BOT STATUS:
+{trade_ctx}
+{open_str}
 
-Rate each coin 1-10 for setup quality (10 = ideal setup, 1 = avoid).
-Identify the #1 best trade setup if one exists.
+LESSONS FROM PAST TRADES:
+{pm_str}
 
-TRADE SIGNAL RULES:
-- Only generate a trade_signal if rating >= 8 AND setup is clear
-- entry: exact current price (market entry)
-- tp: next key resistance (LONG) or support (SHORT) — NOT greedy, realistic target
-- sl: below nearest swing low (LONG) or above nearest swing high (SHORT)
-- min R:R must be 1.5:1 or better
-- timeframe: "1h" for swing setups, "4h" for longer holds
-- If no setup meets 8+ rating, set trade_signal to null
+{rules_str}
+
+FULL MARKET DATA:
+{''.join(coin_blocks)}
+
+YOUR TASK AS A TRADER:
+1. Read ALL the data above like a real trader would
+2. Pick the SINGLE best trade available right now based on confluence:
+   - Multiple timeframes agreeing (1h + 4h + 1d trend alignment)
+   - Order book supporting the direction
+   - Volume confirming the move
+   - RSI at a meaningful level (not chasing overbought/oversold)
+   - Liquidity clusters: are stops nearby that would fuel a move?
+   - On-chain and whale data supporting direction
+3. Set entry at current price (market entry)
+4. Set TP at next key level — MINIMUM 2:1 R:R (TP distance must be 2x the SL distance)
+5. Set SL at nearest structural swing low/high — not arbitrary %
+6. If nothing looks good, still pick the BEST option and explain why it's marginal
+
+RISK MANAGEMENT (non-negotiable):
+- R:R must be ≥ 2:1. If the nearest structure doesn't give 2:1, widen TP or tighten SL.
+- Do not open if the same coin+direction is already open
+- ATR-based SL: SL should be 1-1.5× ATR from entry for proper sizing
 
 Respond with ONLY this JSON:
 {{
-  "ratings": {{
-    "BTCUSDT": <1-10>,
-    "ETHUSDT": <1-10>,
-    "XRPUSDT": <1-10>,
-    "DOGEUSDT": <1-10>,
-    "SOLUSDT": <1-10>
-  }},
-  "rating_reasons": {{
-    "BTCUSDT": "<one sentence>",
-    "ETHUSDT": "<one sentence>",
-    "XRPUSDT": "<one sentence>",
-    "DOGEUSDT": "<one sentence>",
-    "SOLUSDT": "<one sentence>"
-  }},
-  "best_setup": "<BTCUSDT|ETHUSDT|XRPUSDT|DOGEUSDT|SOLUSDT|none>",
-  "best_setup_direction": "<long|short|none>",
-  "best_setup_reason": "<2-3 sentences — be specific about what structure/level makes this a good entry>",
-  "trade_signal": {{
+  "best_trade": {{
     "symbol": "<XYZUSDT>",
     "direction": "<LONG|SHORT>",
-    "entry": <price>,
-    "tp": <price>,
-    "sl": <price>,
     "timeframe": "<1h|4h>",
+    "entry": <current_price>,
+    "tp": <take_profit_price>,
+    "sl": <stop_loss_price>,
+    "rr_ratio": <tp_distance / sl_distance>,
     "confidence": <1-10>,
-    "reason": "<specific entry reason — structure, level, confluence>"
+    "confluence_factors": ["<factor1>", "<factor2>", "<factor3>"],
+    "reason": "<2-3 sentences: why this specific trade, what confluence exists, what the setup is>",
+    "risk_note": "<any specific risk to watch>",
+    "setup_quality": "<strong|moderate|marginal>"
   }},
-  "key_levels": {{
-    "BTCUSDT": {{"support": <price>, "resistance": <price>}},
-    "ETHUSDT": {{"support": <price>, "resistance": <price>}},
-    "XRPUSDT": {{"support": <price>, "resistance": <price>}},
-    "DOGEUSDT": {{"support": <price>, "resistance": <price>}},
-    "SOLUSDT": {{"support": <price>, "resistance": <price>}}
-  }},
-  "liquidity_targets": "<where smart money will hunt next, 1-2 sentences>",
-  "market_structure_note": "<overall structure observation, 1-2 sentences>"
+  "market_summary": "<1-2 sentences on overall market state right now>",
+  "coins_to_avoid": ["<sym>"],
+  "avoid_reasons": {{"<sym>": "<reason>"}},
+  "next_check_focus": "<what to watch in the next 15 minutes>"
 }}"""
 
         try:
             msg = client.messages.create(
                 model="claude-sonnet-4-6",
-                max_tokens=2500,
+                max_tokens=2000,
                 messages=[{"role": "user", "content": prompt}],
             )
             raw = msg.content[0].text.strip()
             if raw.startswith("```"):
                 raw = raw.split("```")[1].lstrip("json").strip()
-            # If JSON is truncated, try to close it before parsing
             try:
-                ratings = json.loads(raw)
+                result = json.loads(raw)
             except json.JSONDecodeError:
-                # Attempt to recover truncated JSON by closing open braces
                 open_b = raw.count("{") - raw.count("}")
                 open_a = raw.count("[") - raw.count("]")
                 raw += "]" * max(open_a, 0) + "}" * max(open_b, 0)
                 try:
-                    ratings = json.loads(raw)
+                    result = json.loads(raw)
                 except Exception:
-                    ratings = {}
+                    result = {}
         except Exception as e:
             print(f"[ANALYST AGENT] Claude error: {e}", flush=True)
 
-    result = {
-        "timestamp":      datetime.now(timezone.utc).isoformat(),
-        "ratings":        ratings.get("ratings", {}),
-        "rating_reasons": ratings.get("rating_reasons", {}),
-        "best_setup":     ratings.get("best_setup"),
-        "best_direction": ratings.get("best_setup_direction"),
-        "best_reason":    ratings.get("best_setup_reason"),
-        "trade_signal":   ratings.get("trade_signal"),   # NEW — actual trade to open
-        "key_levels":     ratings.get("key_levels", {}),
-        "liquidity_targets": ratings.get("liquidity_targets"),
-        "structure_note": ratings.get("market_structure_note"),
-        "coin_details":   {s: {k: v for k, v in d.items()
-                               if k not in ("candles_brief_1h", "candles_brief_4h")}
-                           for s, d in coin_details.items()},
+    trade = result.get("best_trade", {})
+    output = {
+        "timestamp":       datetime.now(timezone.utc).isoformat(),
+        "trade_signal":    trade,
+        "market_summary":  result.get("market_summary"),
+        "coins_to_avoid":  result.get("coins_to_avoid", []),
+        "next_focus":      result.get("next_check_focus"),
+        "coin_data":       {s: {k: v for k, v in d.items()
+                                if k not in ("clusters",)} for s, d in coin_data.items()},
     }
 
-    # Save to shared state
-    set_state("analyst_ratings", result)
-    add_report("analyst", "coin_ratings", result)
-    add_knowledge("setup_ratings", {
-        "best":    ratings.get("best_setup"),
-        "ratings": ratings.get("ratings", {}),
-        "note":    ratings.get("market_structure_note"),
-    })
+    set_state("analyst_ratings", output)
+    add_report("analyst", "trade_signal", output)
 
-    # Post to Render
+    if trade:
+        add_knowledge("trade_signals", {
+            "symbol":    trade.get("symbol"),
+            "direction": trade.get("direction"),
+            "quality":   trade.get("setup_quality"),
+            "rr":        trade.get("rr_ratio"),
+            "confidence": trade.get("confidence"),
+            "reason":    trade.get("reason","")[:100],
+        })
+
     post_to_render("/api/agent/insight", {
-        "type":       "analyst_ratings",
-        "agent":      "analyst",
-        "timestamp":  result["timestamp"],
-        "ratings":    result["ratings"],
-        "best_setup": result["best_setup"],
-        "best_direction": result["best_direction"],
-        "best_reason": result["best_reason"],
-        "key_levels": result["key_levels"],
-        "liquidity_targets": result["liquidity_targets"],
+        "type":          "analyst_signal",
+        "agent":         "analyst",
+        "timestamp":     output["timestamp"],
+        "trade_signal":  trade,
+        "market_summary": result.get("market_summary"),
+        "coins_to_avoid": result.get("coins_to_avoid", []),
     })
 
-    best = result.get("best_setup", "none")
-    print(f"[ANALYST AGENT] Done. Best setup: {best} {result.get('best_direction','')} | "
-          f"Ratings: {result.get('ratings')}", flush=True)
-    return result
+    sym  = trade.get("symbol", "none")
+    qual = trade.get("setup_quality", "?")
+    rr   = trade.get("rr_ratio", 0)
+    print(f"[ANALYST AGENT] Done. Signal: {sym} {trade.get('direction','')} | "
+          f"Quality: {qual} | R:R: {rr:.1f}:1 | "
+          f"Confidence: {trade.get('confidence','?')}/10", flush=True)
+    return output
