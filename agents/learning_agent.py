@@ -119,7 +119,7 @@ Write a post-mortem and extract lessons. Respond with ONLY this JSON:
     try:
         msg = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=600,
+            max_tokens=1500,
             messages=[{"role": "user", "content": prompt}],
         )
         raw = msg.content[0].text.strip()
@@ -195,7 +195,7 @@ Identify patterns and propose improvements. Respond with ONLY this JSON:
     try:
         msg = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=700,
+            max_tokens=1500,
             messages=[{"role": "user", "content": prompt}],
         )
         raw = msg.content[0].text.strip()

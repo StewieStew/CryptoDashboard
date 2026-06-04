@@ -293,13 +293,24 @@ Respond with ONLY this JSON:
         try:
             msg = client.messages.create(
                 model="claude-sonnet-4-6",
-                max_tokens=900,
+                max_tokens=2500,
                 messages=[{"role": "user", "content": prompt}],
             )
             raw = msg.content[0].text.strip()
             if raw.startswith("```"):
                 raw = raw.split("```")[1].lstrip("json").strip()
-            ratings = json.loads(raw)
+            # If JSON is truncated, try to close it before parsing
+            try:
+                ratings = json.loads(raw)
+            except json.JSONDecodeError:
+                # Attempt to recover truncated JSON by closing open braces
+                open_b = raw.count("{") - raw.count("}")
+                open_a = raw.count("[") - raw.count("]")
+                raw += "]" * max(open_a, 0) + "}" * max(open_b, 0)
+                try:
+                    ratings = json.loads(raw)
+                except Exception:
+                    ratings = {}
         except Exception as e:
             print(f"[ANALYST AGENT] Claude error: {e}", flush=True)
 
