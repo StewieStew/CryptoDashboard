@@ -1392,6 +1392,55 @@ def _background_scanner() -> None:
                         vwap_val = data.get("vwap") or 0
                         is_immediate = True   # all signals enter immediately at market price
 
+                        # ── AI gate: ask Claude if this trade is worth taking ──
+                        # Calls analyze_signal which returns recommendation:
+                        # "strong_take" | "take" → proceed
+                        # "skip"                 → block the trade
+                        try:
+                            _ai_sig = {
+                                "symbol":           sym,
+                                "direction":        sig["direction"],
+                                "interval":         interval,
+                                "entry":            actual_px,
+                                "current_price":    actual_px,
+                                "tp":               _tp,
+                                "sl":               _sl,
+                                "score":            sig.get("score", 0),
+                                "reason":           sig.get("reason", ""),
+                                "factors_snapshot": sig.get("factors_snapshot", {}),
+                                "adx_value":        data.get("adx", {}).get("value", 0),
+                                "vwap_side":        ("above" if vwap_val and actual_px > vwap_val else "below"),
+                            }
+                            # Deep AI analysis — Sonnet with full candle data, order book,
+                            # news, X sentiment, liquidity clusters, and feedback loop
+                            _candles_tf   = data.get("chart", {}).get("candles", [])
+                            _candles_4h   = bias_cache.get("4h", {}).get("chart", {}).get("candles", [])
+                            _candles_1d   = bias_cache.get("1d", {}).get("chart", {}).get("candles", [])
+                            _ai_result = ai_analysis.analyze_signal_deep(
+                                signal         = _ai_sig,
+                                candles_tf     = _candles_tf,
+                                candles_htf    = _candles_4h,
+                                candles_htf2   = _candles_1d,
+                                trade_history  = learning.get_trades(),
+                                market_context = market_data.get_market_context(sym),
+                            )
+                            _ai_rec = _ai_result.get("recommendation", "take")
+                            if _ai_rec == "skip":
+                                print(
+                                    f"[AI BLOCK] {sym} {interval} {sig['direction']}: "
+                                    f"Claude said skip — {_ai_result.get('reasoning', 'no reason given')[:120]}",
+                                    flush=True,
+                                )
+                                continue
+                            print(
+                                f"[AI OK] {sym} {interval} {sig['direction']}: "
+                                f"{_ai_rec} (confidence={_ai_result.get('confidence', '?')})",
+                                flush=True,
+                            )
+                        except Exception as _ai_e:
+                            # If AI call fails, proceed anyway — don't block on API errors
+                            print(f"[AI GATE] error (proceeding): {_ai_e}", flush=True)
+
                         trade_data = {
                             "id":               trade_id,
                             "symbol":           sym,
@@ -1587,6 +1636,30 @@ def _dip_scanner_loop():
                     "adx_value":        0,
                     "vwap_side":        "unknown",
                 }
+
+                # ── Deep AI gate for dip trades ───────────────────────────────
+                try:
+                    _dip_4h  = full_analysis(sym, "4h").get("chart", {}).get("candles", [])
+                    _dip_1d  = full_analysis(sym, "1d").get("chart", {}).get("candles", [])
+                    _ai_result = ai_analysis.analyze_signal_deep(
+                        signal         = trade_data,
+                        candles_tf     = candles,
+                        candles_htf    = _dip_4h,
+                        candles_htf2   = _dip_1d,
+                        trade_history  = learning.get_trades(),
+                        market_context = market_data.get_market_context(sym),
+                    )
+                    _ai_rec = _ai_result.get("recommendation", "take")
+                    if _ai_rec == "skip":
+                        print(
+                            f"[AI BLOCK DIP] {sym} {direction}: Claude said skip — "
+                            f"{_ai_result.get('reasoning', '')[:120]}",
+                            flush=True,
+                        )
+                        continue
+                    print(f"[AI OK DIP] {sym} {direction}: {_ai_rec}", flush=True)
+                except Exception as _ai_e:
+                    print(f"[AI GATE DIP] error (proceeding): {_ai_e}", flush=True)
 
                 logged = learning.log_trade(trade_data)
                 if logged:

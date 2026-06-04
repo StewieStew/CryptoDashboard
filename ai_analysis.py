@@ -559,3 +559,313 @@ Respond with ONLY this JSON (no markdown, no text outside the JSON):
         return result
     except Exception:
         return {}
+
+
+# ── Deep AI Signal Analysis ───────────────────────────────────────────────────
+
+def analyze_signal_deep(
+    signal: dict,
+    candles_tf: list,          # 200 candles of signal TF
+    candles_htf: list,         # 100 candles of higher TF (4h or 1d)
+    candles_htf2: list,        # 50 candles of even higher TF
+    trade_history: list,
+    market_context: dict,
+) -> dict:
+    """
+    Deep AI analysis using Claude Sonnet. Called before every trade entry.
+
+    Data fed to Claude:
+      - 200 candles of signal TF (OHLCV)
+      - 100 candles of higher TF
+      - 50 candles of highest TF
+      - Binance order book depth (liquidity clusters)
+      - Recent crypto news (web fetch)
+      - Recent X/Twitter sentiment (web search)
+      - Bot's own past AI predictions and outcomes (feedback loop)
+      - Full market context (Fear & Greed, funding, dominance)
+
+    Returns: {recommendation, confidence, reasoning, liquidity_notes,
+              news_sentiment, risks, positives}
+    recommendation: "strong_take" | "take" | "skip"
+    """
+    import requests as _req
+    import numpy as _np
+
+    client = _get_client()
+    if not client:
+        return {}
+
+    sym       = signal.get("symbol", "BTCUSDT").replace("USDT", "")
+    sym_full  = signal.get("symbol", "BTCUSDT")
+    direction = signal.get("direction", "")
+    interval  = signal.get("interval", "1h")
+    entry     = float(signal.get("entry") or 0)
+    tp        = float(signal.get("tp") or signal.get("target") or 0)
+    sl        = float(signal.get("sl") or signal.get("stop") or 0)
+    reason    = signal.get("reason", "")
+    sig_type  = signal.get("signal_type", "")
+
+    # ── 1. Binance order book — find liquidity clusters ──────────────────────
+    liq_summary = "Order book unavailable."
+    try:
+        ob = _req.get(
+            "https://api.binance.us/api/v3/depth",
+            params={"symbol": sym_full, "limit": 100},
+            timeout=8,
+        ).json()
+        bids = [(float(p), float(q)) for p, q in ob.get("bids", [])]
+        asks = [(float(p), float(q)) for p, q in ob.get("asks", [])]
+
+        # Find large walls (top 5 by size on each side)
+        top_bids = sorted(bids, key=lambda x: x[1], reverse=True)[:5]
+        top_asks = sorted(asks, key=lambda x: x[1], reverse=True)[:5]
+
+        bid_walls = ", ".join(f"${p:,.4f} ({q:,.1f})" for p, q in sorted(top_bids, key=lambda x: x[0], reverse=True))
+        ask_walls = ", ".join(f"${p:,.4f} ({q:,.1f})" for p, q in sorted(top_asks, key=lambda x: x[0]))
+
+        # Total bid/ask volume in book — imbalance ratio
+        total_bid_vol = sum(q for _, q in bids[:50])
+        total_ask_vol = sum(q for _, q in asks[:50])
+        imbalance = total_bid_vol / total_ask_vol if total_ask_vol > 0 else 1.0
+        imbalance_str = f"{imbalance:.2f}x ({'BUY' if imbalance > 1.2 else 'SELL' if imbalance < 0.8 else 'NEUTRAL'} pressure)"
+
+        liq_summary = (
+            f"Large BID walls (buy support): {bid_walls}\n"
+            f"Large ASK walls (sell resistance): {ask_walls}\n"
+            f"Order book imbalance (bid/ask vol ratio top-50): {imbalance_str}"
+        )
+    except Exception as _e:
+        liq_summary = f"Order book fetch failed: {_e}"
+
+    # ── 2. Recent news — fetch from CryptoPanic (free, no key needed) ────────
+    news_summary = "News unavailable."
+    try:
+        news_r = _req.get(
+            "https://cryptopanic.com/api/free/v1/posts/",
+            params={"auth_token": "free", "currencies": sym, "public": "true", "filter": "hot"},
+            timeout=8,
+        )
+        news_data = news_r.json()
+        headlines = []
+        for item in news_data.get("results", [])[:8]:
+            title = item.get("title", "")
+            votes = item.get("votes", {})
+            sentiment = "🐂" if votes.get("positive", 0) > votes.get("negative", 0) else "🐻" if votes.get("negative", 0) > votes.get("positive", 0) else "—"
+            headlines.append(f"{sentiment} {title}")
+        news_summary = "\n".join(headlines) if headlines else "No recent news found."
+    except Exception:
+        news_summary = "News fetch failed."
+
+    # ── 3. X/Twitter sentiment — search via Nitter or web ────────────────────
+    x_summary = "X sentiment unavailable."
+    try:
+        # Use DuckDuckGo search for recent X posts about the coin
+        search_r = _req.get(
+            "https://api.duckduckgo.com/",
+            params={"q": f"#{sym} crypto site:x.com OR site:twitter.com", "format": "json", "no_html": "1"},
+            timeout=8,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        ddg = search_r.json()
+        topics = ddg.get("RelatedTopics", [])[:5]
+        snippets = [t.get("Text", "") for t in topics if t.get("Text")]
+        x_summary = "\n".join(snippets[:4]) if snippets else "No X sentiment data found."
+    except Exception:
+        x_summary = "X sentiment fetch failed."
+
+    # ── 4. Equal highs/lows — liquidity pool detection ────────────────────────
+    liquidity_pools = []
+    try:
+        if candles_tf and len(candles_tf) >= 50:
+            highs  = [c["high"]  for c in candles_tf[-100:]]
+            lows   = [c["low"]   for c in candles_tf[-100:]]
+            closes = [c["close"] for c in candles_tf[-100:]]
+
+            # Find clusters of highs within 0.3% of each other (equal highs = resting sell stops)
+            for i in range(len(highs)):
+                cluster = [h for h in highs if abs(h - highs[i]) / highs[i] < 0.003]
+                if len(cluster) >= 3:
+                    pool_px = round(sum(cluster) / len(cluster), 6)
+                    liquidity_pools.append(f"SELL STOPS cluster near ${pool_px:,.4f} ({len(cluster)} equal highs)")
+
+            # Find clusters of lows (equal lows = resting buy stops)
+            for i in range(len(lows)):
+                cluster = [l for l in lows if abs(l - lows[i]) / lows[i] < 0.003]
+                if len(cluster) >= 3:
+                    pool_px = round(sum(cluster) / len(cluster), 6)
+                    liquidity_pools.append(f"BUY STOPS cluster near ${pool_px:,.4f} ({len(cluster)} equal lows)")
+
+            # Deduplicate
+            seen = set()
+            unique_pools = []
+            for p in liquidity_pools:
+                key = p[:40]
+                if key not in seen:
+                    seen.add(key)
+                    unique_pools.append(p)
+            liquidity_pools = unique_pools[:8]
+    except Exception:
+        pass
+
+    liq_pools_str = "\n".join(liquidity_pools) if liquidity_pools else "No clear liquidity clusters detected."
+
+    # ── 5. AI feedback loop — past predictions and outcomes ───────────────────
+    ai_feedback = ""
+    try:
+        closed = [t for t in trade_history if t.get("status") in ("win", "loss")]
+        recent = [t for t in closed if t.get("ai_analysis")][-10:]
+        if recent:
+            feedback_lines = []
+            for t in recent:
+                try:
+                    ai_prev = json.loads(t["ai_analysis"]) if isinstance(t["ai_analysis"], str) else t["ai_analysis"]
+                    prev_rec = ai_prev.get("recommendation", "?")
+                    outcome  = t.get("status", "?")
+                    roi      = t.get("roi_pct", 0) or 0
+                    correct  = (prev_rec in ("take", "strong_take") and outcome == "win") or (prev_rec == "skip" and outcome == "loss")
+                    feedback_lines.append(
+                        f"  {t.get('symbol')} {t.get('interval')} {t.get('direction')}: "
+                        f"AI said '{prev_rec}' → outcome={outcome} ({roi:+.2f}%) {'✓' if correct else '✗'}"
+                    )
+                except Exception:
+                    pass
+            if feedback_lines:
+                ai_feedback = "Past AI predictions and outcomes (learn from these):\n" + "\n".join(feedback_lines)
+    except Exception:
+        pass
+
+    # ── 6. Format candle summaries ────────────────────────────────────────────
+    def _fmt_candles(candles: list, label: str, limit: int = 50) -> str:
+        if not candles:
+            return f"{label}: no data"
+        c = candles[-limit:]
+        rows = []
+        for i, bar in enumerate(c):
+            chg = (bar["close"] - bar["open"]) / bar["open"] * 100 if bar["open"] else 0
+            rows.append(
+                f"  [{i+1:3d}] O={bar['open']:.4f} H={bar['high']:.4f} "
+                f"L={bar['low']:.4f} C={bar['close']:.4f} "
+                f"V={bar.get('volume',0):,.0f} ({chg:+.2f}%)"
+            )
+        return f"{label} (last {len(c)} bars):\n" + "\n".join(rows)
+
+    candle_block   = _fmt_candles(candles_tf,   f"{sym_full} {interval}",   60)
+    htf_block      = _fmt_candles(candles_htf,  f"{sym_full} 4h",           30)
+    htf2_block     = _fmt_candles(candles_htf2, f"{sym_full} 1d",           14)
+
+    # ── 7. Market context ─────────────────────────────────────────────────────
+    fg      = market_context.get("fear_greed", {})
+    btc_dom = market_context.get("btc_dominance", 0)
+    funding = market_context.get("funding_rate", 0)
+    ctx_str = f"""Fear & Greed: {fg.get('value','?')} — {fg.get('label','?')}
+BTC Dominance: {btc_dom:.1f}%
+Funding Rate: {funding:+.4f}% ({'longs paying' if funding > 0 else 'shorts paying'})"""
+
+    # ── 8. Bot performance context ────────────────────────────────────────────
+    closed_all  = [t for t in trade_history if t.get("status") in ("win", "loss")]
+    total_trades = len(closed_all)
+    wins_all    = sum(1 for t in closed_all if t.get("status") == "win")
+    win_rate    = wins_all / total_trades * 100 if total_trades else 0
+    recent_5    = closed_all[-5:]
+    recent_str  = " ".join("W" if t.get("status") == "win" else "L" for t in recent_5)
+
+    rr = abs((tp - entry) / (entry - sl)) if entry != sl else 0
+
+    # ── 9. Build the prompt ───────────────────────────────────────────────────
+    prompt = f"""You are a professional crypto trading analyst with deep expertise in price action, liquidity, order flow, and market microstructure. Your job is to evaluate whether this trade setup should be taken or skipped.
+
+═══════════════════════════════════════════════════════════
+TRADE SETUP
+═══════════════════════════════════════════════════════════
+Symbol:    {sym_full}
+Direction: {direction}
+Timeframe: {interval}
+Signal:    {sig_type}
+Reason:    {reason}
+Entry:     {_fmt(entry)}
+TP:        {_fmt(tp)}  ({abs((tp-entry)/entry*100):.2f}% away)
+SL:        {_fmt(sl)}  ({abs((sl-entry)/entry*100):.2f}% away)
+R:R ratio: {rr:.2f}:1
+
+═══════════════════════════════════════════════════════════
+MACRO MARKET CONTEXT
+═══════════════════════════════════════════════════════════
+{ctx_str}
+
+Bot performance: {total_trades} closed trades, {win_rate:.0f}% win rate
+Recent 5 trades: {recent_str if recent_str else 'none yet'}
+
+═══════════════════════════════════════════════════════════
+PRICE ACTION — {interval.upper()} CHART (60 bars)
+═══════════════════════════════════════════════════════════
+{candle_block}
+
+═══════════════════════════════════════════════════════════
+HIGHER TIMEFRAME — 4H (30 bars)
+═══════════════════════════════════════════════════════════
+{htf_block}
+
+═══════════════════════════════════════════════════════════
+DAILY CHART (14 bars)
+═══════════════════════════════════════════════════════════
+{htf2_block}
+
+═══════════════════════════════════════════════════════════
+LIQUIDITY CLUSTERS (equal highs/lows where stops rest)
+═══════════════════════════════════════════════════════════
+{liq_pools_str}
+
+═══════════════════════════════════════════════════════════
+ORDER BOOK DEPTH (live Binance)
+═══════════════════════════════════════════════════════════
+{liq_summary}
+
+═══════════════════════════════════════════════════════════
+RECENT NEWS
+═══════════════════════════════════════════════════════════
+{news_summary}
+
+═══════════════════════════════════════════════════════════
+X / SOCIAL SENTIMENT
+═══════════════════════════════════════════════════════════
+{x_summary}
+
+═══════════════════════════════════════════════════════════
+AI FEEDBACK LOOP (your past predictions vs outcomes)
+═══════════════════════════════════════════════════════════
+{ai_feedback if ai_feedback else 'No prior AI predictions to learn from yet.'}
+
+═══════════════════════════════════════════════════════════
+YOUR ANALYSIS TASK
+═══════════════════════════════════════════════════════════
+Analyze ALL of the above. Consider:
+
+1. TREND ALIGNMENT: Do all three timeframes (signal TF, 4h, daily) agree on direction?
+2. LIQUIDITY: Is this trade entering INTO a liquidity cluster (dangerous) or AWAY from one (safe)? Where are stops likely resting that could fuel a move in trade direction?
+3. ORDER BOOK: Does the live order book support this direction? Any large walls that would stop the move?
+4. NEWS/SENTIMENT: Any catalysts that support or oppose this trade?
+5. STRUCTURE: Is the entry at a meaningful level (broken structure retest, strong S/R) or just noise?
+6. RISK: What specifically could go wrong?
+
+SKIP RULES (non-negotiable):
+- Skip if daily trend opposes the signal direction
+- Skip if entering directly into a large liquidity cluster (likely to reverse)
+- Skip if negative news catalyst present
+- Skip if Fear & Greed below 20 (extreme fear) for longs, above 80 for shorts
+- Skip if order book shows massive wall directly in path of TP
+
+Respond with ONLY this JSON (no markdown, no extra text):
+{{"recommendation": "<strong_take|take|skip>", "confidence": <0-100>, "reasoning": "<3-4 sentences explaining your decision>", "liquidity_notes": "<1-2 sentences on key liquidity levels near entry/TP/SL>", "news_sentiment": "<bullish|bearish|neutral>", "trend_alignment": "<aligned|opposed|mixed>", "risks": ["<specific risk 1>", "<specific risk 2>"], "positives": ["<positive 1>", "<positive 2>"]}}"""
+
+    try:
+        msg = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1].lstrip("json").strip()
+        return json.loads(raw)
+    except Exception as e:
+        return {"error": str(e)}
