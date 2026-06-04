@@ -20,7 +20,7 @@ import anthropic
 import numpy as np
 
 from agents.state import (set_state, get_state, add_report, add_knowledge,
-                           post_to_render)
+                           get_knowledge, post_to_render)
 
 COINS         = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "DOGEUSDT", "SOLUSDT"]
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -325,44 +325,44 @@ FULL MARKET DATA:
 {''.join(coin_blocks)}
 
 YOUR TASK AS A TRADER:
-1. Read ALL the data above like a real trader would
-2. Pick the SINGLE best trade available right now based on confluence:
-   - Multiple timeframes agreeing (1h + 4h + 1d trend alignment)
-   - Order book supporting the direction
-   - Volume confirming the move
-   - RSI at a meaningful level (not chasing overbought/oversold)
-   - Liquidity clusters: are stops nearby that would fuel a move?
-   - On-chain and whale data supporting direction
-3. Set entry at current price (market entry)
-4. Set TP at next key level — MINIMUM 2:1 R:R (TP distance must be 2x the SL distance)
-5. Set SL at nearest structural swing low/high — not arbitrary %
-6. If nothing looks good, still pick the BEST option and explain why it's marginal
+A real trader runs positions on MULTIPLE timeframes simultaneously — a 4h swing trade and a 15m scalp can both be open at the same time on different coins.
+
+1. Read ALL the data above like a real trader
+2. Find UP TO 3 trades across different coins AND timeframes (15m, 1h, 4h):
+   - Each trade needs its own confluence: order book, volume, RSI, structure, liquidity
+   - 15m trades: tighter SL, quicker TP, need strong momentum signal
+   - 1h trades: structural entries, good for trending setups
+   - 4h trades: swing setups, wider SL, bigger TP targets
+3. Entry at current price. TP at next key level. SL at nearest structural swing.
+4. MINIMUM 2:1 R:R on every trade — non-negotiable
+5. Do NOT suggest a trade if the same coin+direction is already in open_positions above
 
 RISK MANAGEMENT (non-negotiable):
-- R:R must be ≥ 2:1. If the nearest structure doesn't give 2:1, widen TP or tighten SL.
-- Do not open if the same coin+direction is already open
-- ATR-based SL: SL should be 1-1.5× ATR from entry for proper sizing
+- R:R ≥ 2:1 on every trade
+- No duplicate coin+direction already open
+- ATR-based SL: 1-1.5× ATR for proper sizing
 
 Respond with ONLY this JSON:
 {{
-  "best_trade": {{
-    "symbol": "<XYZUSDT>",
-    "direction": "<LONG|SHORT>",
-    "timeframe": "<1h|4h>",
-    "entry": <current_price>,
-    "tp": <take_profit_price>,
-    "sl": <stop_loss_price>,
-    "rr_ratio": <tp_distance / sl_distance>,
-    "confidence": <1-10>,
-    "confluence_factors": ["<factor1>", "<factor2>", "<factor3>"],
-    "reason": "<2-3 sentences: why this specific trade, what confluence exists, what the setup is>",
-    "risk_note": "<any specific risk to watch>",
-    "setup_quality": "<strong|moderate|marginal>"
-  }},
-  "market_summary": "<1-2 sentences on overall market state right now>",
+  "trades": [
+    {{
+      "symbol": "<XYZUSDT>",
+      "direction": "<LONG|SHORT>",
+      "timeframe": "<15m|1h|4h>",
+      "entry": <current_price>,
+      "tp": <take_profit_price>,
+      "sl": <stop_loss_price>,
+      "rr_ratio": <tp_dist / sl_dist>,
+      "confidence": <1-10>,
+      "confluence_factors": ["<factor1>", "<factor2>", "<factor3>"],
+      "reason": "<2-3 sentences: specific setup, confluence, why now>",
+      "risk_note": "<specific risk>",
+      "setup_quality": "<strong|moderate|marginal>"
+    }}
+  ],
+  "market_summary": "<1-2 sentences on overall market>",
   "coins_to_avoid": ["<sym>"],
-  "avoid_reasons": {{"<sym>": "<reason>"}},
-  "next_check_focus": "<what to watch in the next 15 minutes>"
+  "next_check_focus": "<what to watch next cycle>"
 }}"""
 
         try:
@@ -387,10 +387,18 @@ Respond with ONLY this JSON:
         except Exception as e:
             print(f"[ANALYST AGENT] Claude error: {e}", flush=True)
 
-    trade = result.get("best_trade", {})
+    # Handle both old single-trade and new multi-trade response formats
+    trades = result.get("trades", [])
+    if not trades and result.get("best_trade"):
+        trades = [result["best_trade"]]  # backward compat
+
+    # Use the highest-confidence trade as the primary signal for dashboard display
+    trade = max(trades, key=lambda t: t.get("confidence", 0)) if trades else {}
+
     output = {
         "timestamp":       datetime.now(timezone.utc).isoformat(),
-        "trade_signal":    trade,
+        "trade_signal":    trade,       # primary signal (highest confidence)
+        "all_signals":     trades,      # all signals this cycle
         "market_summary":  result.get("market_summary"),
         "coins_to_avoid":  result.get("coins_to_avoid", []),
         "next_focus":      result.get("next_check_focus"),
@@ -401,14 +409,15 @@ Respond with ONLY this JSON:
     set_state("analyst_ratings", output)
     add_report("analyst", "trade_signal", output)
 
-    if trade:
+    for t in trades:
         add_knowledge("trade_signals", {
-            "symbol":    trade.get("symbol"),
-            "direction": trade.get("direction"),
-            "quality":   trade.get("setup_quality"),
-            "rr":        trade.get("rr_ratio"),
-            "confidence": trade.get("confidence"),
-            "reason":    trade.get("reason","")[:100],
+            "symbol":     t.get("symbol"),
+            "direction":  t.get("direction"),
+            "timeframe":  t.get("timeframe"),
+            "quality":    t.get("setup_quality"),
+            "rr":         t.get("rr_ratio"),
+            "confidence": t.get("confidence"),
+            "reason":     t.get("reason","")[:100],
         })
 
     post_to_render("/api/agent/insight", {
@@ -416,14 +425,14 @@ Respond with ONLY this JSON:
         "agent":         "analyst",
         "timestamp":     output["timestamp"],
         "trade_signal":  trade,
+        "all_signals":   trades,
         "market_summary": result.get("market_summary"),
         "coins_to_avoid": result.get("coins_to_avoid", []),
     })
 
-    sym  = trade.get("symbol", "none")
-    qual = trade.get("setup_quality", "?")
-    rr   = trade.get("rr_ratio", 0)
-    print(f"[ANALYST AGENT] Done. Signal: {sym} {trade.get('direction','')} | "
-          f"Quality: {qual} | R:R: {rr:.1f}:1 | "
-          f"Confidence: {trade.get('confidence','?')}/10", flush=True)
+    print(f"[ANALYST AGENT] Done. {len(trades)} signal(s):", flush=True)
+    for t in trades:
+        print(f"  {t.get('symbol')} {t.get('direction')} {t.get('timeframe')} | "
+              f"R:R {t.get('rr_ratio',0):.1f}:1 | {t.get('setup_quality')} | "
+              f"confidence {t.get('confidence')}/10", flush=True)
     return output

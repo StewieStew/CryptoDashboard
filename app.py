@@ -1820,135 +1820,112 @@ def _agent_trade_executor() -> None:
                         analyst_data = insight
                         break
 
-            trade_signal = analyst_data.get("trade_signal")
-            if not trade_signal or not isinstance(trade_signal, dict):
+            # Support both multi-signal (all_signals) and single trade_signal
+            all_signals = analyst_data.get("all_signals") or []
+            if not all_signals:
+                single = analyst_data.get("trade_signal")
+                if single and isinstance(single, dict) and single.get("symbol"):
+                    all_signals = [single]
+
+            if not all_signals:
                 time.sleep(300)
                 continue
 
-            sym       = trade_signal.get("symbol", "")
-            direction = (trade_signal.get("direction") or "").upper()
-            entry_px  = float(trade_signal.get("entry")  or 0)
-            tp        = float(trade_signal.get("tp")     or 0)
-            sl        = float(trade_signal.get("sl")     or 0)
-            tf        = trade_signal.get("timeframe", "1h")
-            confidence= float(trade_signal.get("confidence") or 5)
-            reason    = trade_signal.get("reason", "AI agent signal")
-            quality   = trade_signal.get("setup_quality", "moderate")
-            factors   = trade_signal.get("confluence_factors", [])
-
-            if not sym or direction not in ("LONG","SHORT") or not entry_px or not tp or not sl:
-                time.sleep(300)
-                continue
-
-            # ── Gate 1: R:R ≥ 2:1 ────────────────────────────────────────
-            tp_dist = abs(tp - entry_px)
-            sl_dist = abs(sl - entry_px)
-            rr = tp_dist / sl_dist if sl_dist > 0 else 0
-            if rr < MIN_RR_RATIO:
-                print(f"[AGENT EXEC] {sym} {direction}: R:R={rr:.2f} < {MIN_RR_RATIO} — skipping", flush=True)
-                time.sleep(300)
-                continue
-
-            # ── Gate 2: Max open trades ───────────────────────────────────
-            open_count = len([t for t in learning.get_trades()
-                              if t.get("status") == "open"])
-            if open_count >= MAX_OPEN_TRADES:
-                print(f"[AGENT EXEC] {sym}: max open trades ({MAX_OPEN_TRADES}) reached", flush=True)
-                time.sleep(300)
-                continue
-
-            # ── Gate 3: Daily loss limit ──────────────────────────────────
+            # Check daily loss limit once before iterating
             daily_pnl = _check_daily_pnl()
             if daily_pnl <= -(DAILY_LOSS_LIMIT * 100):
-                print(f"[AGENT EXEC] Daily loss limit hit ({daily_pnl:.2f}%) — pausing trading", flush=True)
-                time.sleep(1800)  # wait 30 min before checking again
+                print(f"[AGENT EXEC] Daily loss limit hit ({daily_pnl:.2f}%) — pausing", flush=True)
+                time.sleep(1800)
                 continue
 
-            # ── Gate 4: No duplicate ──────────────────────────────────────
-            if learning.has_active_trade(sym, tf, direction):
-                print(f"[AGENT EXEC] {sym} {direction}: already open", flush=True)
-                time.sleep(300)
-                continue
+            # Try to open each signal — multiple timeframes/coins can open simultaneously
+            import requests as _req_exec
+            for _sig in all_signals:
+                if not isinstance(_sig, dict):
+                    continue
 
-            # ── Gate 5: Cooldown ──────────────────────────────────────────
-            cooldown_key = f"{sym}_{direction}"
-            if time.time() - _agent_signal_cooldown.get(cooldown_key, 0) < SIGNAL_COOLDOWN:
-                time.sleep(300)
-                continue
+                _sym   = _sig.get("symbol", "")
+                _dir   = (_sig.get("direction") or "").upper()
+                _entry = float(_sig.get("entry") or 0)
+                _tp    = float(_sig.get("tp")    or 0)
+                _sl    = float(_sig.get("sl")    or 0)
+                _tf    = _sig.get("timeframe", "1h")
+                _conf  = float(_sig.get("confidence") or 5)
+                _rsn   = _sig.get("reason", "AI agent signal")
+                _qual  = _sig.get("setup_quality", "moderate")
+                _fact  = _sig.get("confluence_factors", [])
 
-            # ── Get live price ────────────────────────────────────────────
-            try:
-                import requests as _req
-                px_r = _req.get("https://api.binance.us/api/v3/ticker/price",
-                                params={"symbol": sym}, timeout=8)
-                live_px = float(px_r.json()["price"])
-            except Exception:
-                live_px = entry_px
+                if not _sym or _dir not in ("LONG","SHORT") or not _entry or not _tp or not _sl:
+                    continue
 
-            # ── Gate 6: SL not already crossed ───────────────────────────
-            if direction == "LONG"  and live_px <= sl:
-                print(f"[AGENT EXEC] {sym}: already below SL {sl:.6f}", flush=True)
-                time.sleep(300)
-                continue
-            if direction == "SHORT" and live_px >= sl:
-                print(f"[AGENT EXEC] {sym}: already above SL {sl:.6f}", flush=True)
-                time.sleep(300)
-                continue
+                # Gate 1: R:R
+                _tpd = abs(_tp - _entry); _sld = abs(_sl - _entry)
+                _rr  = _tpd / _sld if _sld > 0 else 0
+                if _rr < MIN_RR_RATIO:
+                    print(f"[AGENT EXEC] {_sym} {_dir}: R:R={_rr:.2f} < {MIN_RR_RATIO}", flush=True)
+                    continue
 
-            # ── All gates passed — OPEN TRADE ─────────────────────────────
-            trade_id = str(uuid.uuid4())
-            trade_data = {
-                "id":               trade_id,
-                "symbol":           sym,
-                "interval":         tf,
-                "direction":        direction,
-                "entry":            live_px,
-                "current_price":    live_px,
-                "tp":               tp,
-                "sl":               sl,
-                "score":            confidence,
-                "effective_score":  confidence,
-                "reason":           reason,
-                "factors_snapshot": {
-                    "confidence":         confidence,
-                    "rr_ratio":           round(rr, 2),
-                    "setup_quality":      quality,
-                    "confluence_factors": factors,
-                    "agent_driven":       True,
-                },
-                "target_basis":  "agent_analysis",
-                "tp_source":     "agent_analysis",
-                "opened_at":     datetime.now(timezone.utc).isoformat(),
-                "status":        "open",
-                "adx_value":     0,
-                "vwap_side":     "unknown",
-                "signal_type":   "AGENT_DRIVEN",
-            }
+                # Gate 2: Max open
+                _open_n = len([t for t in learning.get_trades() if t.get("status") == "open"])
+                if _open_n >= MAX_OPEN_TRADES:
+                    print(f"[AGENT EXEC] Max open trades reached — skipping {_sym}", flush=True)
+                    break  # no point checking more signals
 
-            logged = learning.log_trade(trade_data)
-            if logged:
-                _agent_signal_cooldown[cooldown_key] = time.time()
-                print(
-                    f"[AGENT EXEC] ✅ TRADE OPENED: {sym} {direction} @ {live_px:.6f}"
-                    f" | TP={tp:.6f} SL={sl:.6f} | R:R={rr:.1f}:1 | "
-                    f"quality={quality} confidence={confidence:.0f}/10",
-                    flush=True,
-                )
-                print(f"[AGENT EXEC]   Confluence: {', '.join(factors[:4])}", flush=True)
-                notifications.send_signal_alert({
-                    "symbol":       sym,
-                    "interval":     tf,
-                    "direction":    direction,
-                    "entry":        live_px,
-                    "tp":           tp,
-                    "sl":           sl,
-                    "score":        confidence,
-                    "reason":       f"[R:R {rr:.1f}:1 | {quality}] {reason}",
-                    "target_basis": "agent_analysis",
-                    "ai_analysis":  {"confluence": factors},
-                    "pending":      False,
-                    "current_price": live_px,
-                })
+                # Gate 3: No duplicate
+                if learning.has_active_trade(_sym, _tf, _dir):
+                    print(f"[AGENT EXEC] {_sym} {_dir} {_tf}: already open", flush=True)
+                    continue
+
+                # Gate 4: Cooldown
+                _ck = f"{_sym}_{_dir}_{_tf}"
+                if time.time() - _agent_signal_cooldown.get(_ck, 0) < SIGNAL_COOLDOWN:
+                    continue
+
+                # Get live price
+                try:
+                    _px_r  = _req_exec.get("https://api.binance.us/api/v3/ticker/price",
+                                           params={"symbol": _sym}, timeout=8)
+                    _live  = float(_px_r.json()["price"])
+                except Exception:
+                    _live  = _entry
+
+                # Gate 5: SL not already crossed
+                if _dir == "LONG"  and _live <= _sl:
+                    print(f"[AGENT EXEC] {_sym}: below SL already", flush=True)
+                    continue
+                if _dir == "SHORT" and _live >= _sl:
+                    print(f"[AGENT EXEC] {_sym}: above SL already", flush=True)
+                    continue
+
+                # All gates passed — open trade
+                _tid = str(uuid.uuid4())
+                _td  = {
+                    "id": _tid, "symbol": _sym, "interval": _tf,
+                    "direction": _dir, "entry": _live, "current_price": _live,
+                    "tp": _tp, "sl": _sl, "score": _conf, "effective_score": _conf,
+                    "reason": _rsn,
+                    "factors_snapshot": {
+                        "confidence": _conf, "rr_ratio": round(_rr, 2),
+                        "setup_quality": _qual, "confluence_factors": _fact,
+                        "agent_driven": True,
+                    },
+                    "target_basis": "agent_analysis", "tp_source": "agent_analysis",
+                    "opened_at": datetime.now(timezone.utc).isoformat(),
+                    "status": "open", "adx_value": 0, "vwap_side": "unknown",
+                    "signal_type": "AGENT_DRIVEN",
+                }
+                if learning.log_trade(_td):
+                    _agent_signal_cooldown[_ck] = time.time()
+                    print(f"[AGENT EXEC] ✅ {_sym} {_dir} {_tf} @ {_live:.6f}"
+                          f" | TP={_tp:.6f} SL={_sl:.6f} | R:R={_rr:.1f}:1 | {_qual}", flush=True)
+                    notifications.send_signal_alert({
+                        "symbol": _sym, "interval": _tf, "direction": _dir,
+                        "entry": _live, "tp": _tp, "sl": _sl, "score": _conf,
+                        "reason": f"[{_tf} R:R {_rr:.1f}:1 {_qual}] {_rsn}",
+                        "target_basis": "agent_analysis",
+                        "ai_analysis": {"confluence": _fact},
+                        "pending": False, "current_price": _live,
+                    })
 
         except Exception as e:
             print(f"[AGENT EXEC] Error: {e}", flush=True)
