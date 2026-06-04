@@ -1857,6 +1857,60 @@ def _agent_trade_executor() -> None:
                 time.sleep(300)
                 continue
 
+            # ── Gate 3b: Strategy rules from Learning Agent ───────────────
+            # Rules are written automatically as the bot learns from trades.
+            # No human input needed — system enforces its own learned strategy.
+            try:
+                import sqlite3 as _sqlite3
+                from pathlib import Path as _Path
+                _rules_db = _Path.home() / "CryptoDashboard" / "agent_kb" / "agent_state.db"
+                _rules = []
+                if _rules_db.exists():
+                    _rconn = _sqlite3.connect(str(_rules_db))
+                    _row = _rconn.execute(
+                        "SELECT value FROM agent_state WHERE key='strategy_rules'"
+                    ).fetchone()
+                    _rconn.close()
+                    if _row:
+                        _rules = json.loads(_row[0])
+
+                coin = sym.replace("USDT", "")
+                for rule in _rules:
+                    rt    = rule.get("rule_type", "")
+                    coins = rule.get("coins", [])
+                    rdir  = rule.get("direction", "both")
+                    val   = rule.get("value", "")
+                    conf  = int(rule.get("confidence", 0))
+
+                    if conf < 7:
+                        continue   # only enforce high-confidence rules
+
+                    # Check if this rule applies to this coin+direction
+                    applies = (sym in coins or coin in coins or not coins)
+                    dir_match = rdir in ("both", direction)
+
+                    if not applies or not dir_match:
+                        continue
+
+                    if rt == "block_direction":
+                        print(f"[AGENT EXEC] {sym} {direction}: RULE BLOCK — {rule.get('reason','')[:80]}", flush=True)
+                        break  # blocked
+
+                    if rt == "require_regime" and macro_data.get("regime"):
+                        if macro_data.get("regime") != val:
+                            print(f"[AGENT EXEC] {sym} {direction}: RULE BLOCK (require_regime={val}, current={macro_data.get('regime')}) — {rule.get('reason','')[:60]}", flush=True)
+                            break
+
+                    if rt == "min_confidence":
+                        if confidence < int(val or 0):
+                            print(f"[AGENT EXEC] {sym} {direction}: RULE BLOCK (min_confidence={val}, got={confidence}) — {rule.get('reason','')[:60]}", flush=True)
+                            break
+                else:
+                    pass  # no rule blocked it — continue
+
+            except Exception as _re:
+                pass  # rules check errors never block a trade
+
             # ── Gate 4: No existing open trade for this coin ─────────────
             if learning.has_active_trade(sym, tf, direction):
                 print(f"[AGENT EXEC] {sym} {direction}: already have open trade", flush=True)
