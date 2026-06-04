@@ -1697,6 +1697,69 @@ def _dip_scanner_loop():
 threading.Thread(target=_dip_scanner_loop, daemon=True).start()
 
 
+# ── Local Agent Intelligence Endpoints ───────────────────────────────────────
+
+_agent_insights: list = []   # last 100 intelligence reports from Mac Mini agent
+_agent_reports:  list = []   # last 100 post-mortems / improvement reports
+_agent_lock = threading.Lock()
+MAX_AGENT_HISTORY = 100
+
+
+@app.route("/api/agent/insight", methods=["POST"])
+def agent_insight():
+    """Receive market intelligence from the Mac Mini local agent."""
+    body = request.get_json() or {}
+    body["received_at"] = datetime.now(timezone.utc).isoformat()
+    with _agent_lock:
+        _agent_insights.append(body)
+        if len(_agent_insights) > MAX_AGENT_HISTORY:
+            _agent_insights.pop(0)
+    return jsonify({"status": "received", "count": len(_agent_insights)})
+
+
+@app.route("/api/agent/report", methods=["POST"])
+def agent_report():
+    """Receive post-mortems and improvement suggestions from the local agent."""
+    body = request.get_json() or {}
+    body["received_at"] = datetime.now(timezone.utc).isoformat()
+    with _agent_lock:
+        _agent_reports.append(body)
+        if len(_agent_reports) > MAX_AGENT_HISTORY:
+            _agent_reports.pop(0)
+    # If it's a postmortem, attach it to the trade record
+    if body.get("type") == "postmortem" and body.get("trade_id"):
+        try:
+            db = learning._get_db()
+            db.execute(
+                "UPDATE trades SET ai_analysis=? WHERE id=?",
+                (json.dumps({"postmortem": body.get("analysis"), "source": "local_agent"}),
+                 body["trade_id"])
+            )
+            db.commit()
+            db.close()
+        except Exception:
+            pass
+    return jsonify({"status": "received"})
+
+
+@app.route("/api/agent/intelligence")
+def agent_intelligence():
+    """Return latest agent intelligence for the dashboard."""
+    with _agent_lock:
+        latest_insight  = _agent_insights[-1]  if _agent_insights  else {}
+        latest_report   = _agent_reports[-1]   if _agent_reports   else {}
+        recent_insights = _agent_insights[-10:]
+        recent_reports  = _agent_reports[-10:]
+    return jsonify({
+        "latest_market_analysis": latest_insight,
+        "latest_report":          latest_report,
+        "recent_insights":        recent_insights,
+        "recent_reports":         recent_reports,
+        "total_insights":         len(_agent_insights),
+        "total_reports":          len(_agent_reports),
+    })
+
+
 # ── Weekly review job ─────────────────────────────────────────────────────────
 
 def _weekly_review_job() -> dict:
