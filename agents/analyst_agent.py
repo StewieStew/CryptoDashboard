@@ -241,6 +241,15 @@ Analyze all 5 coins and rate each for trade setup quality RIGHT NOW.
 Rate each coin 1-10 for setup quality (10 = ideal setup, 1 = avoid).
 Identify the #1 best trade setup if one exists.
 
+TRADE SIGNAL RULES:
+- Only generate a trade_signal if rating >= 8 AND setup is clear
+- entry: exact current price (market entry)
+- tp: next key resistance (LONG) or support (SHORT) — NOT greedy, realistic target
+- sl: below nearest swing low (LONG) or above nearest swing high (SHORT)
+- min R:R must be 1.5:1 or better
+- timeframe: "1h" for swing setups, "4h" for longer holds
+- If no setup meets 8+ rating, set trade_signal to null
+
 Respond with ONLY this JSON:
 {{
   "ratings": {{
@@ -257,9 +266,19 @@ Respond with ONLY this JSON:
     "DOGEUSDT": "<one sentence>",
     "SOLUSDT": "<one sentence>"
   }},
-  "best_setup": "<coin or none>",
+  "best_setup": "<BTCUSDT|ETHUSDT|XRPUSDT|DOGEUSDT|SOLUSDT|none>",
   "best_setup_direction": "<long|short|none>",
-  "best_setup_reason": "<2-3 sentences on why this is the best setup>",
+  "best_setup_reason": "<2-3 sentences — be specific about what structure/level makes this a good entry>",
+  "trade_signal": {{
+    "symbol": "<XYZUSDT>",
+    "direction": "<LONG|SHORT>",
+    "entry": <price>,
+    "tp": <price>,
+    "sl": <price>,
+    "timeframe": "<1h|4h>",
+    "confidence": <1-10>,
+    "reason": "<specific entry reason — structure, level, confluence>"
+  }},
   "key_levels": {{
     "BTCUSDT": {{"support": <price>, "resistance": <price>}},
     "ETHUSDT": {{"support": <price>, "resistance": <price>}},
@@ -285,18 +304,19 @@ Respond with ONLY this JSON:
             print(f"[ANALYST AGENT] Claude error: {e}", flush=True)
 
     result = {
-        "timestamp":    datetime.now(timezone.utc).isoformat(),
-        "ratings":      ratings.get("ratings", {}),
+        "timestamp":      datetime.now(timezone.utc).isoformat(),
+        "ratings":        ratings.get("ratings", {}),
         "rating_reasons": ratings.get("rating_reasons", {}),
-        "best_setup":   ratings.get("best_setup"),
+        "best_setup":     ratings.get("best_setup"),
         "best_direction": ratings.get("best_setup_direction"),
-        "best_reason":  ratings.get("best_setup_reason"),
-        "key_levels":   ratings.get("key_levels", {}),
+        "best_reason":    ratings.get("best_setup_reason"),
+        "trade_signal":   ratings.get("trade_signal"),   # NEW — actual trade to open
+        "key_levels":     ratings.get("key_levels", {}),
         "liquidity_targets": ratings.get("liquidity_targets"),
         "structure_note": ratings.get("market_structure_note"),
-        "coin_details": {s: {k: v for k, v in d.items()
-                             if k not in ("candles_brief_1h", "candles_brief_4h")}
-                         for s, d in coin_details.items()},
+        "coin_details":   {s: {k: v for k, v in d.items()
+                               if k not in ("candles_brief_1h", "candles_brief_4h")}
+                           for s, d in coin_details.items()},
     }
 
     # Save to shared state

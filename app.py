@@ -1541,7 +1541,10 @@ def _background_scanner() -> None:
                                 # ensures 5m candle closes are caught within 1 cycle
 
 
-threading.Thread(target=_background_scanner, daemon=True).start()
+# ── Old BOS/structure scanner DISABLED — replaced by AI agent system ─────────
+# threading.Thread(target=_background_scanner, daemon=True).start()
+
+# Price monitor still runs — needed to close open trades at TP/SL
 threading.Thread(target=_price_monitor_loop, daemon=True).start()
 
 
@@ -1694,7 +1697,8 @@ def _dip_scanner_loop():
         time.sleep(300)   # scan every 5 minutes
 
 
-threading.Thread(target=_dip_scanner_loop, daemon=True).start()
+# ── Old dip scanner DISABLED — replaced by AI agent system ───────────────────
+# threading.Thread(target=_dip_scanner_loop, daemon=True).start()
 
 
 # ── Local Agent Intelligence Endpoints ───────────────────────────────────────
@@ -1758,6 +1762,193 @@ def agent_intelligence():
         "total_insights":         len(_agent_insights),
         "total_reports":          len(_agent_reports),
     })
+
+
+# ── Agent-Driven Trade Executor ───────────────────────────────────────────────
+# Reads intelligence from the Mac Mini agents and opens trades when all 3 agree.
+# This is the ONLY way trades now open — no mechanical scanner.
+
+_agent_signal_cooldown: dict = {}   # sym → last signal epoch, 6h cooldown
+
+def _agent_trade_executor() -> None:
+    """
+    Runs every 5 minutes on Render.
+    Reads the latest analyst trade_signal and checks:
+      1. Analyst confidence ≥ 8
+      2. Macro regime agrees with signal direction
+      3. Risk agent says portfolio is healthy
+      4. No active trade already open for this coin
+      5. 6-hour cooldown per coin not hit
+    If all pass → opens the trade.
+    """
+    time.sleep(90)   # stagger startup, let price monitor start first
+    while True:
+        try:
+            # ── Read latest agent intelligence ────────────────────────────
+            with _agent_lock:
+                latest = _agent_insights[-1] if _agent_insights else {}
+
+            # Also check state posted directly by analyst agent
+            analyst_data = latest if latest.get("type") == "analyst_ratings" else {}
+
+            # Find most recent analyst signal across all insights
+            with _agent_lock:
+                for insight in reversed(_agent_insights):
+                    if insight.get("type") in ("analyst_ratings", "desk_briefing"):
+                        analyst_data = insight
+                        break
+
+            trade_signal = analyst_data.get("trade_signal")
+            if not trade_signal or trade_signal == "null":
+                time.sleep(300)
+                continue
+
+            sym       = trade_signal.get("symbol", "")
+            direction = (trade_signal.get("direction") or "").upper()
+            entry_px  = float(trade_signal.get("entry") or 0)
+            tp        = float(trade_signal.get("tp")    or 0)
+            sl        = float(trade_signal.get("sl")    or 0)
+            tf        = trade_signal.get("timeframe", "1h")
+            confidence = int(trade_signal.get("confidence") or 0)
+            reason    = trade_signal.get("reason", "AI agent signal")
+
+            if not sym or not direction or not entry_px or not tp or not sl:
+                time.sleep(300)
+                continue
+
+            # ── Gate 1: Confidence ≥ 8 ────────────────────────────────────
+            if confidence < 8:
+                print(f"[AGENT EXEC] {sym} {direction}: confidence {confidence} < 8, skipping", flush=True)
+                time.sleep(300)
+                continue
+
+            # ── Gate 2: Macro regime agrees ───────────────────────────────
+            macro_data = {}
+            with _agent_lock:
+                for insight in reversed(_agent_insights):
+                    if insight.get("type") == "macro_analysis":
+                        macro_data = insight
+                        break
+            coin = sym.replace("USDT", "")
+            coin_bias   = (macro_data.get("coin_bias") or {}).get(coin, "neutral")
+            regime      = macro_data.get("regime", "uncertain")
+            risk_level  = macro_data.get("risk_level", "medium")
+
+            macro_ok = True
+            if direction == "LONG"  and coin_bias == "short": macro_ok = False
+            if direction == "SHORT" and coin_bias == "long":  macro_ok = False
+            if risk_level == "high":                          macro_ok = False
+
+            if not macro_ok:
+                print(f"[AGENT EXEC] {sym} {direction}: macro veto (bias={coin_bias} risk={risk_level})", flush=True)
+                time.sleep(300)
+                continue
+
+            # ── Gate 3: Risk agent healthy ────────────────────────────────
+            risk_data = {}
+            with _agent_lock:
+                for report in reversed(_agent_reports):
+                    if report.get("agent") == "risk" or "health" in str(report.get("type","")):
+                        risk_data = report
+                        break
+            portfolio_health = risk_data.get("health", "good")
+            if portfolio_health in ("drawdown", "loss_streak"):
+                print(f"[AGENT EXEC] {sym} {direction}: risk veto (health={portfolio_health})", flush=True)
+                time.sleep(300)
+                continue
+
+            # ── Gate 4: No existing open trade for this coin ─────────────
+            if learning.has_active_trade(sym, tf, direction):
+                print(f"[AGENT EXEC] {sym} {direction}: already have open trade", flush=True)
+                time.sleep(300)
+                continue
+
+            # ── Gate 5: 6-hour cooldown ────────────────────────────────────
+            cooldown_key = f"{sym}_{direction}"
+            if time.time() - _agent_signal_cooldown.get(cooldown_key, 0) < 6 * 3600:
+                time.sleep(300)
+                continue
+
+            # ── All gates passed — get live price and open trade ──────────
+            try:
+                import requests as _req
+                px_r = _req.get(
+                    "https://api.binance.us/api/v3/ticker/price",
+                    params={"symbol": sym}, timeout=8
+                )
+                live_px = float(px_r.json()["price"])
+            except Exception:
+                live_px = entry_px
+
+            # Validate levels still make sense at live price
+            if direction == "LONG"  and live_px <= sl:
+                print(f"[AGENT EXEC] {sym}: live price {live_px} already below SL {sl}, skipping", flush=True)
+                time.sleep(300)
+                continue
+            if direction == "SHORT" and live_px >= sl:
+                print(f"[AGENT EXEC] {sym}: live price {live_px} already above SL {sl}, skipping", flush=True)
+                time.sleep(300)
+                continue
+
+            trade_id = str(uuid.uuid4())
+            trade_data = {
+                "id":               trade_id,
+                "symbol":           sym,
+                "interval":         tf,
+                "direction":        direction,
+                "entry":            live_px,
+                "current_price":    live_px,
+                "tp":               tp,
+                "sl":               sl,
+                "score":            float(confidence),
+                "effective_score":  float(confidence),
+                "reason":           reason,
+                "factors_snapshot": {
+                    "confidence":   confidence,
+                    "macro_bias":   coin_bias,
+                    "regime":       regime,
+                    "agent_driven": True,
+                },
+                "target_basis":     "agent_analysis",
+                "tp_source":        "agent_analysis",
+                "opened_at":        datetime.now(timezone.utc).isoformat(),
+                "status":           "open",
+                "adx_value":        0,
+                "vwap_side":        "unknown",
+                "signal_type":      "AGENT_DRIVEN",
+            }
+
+            logged = learning.log_trade(trade_data)
+            if logged:
+                _agent_signal_cooldown[cooldown_key] = time.time()
+                print(
+                    f"[AGENT EXEC] ✅ TRADE OPENED: {sym} {direction} @ {live_px:.6f}"
+                    f" | TP={tp:.6f} SL={sl:.6f} | confidence={confidence}/10",
+                    flush=True,
+                )
+                notifications.send_signal_alert({
+                    "symbol":       sym,
+                    "interval":     tf,
+                    "direction":    direction,
+                    "entry":        live_px,
+                    "tp":           tp,
+                    "sl":           sl,
+                    "score":        confidence,
+                    "reason":       reason,
+                    "target_basis": "agent_analysis",
+                    "ai_analysis":  {"source": "multi_agent_desk"},
+                    "pending":      False,
+                    "current_price": live_px,
+                })
+
+        except Exception as e:
+            print(f"[AGENT EXEC] Error: {e}", flush=True)
+
+        time.sleep(300)   # check every 5 minutes
+
+
+threading.Thread(target=_agent_trade_executor, daemon=True).start()
+print("[AGENT EXECUTOR] Started — trades will open based on AI agent consensus.", flush=True)
 
 
 # ── Weekly review job ─────────────────────────────────────────────────────────
