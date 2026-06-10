@@ -1889,13 +1889,25 @@ def _agent_trade_executor() -> None:
                 except Exception:
                     _live  = _entry
 
-                # Gate 5: SL not already crossed
-                if _dir == "LONG"  and _live <= _sl:
-                    print(f"[AGENT EXEC] {_sym}: below SL already", flush=True)
+                # Gate 5: SL not already crossed (0.5% buffer — small bounces shouldn't kill valid setups)
+                if _dir == "LONG"  and _live <= _sl * 1.005:
+                    print(f"[AGENT EXEC] {_sym}: at/below SL already (live={_live:.4f} sl={_sl:.4f})", flush=True)
                     continue
-                if _dir == "SHORT" and _live >= _sl:
-                    print(f"[AGENT EXEC] {_sym}: above SL already", flush=True)
+                if _dir == "SHORT" and _live >= _sl * 0.995:
+                    print(f"[AGENT EXEC] {_sym}: at/above SL already (live={_live:.4f} sl={_sl:.4f})", flush=True)
                     continue
+
+                # Gate 6: Signal freshness — skip if signal is older than 20 min (stale)
+                try:
+                    _sig_ts = _sig.get("timestamp") or analyst_data.get("timestamp", "")
+                    if _sig_ts:
+                        from datetime import timezone as _tz
+                        _sig_age = (datetime.now(_tz.utc) - datetime.fromisoformat(_sig_ts.replace("Z","+00:00"))).total_seconds()
+                        if _sig_age > 1200:
+                            print(f"[AGENT EXEC] {_sym}: signal too old ({_sig_age/60:.1f}min) — skipping", flush=True)
+                            continue
+                except Exception:
+                    pass
 
                 # All gates passed — open trade
                 _tid = str(uuid.uuid4())
@@ -1930,7 +1942,7 @@ def _agent_trade_executor() -> None:
         except Exception as e:
             print(f"[AGENT EXEC] Error: {e}", flush=True)
 
-        time.sleep(300)   # check every 5 minutes
+        time.sleep(60)   # check every 60 seconds — fast enough to catch signals before price moves past SL
 
 
 threading.Thread(target=_agent_trade_executor, daemon=True).start()
