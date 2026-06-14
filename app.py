@@ -1812,23 +1812,39 @@ def _agent_trade_executor() -> None:
     time.sleep(90)
     while True:
         try:
-            # ── Find latest analyst signal ────────────────────────────────
-            analyst_data = {}
+            # ── Collect all analyst signals from last 20 min ─────────────
+            # NOTE: desk_briefing is intentionally excluded — it has no signals
+            # and was causing the executor to skip valid analyst_signal entries.
+            all_signals = []
+            seen_keys = set()
+            _now_utc = datetime.now(timezone.utc)
             with _agent_lock:
                 for insight in reversed(_agent_insights):
-                    if insight.get("type") in ("analyst_signal", "analyst_ratings", "desk_briefing"):
-                        analyst_data = insight
-                        break
+                    if insight.get("type") not in ("analyst_signal", "analyst_ratings"):
+                        continue
+                    # Only consider insights from last 20 min
+                    try:
+                        _ts = insight.get("timestamp") or insight.get("received_at", "")
+                        _age = (_now_utc - datetime.fromisoformat(_ts.replace("Z", "+00:00"))).total_seconds()
+                        if _age > 1200:
+                            break  # insights are ordered oldest→newest; older ones won't help
+                    except Exception:
+                        pass
+                    sigs = insight.get("all_signals") or []
+                    if not sigs:
+                        single = insight.get("trade_signal")
+                        if single and isinstance(single, dict) and single.get("symbol"):
+                            sigs = [single]
+                    for s in sigs:
+                        _k = f"{s.get('symbol')}_{s.get('direction')}_{s.get('timeframe')}"
+                        if _k not in seen_keys:
+                            seen_keys.add(_k)
+                            all_signals.append(s)
 
-            # Support both multi-signal (all_signals) and single trade_signal
-            all_signals = analyst_data.get("all_signals") or []
-            if not all_signals:
-                single = analyst_data.get("trade_signal")
-                if single and isinstance(single, dict) and single.get("symbol"):
-                    all_signals = [single]
+            print(f"[AGENT EXEC] Cycle: {len(all_signals)} fresh signal(s) found", flush=True)
 
             if not all_signals:
-                time.sleep(300)
+                time.sleep(60)
                 continue
 
             # Check daily loss limit once before iterating
