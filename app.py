@@ -2292,14 +2292,35 @@ def admin_clear_trades():
 
 @app.route("/api/admin/reset_learning", methods=["POST"])
 def admin_reset_learning():
-    """Reset learning weights and log back to defaults — admin use only."""
+    """Reset learning weights, stop_multiplier, and log back to defaults — admin use only."""
     import learning, json as _json
+    weights_json = _json.dumps(learning.DEFAULT_WEIGHTS)
     with learning._conn() as db:
         db.execute("DELETE FROM adaptation_log")
-        db.execute("UPDATE config SET value=? WHERE key='weights'",
-                   (_json.dumps(learning.DEFAULT_WEIGHTS),))
-        db.execute("UPDATE config SET value='7.0' WHERE key='signal_threshold'")
-    return jsonify({"status": "learning reset", "weights": learning.DEFAULT_WEIGHTS})
+        # Use INSERT OR REPLACE so the reset works even if the row doesn't exist yet
+        db.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('weights', ?)",
+                   (weights_json,))
+        db.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('signal_threshold', ?)",
+                   (str(learning.DEFAULT_THRESHOLD),))
+        db.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('stop_multiplier', ?)",
+                   (str(learning.DEFAULT_STOP_MULT),))
+        db.commit()
+        # Read back what's actually in the DB to confirm
+        actual_weights = _json.loads(
+            db.execute("SELECT value FROM config WHERE key='weights'").fetchone()[0]
+        )
+        actual_threshold = db.execute(
+            "SELECT value FROM config WHERE key='signal_threshold'"
+        ).fetchone()[0]
+        actual_stop = db.execute(
+            "SELECT value FROM config WHERE key='stop_multiplier'"
+        ).fetchone()[0]
+    return jsonify({
+        "status": "learning reset",
+        "weights": actual_weights,
+        "signal_threshold": float(actual_threshold),
+        "stop_multiplier": float(actual_stop),
+    })
 
 
 @app.route("/api/admin/import_trade", methods=["POST"])

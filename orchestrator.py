@@ -43,10 +43,10 @@ LOG_DIR = Path.home() / "CryptoDashboard" / "agent_kb"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Schedule config ───────────────────────────────────────────────────────────
-MACRO_INTERVAL    = 30 * 60   # 30 minutes
-ANALYST_INTERVAL  = 15 * 60   # 15 minutes
-RISK_INTERVAL     =  5 * 60   #  5 minutes
-LEARNING_INTERVAL = 60 * 60   # 60 minutes
+MACRO_INTERVAL    = 60 * 60   # 60 minutes (was 30 — halved to save credits)
+ANALYST_INTERVAL  = 30 * 60   # 30 minutes (was 15 — halved to save credits)
+RISK_INTERVAL     =  5 * 60   #  5 minutes (Haiku — cheap, keep fast for open trade monitoring)
+LEARNING_INTERVAL = 60 * 60   # 60 minutes (no-op until trades exist)
 
 _last_run = {
     "macro":    0,

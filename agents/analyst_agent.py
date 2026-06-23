@@ -327,8 +327,11 @@ FULL MARKET DATA:
 YOUR TASK AS A TRADER:
 A real trader runs positions on MULTIPLE timeframes simultaneously — a 4h swing trade and a 15m scalp can both be open at the same time on different coins.
 
+**YOU MUST ALWAYS RETURN AT LEAST 1 TRADE. NEVER RETURN AN EMPTY TRADES ARRAY.**
+This system learns from every trade outcome — it NEEDS reps to improve. In ranging or choppy markets, find the single best short-term scalp available. There is always something worth trading. If conditions are poor, return 1 trade with a tight SL and note the marginal quality in risk_note. Do not skip trading just because the market isn't perfect.
+
 1. Read ALL the data above like a real trader
-2. Find UP TO 3 trades across different coins AND timeframes (15m, 1h, 4h):
+2. Find AT LEAST 1 and UP TO 3 trades across different coins AND timeframes (15m, 1h, 4h):
    - Each trade needs its own confluence: order book, volume, RSI, structure, liquidity
    - 15m trades: tighter SL, quicker TP, need strong momentum signal
    - 1h trades: structural entries, good for trending setups
