@@ -164,20 +164,30 @@ def get_knowledge(category: str, limit: int = 10) -> list:
 
 
 def post_to_render(endpoint: str, data: dict) -> bool:
-    """Post data to Render dashboard."""
-    import requests
-    try:
-        r = requests.post(f"{RENDER_URL}{endpoint}", json=data, timeout=12)
-        return r.status_code in (200, 201)
-    except Exception:
-        return False
+    """Post data to Render dashboard.
+
+    Render free tier cold-starts in 30-60s. We retry up to 3 times with a
+    90-second timeout so a sleeping instance doesn't silently drop signals.
+    """
+    import requests, time as _time
+    url = f"{RENDER_URL}{endpoint}"
+    for attempt in range(3):
+        try:
+            r = requests.post(url, json=data, timeout=90)
+            if r.status_code in (200, 201):
+                return True
+        except Exception:
+            pass
+        if attempt < 2:
+            _time.sleep(5)  # brief pause before retry
+    return False
 
 
 def get_from_render(endpoint: str) -> dict | list:
     """Fetch data from Render."""
     import requests
     try:
-        r = requests.get(f"{RENDER_URL}{endpoint}", timeout=12)
+        r = requests.get(f"{RENDER_URL}{endpoint}", timeout=90)
         if r.status_code == 200:
             return r.json()
     except Exception:

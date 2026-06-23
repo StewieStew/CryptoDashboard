@@ -233,6 +233,13 @@ def main():
             log(f"Orchestrator loop error: {e}", "ERROR")
             log(traceback.format_exc(), "ERROR")
 
+        # Keep Render awake — free tier sleeps after 15 min inactivity.
+        # A lightweight GET every 60s ensures the executor thread stays live.
+        try:
+            requests.get(f"{RENDER_URL}/api/trades", timeout=10)
+        except Exception:
+            pass
+
         # Sleep 60 seconds between checks
         time.sleep(60)
 
