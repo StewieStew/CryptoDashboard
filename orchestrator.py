@@ -31,9 +31,26 @@ from pathlib import Path
 
 import requests
 
+# ── Load .env file if present (picks up TG credentials etc.) ──────────────────
+_env_file = Path.home() / "Desktop" / "CryptoDashboard" / ".env"
+if _env_file.exists():
+    for _line in _env_file.read_text().splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _v = _line.split("=", 1)
+            os.environ.setdefault(_k.strip(), _v.strip())
+
 # ── Import all agents ─────────────────────────────────────────────────────────
 from agents import state as S
 from agents import macro_agent, analyst_agent, risk_agent, learning_agent
+
+# Telegram agent — optional, only active if TG_API_ID env var is set
+try:
+    from agents import telegram_agent as _tg_agent
+    _TG_ENABLED = bool(os.environ.get("TG_API_ID"))
+except ImportError:
+    _tg_agent   = None
+    _TG_ENABLED = False
 
 RENDER_URL    = os.environ.get("RENDER_URL", "https://cryptodashboard-nuf5.onrender.com")
 DISCORD_URL   = os.environ.get("DISCORD_WEBHOOK_URL", "")
@@ -43,16 +60,18 @@ LOG_DIR = Path.home() / "CryptoDashboard" / "agent_kb"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Schedule config ───────────────────────────────────────────────────────────
-MACRO_INTERVAL    = 60 * 60   # 60 minutes (was 30 — halved to save credits)
-ANALYST_INTERVAL  = 30 * 60   # 30 minutes — quality setups, not frequency
-RISK_INTERVAL     =  5 * 60   #  5 minutes (Haiku — cheap, keep fast for open trade monitoring)
-LEARNING_INTERVAL = 60 * 60   # 60 minutes (no-op until trades exist)
+MACRO_INTERVAL     = 60 * 60   # 60 minutes (was 30 — halved to save credits)
+ANALYST_INTERVAL   = 30 * 60   # 30 minutes — quality setups, not frequency
+RISK_INTERVAL      =  5 * 60   #  5 minutes (Haiku — cheap, keep fast for open trade monitoring)
+LEARNING_INTERVAL  = 60 * 60   # 60 minutes (no-op until trades exist)
+TELEGRAM_INTERVAL  = 30 * 60   # 30 minutes — scan channels for signals
 
 _last_run = {
     "macro":    0,
     "analyst":  0,
     "risk":     0,
     "learning": 0,
+    "telegram": 0,
 }
 
 
@@ -187,6 +206,7 @@ def main():
     log("  AGENTS:")
     log(f"  • MACRO    — runs every {MACRO_INTERVAL//60}min  — news, sentiment, regime")
     log(f"  • ANALYST  — runs every {ANALYST_INTERVAL//60}min  — price action, levels, ratings")
+    log(f"  • TELEGRAM — runs every {TELEGRAM_INTERVAL//60}min  — {'ENABLED (scanning channels)' if _TG_ENABLED else 'DISABLED (run setup_telegram.command to enable)'}")
     log(f"  • RISK     — runs every {RISK_INTERVAL//60}min   — monitors open trades")
     log(f"  • LEARNING — runs every {LEARNING_INTERVAL//60}min — post-mortems, improvements")
     log("═" * 65)
@@ -215,9 +235,11 @@ def main():
         try:
             now = time.time()
 
-            # Run agents in order (macro → analyst → risk → learning)
+            # Run agents in order (macro → analyst → telegram → risk → learning)
             run_agent_safe("macro",    macro_agent.run,    MACRO_INTERVAL)
             run_agent_safe("analyst",  analyst_agent.run,  ANALYST_INTERVAL)
+            if _TG_ENABLED and _tg_agent:
+                run_agent_safe("telegram", _tg_agent.run, TELEGRAM_INTERVAL)
             run_agent_safe("risk",     risk_agent.run,     RISK_INTERVAL)
             run_agent_safe("learning", learning_agent.run, LEARNING_INTERVAL)
 
