@@ -238,148 +238,6 @@ Identify patterns and propose improvements. Respond with ONLY this JSON:
         return {}
 
 
-def write_strategy_rules(patterns: dict, closed_trades: list) -> list:
-    """
-    Convert pattern analysis into enforceable trading rules.
-    These rules are read by EVERY agent before making any decision.
-    Rules update automatically as new trades close — no human input needed.
-    """
-    client = _claude()
-    if not client or not patterns:
-        return []
-
-    # Current rules for context
-    current_rules = get_state("strategy_rules", [])
-    current_str   = json.dumps(current_rules, indent=2) if current_rules else "No rules yet."
-
-    # Trade summary
-    wins   = [t for t in closed_trades if t.get("status") == "win"]
-    losses = [t for t in closed_trades if t.get("status") == "loss"]
-
-    # Per-coin win rates
-    coin_stats = {}
-    for t in closed_trades:
-        sym = t.get("symbol", "")
-        if sym not in coin_stats:
-            coin_stats[sym] = {"wins": 0, "losses": 0}
-        if t.get("status") == "win":
-            coin_stats[sym]["wins"] += 1
-        else:
-            coin_stats[sym]["losses"] += 1
-
-    coin_str = "\n".join(
-        f"  {s}: {v['wins']}W / {v['losses']}L = {v['wins']/(v['wins']+v['losses'])*100:.0f}% WR"
-        for s, v in coin_stats.items()
-    )
-
-    prompt = f"""You are the Learning Agent for a crypto trading bot. Think like an experienced trader reviewing a junior's recent trades. Your job is to write nuanced adjustment rules — NOT permanent bans.
-
-CRITICAL MINDSET:
-- A real trader NEVER writes off an entire coin or direction permanently based on a few trades.
-- Crypto markets change. ETH can SHORT well this week and LONG well next week.
-- The goal is SELECTIVE FILTERING, not blocking. Raise the bar for setups that have been losing, don't eliminate them.
-- "avoid_coins" and "block_direction" should NEVER be used — they cut off future opportunities.
-- Instead use: "min_confidence" (require stronger signal), "cooldown_after_loss" (wait before re-entry), "require_regime" (only trade in favorable macro).
-- Rules expire automatically when wins come in — set expires_after_wins appropriately.
-- With fewer than 10 closed trades, be VERY conservative with rules. Only write rules for patterns that are blindingly obvious.
-
-TRADING HISTORY ({len(closed_trades)} trades):
-Win rate: {len(wins)/len(closed_trades)*100:.0f}%
-
-By coin:
-{coin_str}
-
-Patterns found:
-Win patterns: {json.dumps(patterns.get('win_patterns', []))}
-Loss patterns: {json.dumps(patterns.get('loss_patterns', []))}
-Biggest weakness: {patterns.get('biggest_weakness', '')}
-Biggest edge: {patterns.get('biggest_edge', '')}
-Top improvement: {patterns.get('top_improvement', '')}
-
-Current active rules (update/replace/keep as needed):
-{current_str}
-
-ALLOWED rule types (never use avoid_coins or block_direction):
-- "require_regime": only trade a coin/direction when macro regime matches (e.g. bear_trending for shorts)
-- "min_confidence": require higher analyst confidence before entering (e.g. 7+ instead of default 5)
-- "cooldown_after_loss": hours to wait before re-entering same coin after a loss (max 24h)
-- "max_open_trades": cap simultaneous open positions
-- "prefer_coins": coins to prioritize when multiple equal setups appear
-
-Respond with ONLY a JSON array (empty array [] if data is too thin to draw conclusions):
-[
-  {{
-    "rule_type": "<require_regime|min_confidence|cooldown_after_loss|max_open_trades|prefer_coins>",
-    "coins": ["<XYZUSDT>"],
-    "direction": "<LONG|SHORT|both>",
-    "value": "<regime name, confidence number, hours, trade count, etc>",
-    "reason": "<one sentence — what specific evidence supports this, and when it expires>",
-    "confidence": <1-10>,
-    "expires_after_wins": <number of wins on this coin before rule removes itself, e.g. 2>
-  }}
-]"""
-
-    try:
-        msg = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1500,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        raw = msg.content[0].text.strip()
-        if raw.startswith("```"):
-            raw = raw.split("```")[1].lstrip("json").strip()
-        # Strip trailing ``` if present
-        if raw.endswith("```"):
-            raw = raw[:-3].strip()
-        # Remove JS-style comments (// ...) that Claude sometimes adds
-        import re as _re
-        raw = _re.sub(r'//[^\n]*', '', raw)
-        # Remove trailing commas before ] or } (invalid JSON)
-        raw = _re.sub(r',\s*([\]}])', r'\1', raw)
-        # Try to fix unclosed brackets
-        try:
-            rules = json.loads(raw)
-        except json.JSONDecodeError:
-            open_b = raw.count("{") - raw.count("}")
-            open_a = raw.count("[") - raw.count("]")
-            raw += "]" * max(open_a, 0) + "}" * max(open_b, 0)
-            try:
-                rules = json.loads(raw)
-            except Exception:
-                print(f"  Could not parse rules JSON — skipping rule update", flush=True)
-                rules = []
-        if not isinstance(rules, list):
-            rules = []
-
-        # Save rules to shared state — all agents read from here
-        set_state("strategy_rules", rules)
-        add_knowledge("strategy_rules_history", {
-            "rules":     rules,
-            "trade_count": len(closed_trades),
-        })
-
-        # Post rules to Render so dashboard shows them
-        post_to_render("/api/agent/report", {
-            "type":      "strategy_rules_updated",
-            "agent":     "learning",
-            "rules":     rules,
-            "based_on":  len(closed_trades),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
-
-        print(f"  Updated {len(rules)} trading rule(s) from past trade data:", flush=True)
-        for r in rules:
-            coins = ", ".join(c.replace("USDT","") for c in (r.get('coins') or []))
-            dirn  = r.get('direction','')
-            rtype = r.get('rule_type','')
-            val   = r.get('value','')
-            print(f"    • {coins or 'all'} {dirn} — {rtype}: {val} | {r.get('reason','')[:70]}", flush=True)
-
-        return rules
-    except Exception as e:
-        print(f"  Rule writing error: {e}", flush=True)
-        return []
-
 
 def run() -> dict:
     """Execute learning cycle."""
@@ -444,54 +302,48 @@ def run() -> dict:
 
             postmortems_written += 1
 
-    # ── Pattern analysis (every run if we have enough data) ────────────────
+    # ── Pattern analysis — observations only, no blocking rules ───────────────
+    # The bot never restricts which coins or directions it can trade.
+    # A loss on ETH SHORT doesn't mean avoid ETH SHORT — it means look harder
+    # at the next ETH SHORT setup. The analyst reads these as context, not rules.
     patterns = {}
-    rules    = []
-    if len(closed_trades) >= 2:  # start learning with just 2 trades
-        print(f"    Analyzing patterns across {len(closed_trades)} trades...", flush=True)
+    if len(closed_trades) >= 2:
+        print(f"    Analyzing patterns across {len(closed_trades)} trade(s)...", flush=True)
         patterns = identify_patterns(closed_trades)
 
         if patterns:
             add_knowledge("strategy_insights", patterns)
+            if patterns.get("biggest_weakness"):
+                print(f"    Weakness to watch: {patterns.get('biggest_weakness','')[:80]}", flush=True)
+            if patterns.get("top_improvement"):
+                print(f"    Key lesson: {patterns.get('top_improvement','')[:80]}", flush=True)
 
-            # Post improvement to Render
             post_to_render("/api/agent/report", {
-                "type":          "strategy_improvement",
-                "agent":         "learning",
-                "timestamp":     datetime.now(timezone.utc).isoformat(),
+                "type":               "strategy_improvement",
+                "agent":              "learning",
+                "timestamp":          datetime.now(timezone.utc).isoformat(),
                 "biggest_edge":       patterns.get("biggest_edge"),
                 "biggest_weakness":   patterns.get("biggest_weakness"),
                 "top_improvement":    patterns.get("top_improvement"),
-                "secondary":          patterns.get("secondary_improvement"),
-                "coins_to_focus":     patterns.get("coins_to_focus"),
-                "coins_to_avoid":     patterns.get("coins_to_avoid"),
                 "win_patterns":       patterns.get("win_patterns"),
                 "loss_patterns":      patterns.get("loss_patterns"),
             })
 
-            # ── Auto-write enforceable rules from patterns ─────────────────
-            # These rules are immediately enforced by all other agents.
-            # No human input required — the system updates its own strategy.
-            print(f"    Writing strategy rules from patterns...", flush=True)
-            rules = write_strategy_rules(patterns, closed_trades)
+    # Clear any old blocking rules — we don't use them
+    set_state("strategy_rules", [])
 
     result = {
         "timestamp":           datetime.now(timezone.utc).isoformat(),
         "closed_trades":       len(closed_trades),
         "postmortems_written": postmortems_written,
         "patterns":            patterns,
-        "active_rules":        len(rules),
-        "rules":               rules,
     }
 
     set_state("learning_status", result)
     add_report("learning", "cycle_complete", result)
 
-    weakness = patterns.get('biggest_weakness','')
-    if weakness and len(closed_trades) > 0:
-        print(f"  Current weakness: {weakness[:80]}", flush=True)
     if postmortems_written:
         print(f"  Wrote {postmortems_written} new trade post-mortem(s).", flush=True)
     elif closed_trades:
-        print(f"  {len(closed_trades)} closed trade(s) reviewed — all previously analyzed.", flush=True)
+        print(f"  {len(closed_trades)} closed trade(s) reviewed.", flush=True)
     return result

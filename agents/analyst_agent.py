@@ -162,13 +162,7 @@ def run() -> dict:
     fear_greed   = macro.get("fear_greed", {}).get("current", {})
     whales       = macro.get("whales", [])
 
-    # Learning agent rules (informational context, not hard blocks)
-    strategy_rules = get_state("strategy_rules", [])
-    rules_str = ""
-    if strategy_rules:
-        rules_str = "LEARNED STRATEGY RULES (from past trades — use as context):\n"
-        for r in strategy_rules[:8]:
-            rules_str += f"  [{r.get('rule_type')}] {r.get('coins',[])} {r.get('direction','')} — {r.get('reason','')[:80]}\n"
+    # No blocking rules — learning is observation only, never restriction
 
     # Gather full market data for all coins
     coin_blocks = []
@@ -354,7 +348,6 @@ BOT STATUS:
 WHAT THE BOT HAS LEARNED FROM PAST TRADES (apply these now):
 {pm_str}
 {f"IMPROVEMENTS SUGGESTED:{chr(10)}{improve_str}" if improve_str else ""}
-{rules_str}
 
 FULL MARKET DATA:
 {''.join(coin_blocks)}
