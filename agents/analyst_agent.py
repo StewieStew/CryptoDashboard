@@ -233,11 +233,11 @@ def render_chart_image(symbol: str, c4h: list, c1h: list, c15m: list,
 
         # 6 subplots: price + volume panel for each of 4H, 1H, 15M
         fig, axes = plt.subplots(
-            6, 1, figsize=(16, 16),
+            6, 1, figsize=(40, 22),
             facecolor="#0d0d1a",
-            gridspec_kw={"height_ratios": [3, 0.8, 2, 0.8, 1.5, 0.8]},
+            gridspec_kw={"height_ratios": [3, 0.8, 2.5, 0.8, 2, 0.8]},
         )
-        fig.subplots_adjust(hspace=0.04)
+        fig.subplots_adjust(hspace=0.05)
         ax4h, axv4h, ax1h, axv1h, ax15, axv15 = axes
 
         def _draw(ax, axvol, candles, n, tf_label):
@@ -260,17 +260,17 @@ def render_chart_image(symbol: str, c4h: list, c1h: list, c15m: list,
             ax.set_ylim(price_min - pad, price_max + pad)
             ax.set_xlim(-1, len(candles) + 1)
 
-            min_body = (price_max - price_min) * 0.0015
+            min_body = (price_max - price_min) * 0.0012
             colors = []
             for i, c in enumerate(candles):
                 o, h, l, cl = c["open"], c["high"], c["low"], c["close"]
                 col = "#26a69a" if cl >= o else "#ef5350"
                 colors.append(col)
                 ax.add_patch(Rectangle(
-                    (i - 0.38, min(o, cl)), 0.76, max(abs(cl - o), min_body),
+                    (i - 0.40, min(o, cl)), 0.80, max(abs(cl - o), min_body),
                     color=col, zorder=2
                 ))
-                ax.plot([i, i], [l, h], color=col, linewidth=0.8, zorder=1)
+                ax.plot([i, i], [l, h], color=col, linewidth=1.0, zorder=1)
 
             # Current price line
             cur = candles[-1]["close"]
@@ -310,8 +310,8 @@ def render_chart_image(symbol: str, c4h: list, c1h: list, c15m: list,
             return len(candles)
 
         _draw(ax4h, axv4h, c4h,  120, f"{symbol}  ·  4H — 120 bars (~20 days)")
-        _draw(ax1h, axv1h, c1h,   72, f"{symbol}  ·  1H — 72 bars (3 days)")
-        _draw(ax15, axv15, c15m,  96, f"{symbol}  ·  15M — 96 bars (24 hours)")
+        _draw(ax1h, axv1h, c1h,   96, f"{symbol}  ·  1H — 96 bars (4 days)")
+        _draw(ax15, axv15, c15m, 100, f"{symbol}  ·  15M — 100 bars (25 hours)")
 
         # EMA20 (cyan) and EMA50 (orange) on each price panel
         ema_panels = [
@@ -343,7 +343,7 @@ def render_chart_image(symbol: str, c4h: list, c1h: list, c15m: list,
                         fontsize=5.5, va="top", ha="right", alpha=0.8)
 
         buf = BytesIO()
-        fig.savefig(buf, format="png", dpi=110, bbox_inches="tight",
+        fig.savefig(buf, format="png", dpi=150, bbox_inches="tight",
                     facecolor="#0d0d1a")
         plt.close(fig)
         buf.seek(0)
