@@ -1707,6 +1707,7 @@ _agent_insights: list = []   # last 100 intelligence reports from Mac Mini agent
 _agent_reports:  list = []   # last 100 post-mortems / improvement reports
 _agent_lock = threading.Lock()
 MAX_AGENT_HISTORY = 100
+_pending_signals: dict = {}  # signals queued, waiting for price to hit entry level
 
 
 @app.route("/api/agent/insight", methods=["POST"])
@@ -1744,6 +1745,13 @@ def agent_report():
         except Exception:
             pass
     return jsonify({"status": "received"})
+
+
+@app.route("/api/agent/pending")
+def agent_pending():
+    """Return signals queued as limit orders, waiting for price to hit entry."""
+    with _agent_lock:
+        return jsonify(list(_pending_signals.values()))
 
 
 @app.route("/api/agent/intelligence")
@@ -1909,12 +1917,29 @@ def _agent_trade_executor() -> None:
                 # Works like a real limit order — once the mark is touched, it executes.
                 # SHORT: price needs to rally UP to the resistance entry.
                 # LONG:  price needs to drop DOWN to the support entry.
+                _waiting = False
                 if _dir == "SHORT" and _live < _entry * 0.995:
-                    print(f"[AGENT EXEC] {_sym} SHORT: waiting for {_entry:.4f} (live={_live:.4f})", flush=True)
-                    continue
+                    _waiting = True
                 if _dir == "LONG" and _live > _entry * 1.005:
-                    print(f"[AGENT EXEC] {_sym} LONG: waiting for {_entry:.4f} (live={_live:.4f})", flush=True)
+                    _waiting = True
+
+                if _waiting:
+                    # Track as a pending (queued) limit order visible on the dashboard
+                    _dist_pct = abs(_live - _entry) / _entry * 100
+                    with _agent_lock:
+                        _pending_signals[_ck] = {
+                            **_sig,
+                            "queued_at":  datetime.now(timezone.utc).isoformat(),
+                            "live_price": _live,
+                            "dist_pct":   round(_dist_pct, 2),
+                            "status":     "pending",
+                        }
+                    print(f"[AGENT EXEC] {_sym} {_dir}: PENDING — waiting for ${_entry:,.4f}  (live ${_live:,.4f}, {_dist_pct:.2f}% away)", flush=True)
                     continue
+
+                # Price hit the level — remove from pending
+                with _agent_lock:
+                    _pending_signals.pop(_ck, None)
                 if _dir == "LONG"  and _live <= _sl * 1.005:
                     print(f"[AGENT EXEC] {_sym}: SL already crossed (live={_live:.4f} sl={_sl:.4f})", flush=True)
                     continue

@@ -293,7 +293,7 @@ def fetch_stablecoin_flows() -> dict:
 
 def run() -> dict:
     """Execute macro analysis. Returns findings dict."""
-    print("  Reading news, sentiment, on-chain data...", flush=True)
+    print("  Pulling market data...", flush=True)
 
     fg         = fetch_fear_greed()
     btc_dom    = fetch_btc_dominance()
@@ -305,7 +305,65 @@ def run() -> dict:
     defi_tvl   = fetch_defi_tvl()
     whales     = fetch_whale_alert()
     stables    = fetch_stablecoin_flows()
-    print("  On-chain data fetched.", flush=True)
+
+    # ── Print everything we found so the terminal tells the full story ─────────
+    fg_val   = fg.get("current", {}).get("value", "?")
+    fg_label = fg.get("current", {}).get("label", "?")
+    fg_yday  = fg.get("yesterday", {}).get("value", "?")
+    print(f"  Fear & Greed: {fg_val} ({fg_label})  ←  was {fg_yday} yesterday", flush=True)
+
+    btc_price = btc_ctx.get("current", 0)
+    btc_7d    = btc_ctx.get("change_7d", 0)
+    btc_14d   = btc_ctx.get("change_14d", 0)
+    btc_trend = btc_ctx.get("trend", "?")
+    print(f"  BTC: ${btc_price:,.0f}  |  7d: {btc_7d:+.1f}%  |  14d: {btc_14d:+.1f}%  |  Trend: {btc_trend}  |  Dominance: {btc_dom:.1f}%", flush=True)
+
+    # Funding rates — tells us who is overleveraged
+    print("  Funding rates (who's paying who):", flush=True)
+    for sym, rate in funding.items():
+        coin = sym.replace("USDT", "")
+        who  = "longs paying → crowded long" if rate > 0 else "shorts paying → crowded short"
+        print(f"    {coin}: {rate:+.4f}%  ({who})", flush=True)
+
+    # On-chain
+    if btc_chain:
+        addrs   = btc_chain.get("active_addresses", 0)
+        addr_ch = btc_chain.get("active_addr_change", 0)
+        txvol   = btc_chain.get("tx_volume_usd_24h", 0)
+        mempool = btc_chain.get("mempool_size", 0)
+        print(f"  BTC on-chain: {addrs:,} active addrs ({addr_ch:+.1f}% vs yday)  |  ${txvol:.1f}B tx volume  |  {mempool:,} mempool", flush=True)
+
+    if eth_chain:
+        gas = eth_chain.get("gas_fast_gwei", 0)
+        gas_note = "HIGH — heavy usage" if gas > 50 else "LOW — quiet" if gas < 10 else "normal"
+        print(f"  ETH gas: {gas} gwei ({gas_note})", flush=True)
+
+    if defi_tvl:
+        tvl    = defi_tvl.get("total_tvl_bn", 0)
+        tvl24  = defi_tvl.get("tvl_change_24h", 0)
+        tvl7   = defi_tvl.get("tvl_change_7d", 0)
+        signal = defi_tvl.get("tvl_signal", "neutral").upper()
+        print(f"  DeFi TVL: ${tvl:.1f}B  |  24h: {tvl24:+.1f}%  |  7d: {tvl7:+.1f}%  →  {signal}", flush=True)
+
+    if stables:
+        usdt = stables.get("tether", 0)
+        usdc = stables.get("usd_coin", 0)
+        print(f"  Stablecoins: USDT ${usdt:.1f}B  |  USDC ${usdc:.1f}B", flush=True)
+
+    if whales:
+        print(f"  Whale moves (last 1h, $1M+):", flush=True)
+        for tx in whales[:5]:
+            arrow = "→ EXCHANGE (bearish inflow)" if tx["signal"] == "BEARISH_INFLOW" else \
+                    "← FROM EXCHANGE (bullish outflow)" if tx["signal"] == "BULLISH_OUTFLOW" else "transfer"
+            print(f"    ${tx['amount_usd']}M {tx['symbol']}  {tx['from']} {arrow}", flush=True)
+
+    # News headlines
+    print("  Latest news:", flush=True)
+    for coin, items in news.items():
+        if items:
+            for item in items[:2]:
+                sentiment_tag = "▲" if item["sentiment"] == "bullish" else "▼" if item["sentiment"] == "bearish" else "–"
+                print(f"    {sentiment_tag} {coin}: {item['title'][:90]}", flush=True)
 
     # Format for Claude
     fg_str = f"Fear & Greed: {fg.get('current',{}).get('value','?')} ({fg.get('current',{}).get('label','?')}) | Yesterday: {fg.get('yesterday',{}).get('value','?')}"
@@ -457,5 +515,33 @@ Assess the macro environment and output ONLY this JSON:
         "advice":    result.get("trading_advice"),
     })
 
-    print(f"  Regime: {result.get('regime_type','?')} | Risk: {result.get('risk_level','?')} | {result.get('trading_advice','')[:80]}", flush=True)
+    # ── Print the AI's conclusions ─────────────────────────────────────────────
+    regime   = result.get("regime_type", "?")
+    strength = result.get("regime_strength", "?")
+    risk     = result.get("risk_level", "?")
+    summary  = result.get("macro_summary", "")
+    advice   = result.get("trading_advice", "")
+    key_news = result.get("key_news", "")
+
+    print(f"", flush=True)
+    print(f"  ── AI MACRO READ ──────────────────────────────────────", flush=True)
+    print(f"  Regime: {regime.upper()} (strength {strength}/10)  |  Risk: {risk.upper()}", flush=True)
+    if summary:
+        print(f"  {summary}", flush=True)
+    if advice:
+        print(f"  Desk action: {advice}", flush=True)
+    if key_news:
+        print(f"  Key news: {key_news}", flush=True)
+
+    # Coin biases
+    biases  = result.get("coin_bias", {})
+    reasons = result.get("coin_bias_reasons", {})
+    if biases:
+        print(f"  Coin biases:", flush=True)
+        for coin in ["BTC", "ETH", "SOL", "XRP", "DOGE"]:
+            bias   = biases.get(coin, "neutral").upper()
+            reason = reasons.get(coin, "")
+            arrow  = "▲" if bias == "LONG" else "▼" if bias == "SHORT" else "–"
+            print(f"    {arrow} {coin}: {bias}  —  {reason[:70]}", flush=True)
+
     return result
