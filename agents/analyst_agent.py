@@ -152,7 +152,7 @@ def fmt_candles(candles: list, n: int = 20) -> str:
 
 
 def run() -> dict:
-    print("  Running...", flush=True)
+    print("  Scanning charts...", flush=True)
 
     macro        = get_state("macro_regime", {})
     macro_regime = macro.get("regime_type", "uncertain")
@@ -234,6 +234,16 @@ def run() -> dict:
             "ob_pressure": ob_pressure, "ema20_1h": ema20_1h, "ema50_1h": ema50_1h,
             "ema20_4h": ema20_4h, "vol_trend": vol_trend, "bias": coin_bias.get(coin, "neutral"),
         }
+
+        # Print what we found for this coin
+        ema_pos = f"{'above' if price > ema20_15m else 'below'} 20EMA / {'above' if price > ema50_15m else 'below'} 50EMA"
+        ob_str  = f"OB {ob_pressure} ({ob_ratio:.2f})"
+        macro_b = coin_bias.get(coin, "neutral").upper()
+        print(f"  {coin:4s}  ${price:<12,.4f}  RSI 15m={rsi_15m:.0f}  1h={rsi_1h:.0f}  4h={rsi_4h:.0f}  |  Vol: {vol_trend}  |  {ema_pos}  |  {ob_str}  |  Macro: {macro_b}", flush=True)
+        sup = levels.get("support", 0)
+        res = levels.get("resistance", 0)
+        if sup and res:
+            print(f"       Support: {sup:.4f}  Resistance: {res:.4f}  ATR(15m): {atr_15m:.4f}", flush=True)
 
         liq_str = "\n".join(
             f"  {c['type']} @ {c['price']:.6f} (x{c['strength']}, {c['side']})"
@@ -495,23 +505,38 @@ Respond with ONLY this JSON:
 
     summary = result.get("market_summary", "")
     if summary:
-        print(f"  Market: {summary}", flush=True)
+        print(f"", flush=True)
+        print(f"  ── MARKET SUMMARY ─────────────────────────────────────", flush=True)
+        print(f"  {summary}", flush=True)
+        nxt = result.get("next_check_focus", "")
+        if nxt:
+            print(f"  Next watch: {nxt}", flush=True)
 
     if trades:
-        print(f"  Found {len(trades)} setup(s):", flush=True)
-        for t in trades:
-            sym    = t.get('symbol','').replace('USDT','')
-            dirn   = t.get('direction','')
-            tf     = t.get('timeframe','')
-            rr     = t.get('rr_ratio', 0)
-            conf   = t.get('confidence', 0)
-            qual   = t.get('setup_quality','')
-            entry  = t.get('entry')
-            status = "ENTER NOW" if entry else "WAITING FOR LEVEL"
-            arrow  = "SHORT ↓" if dirn == "SHORT" else "LONG ↑"
-            print(f"    {sym} {arrow} ({tf}) — R:R {rr:.1f}:1 — confidence {conf}/10 [{qual}]", flush=True)
+        print(f"", flush=True)
+        print(f"  ── SETUPS FOUND ({len(trades)}) ─────────────────────────────────", flush=True)
+        for i, t in enumerate(trades, 1):
+            sym   = t.get('symbol','').replace('USDT','')
+            dirn  = t.get('direction','')
+            tf    = t.get('timeframe','')
+            rr    = t.get('rr_ratio', 0)
+            conf  = t.get('confidence', 0)
+            qual  = t.get('setup_quality','')
+            entry = t.get('entry', 0)
+            tp    = t.get('tp', 0)
+            sl    = t.get('sl', 0)
+            arrow = "SHORT ↓" if dirn == "SHORT" else "LONG ↑"
+            stars = "★★★" if qual == "strong" else "★★☆" if qual == "moderate" else "★☆☆"
+            print(f"  [{i}] {sym} {arrow} ({tf})  —  R:R {rr:.1f}:1  —  Confidence {conf}/10  {stars}", flush=True)
+            print(f"      Entry (limit): ${entry:,.4f}  →  fires when price touches this level", flush=True)
+            print(f"      TP: ${tp:,.4f}  |  SL: ${sl:,.4f}", flush=True)
             if t.get('reason'):
-                print(f"    Why: {t.get('reason','')[:120]}", flush=True)
+                print(f"      Why: {t.get('reason','')[:150]}", flush=True)
+            if t.get('risk_note'):
+                print(f"      Invalidated if: {t.get('risk_note','')[:100]}", flush=True)
+            factors = t.get('confluence_factors', [])
+            if factors:
+                print(f"      Confluence: {' · '.join(factors[:4])}", flush=True)
     else:
         print(f"  No clean setups found this cycle — waiting for better levels.", flush=True)
 

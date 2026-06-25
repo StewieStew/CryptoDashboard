@@ -1953,8 +1953,16 @@ def _agent_trade_executor() -> None:
                 }
                 if learning.log_trade(_td):
                     _agent_signal_cooldown[_ck] = time.time()
-                    print(f"[AGENT EXEC] ✅ {_sym} {_dir} {_tf} @ {_live:.6f}"
-                          f" | TP={_tp:.6f} SL={_sl:.6f} | R:R={_rr:.1f}:1 | {_qual}", flush=True)
+                    print(f"", flush=True)
+                    print(f"  🔥 TRADE FIRED  ──────────────────────────────────────", flush=True)
+                    arrow = "SHORT ↓" if _dir == "SHORT" else "LONG ↑"
+                    print(f"  {_sym.replace('USDT','')} {arrow} ({_tf})", flush=True)
+                    print(f"  Entry:  ${_live:,.4f}  ← hit the level", flush=True)
+                    print(f"  TP:     ${_tp:,.4f}", flush=True)
+                    print(f"  SL:     ${_sl:,.4f}", flush=True)
+                    print(f"  R:R:    {_rr:.1f}:1  |  Quality: {_qual}  |  Confidence: {_conf}/10", flush=True)
+                    print(f"  ─────────────────────────────────────────────────────", flush=True)
+                    print(f"", flush=True)
                     notifications.send_signal_alert({
                         "symbol": _sym, "interval": _tf, "direction": _dir,
                         "entry": _live, "tp": _tp, "sl": _sl, "score": _conf,
