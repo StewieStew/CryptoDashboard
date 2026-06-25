@@ -346,9 +346,23 @@ function tradeCardHtml(t, mode){
       <span>Confidence <strong>${t.confidence||t.score||'?'}/10</strong></span>
       ${t.setup_quality?`<span>Quality <strong>${t.setup_quality}</strong></span>`:''}
     </div>
-    <div class="chart-wrap"><div class="chart-box" id="${id}" style="height:200px"></div></div>
-  </div>
-  <script>setTimeout(()=>renderChart('${id}','${t.symbol||sym+'USDT'}','${tf}',${entry},${tp},${sl}),50);<\/script>`;
+    <div class="chart-wrap"><div class="chart-box" id="${id}" style="height:200px"
+      data-symbol="${t.symbol||sym+'USDT'}" data-tf="${tf}"
+      data-entry="${entry}" data-tp="${tp}" data-sl="${sl}"></div></div>
+  </div>`;
+}
+
+// After setting innerHTML, find all chart boxes by data attrs and render them
+function renderAllCharts(){
+  document.querySelectorAll('.chart-box[data-symbol]').forEach(el=>{
+    if(_chartInstances[el.id])return; // already rendered
+    const sym=el.dataset.symbol;
+    const tf=el.dataset.tf||'15m';
+    const entry=parseFloat(el.dataset.entry||0);
+    const tp=parseFloat(el.dataset.tp||0);
+    const sl=parseFloat(el.dataset.sl||0);
+    renderChart(el.id,sym,tf,entry,tp,sl);
+  });
 }
 
 // ── Main load loop ────────────────────────────────────────────────────────────
@@ -502,6 +516,9 @@ async function load(){
     if(open.length){
       oEl.innerHTML=open.map(t=>tradeCardHtml(t,'open')).join('');
     }else oEl.innerHTML='<div class="empty">No open trades</div>';
+
+    // Render charts for all cards now that DOM is set
+    setTimeout(renderAllCharts, 100);
 
     // Closed history
     const cb=document.getElementById('closedBody');

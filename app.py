@@ -1915,12 +1915,17 @@ def _agent_trade_executor() -> None:
 
                 # Gate 5: Fire the instant price hits the entry level.
                 # Works like a real limit order — once the mark is touched, it executes.
-                # SHORT: price needs to rally UP to the resistance entry.
-                # LONG:  price needs to drop DOWN to the support entry.
+                # SHORT: analyst targets resistance ABOVE current price — wait for price
+                #        to RALLY UP to that level before shorting.
+                # LONG:  analyst targets support BELOW current price — wait for price
+                #        to DROP DOWN to that level before buying.
+                # 0.1% tolerance on the approach side for API latency / spread.
                 _waiting = False
-                if _dir == "SHORT" and _live < _entry * 0.995:
+                if _dir == "SHORT" and _live < _entry * 0.999:
+                    # Price hasn't rallied up to the resistance level yet
                     _waiting = True
-                if _dir == "LONG" and _live > _entry * 1.005:
+                if _dir == "LONG" and _live > _entry * 1.001:
+                    # Price hasn't dropped down to the support level yet
                     _waiting = True
 
                 if _waiting:
