@@ -1905,14 +1905,15 @@ def _agent_trade_executor() -> None:
                 except Exception:
                     _live  = _entry
 
-                # Gate 5: Entry proximity check — analyst may set a LIMIT entry at a key level.
-                # If live price is within 0.5% of the signal's entry target → enter now.
-                # If live price is far from the target → wait (signal stays in queue for 20 min).
-                # Only reject if SL is fully crossed with no buffer.
-                _entry_dist = abs(_live - _entry) / _entry if _entry else 0
-                if _entry_dist > 0.005:
-                    # Price hasn't reached the target level yet — keep waiting
-                    print(f"[AGENT EXEC] {_sym}: waiting for level (live={_live:.4f} target={_entry:.4f} dist={_entry_dist*100:.2f}%)", flush=True)
+                # Gate 5: Fire the instant price hits the entry level.
+                # Works like a real limit order — once the mark is touched, it executes.
+                # SHORT: price needs to rally UP to the resistance entry.
+                # LONG:  price needs to drop DOWN to the support entry.
+                if _dir == "SHORT" and _live < _entry * 0.995:
+                    print(f"[AGENT EXEC] {_sym} SHORT: waiting for {_entry:.4f} (live={_live:.4f})", flush=True)
+                    continue
+                if _dir == "LONG" and _live > _entry * 1.005:
+                    print(f"[AGENT EXEC] {_sym} LONG: waiting for {_entry:.4f} (live={_live:.4f})", flush=True)
                     continue
                 if _dir == "LONG"  and _live <= _sl * 1.005:
                     print(f"[AGENT EXEC] {_sym}: SL already crossed (live={_live:.4f} sl={_sl:.4f})", flush=True)

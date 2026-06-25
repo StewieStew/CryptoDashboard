@@ -130,14 +130,22 @@ Respond with ONLY:
         )
         raw = resp.content[0].text.strip()
 
-        if raw.lower() in ("null", "none", ""):
+        if not raw or raw.lower() in ("null", "none", ""):
             return None
         if raw.startswith("```"):
             raw = raw.split("```")[1].lstrip("json").strip()
         if raw.endswith("```"):
             raw = raw[:-3].strip()
 
-        sig = json.loads(raw)
+        # Claude sometimes returns "null\n\nExplanation..." — detect null prefix
+        if raw.lower().startswith("null"):
+            return None
+
+        # Use raw_decode so trailing text after the JSON object is ignored
+        try:
+            sig, _ = json.JSONDecoder().raw_decode(raw)
+        except json.JSONDecodeError:
+            return None
 
         if not sig.get("symbol") or sig.get("direction") not in ("LONG", "SHORT"):
             return None
