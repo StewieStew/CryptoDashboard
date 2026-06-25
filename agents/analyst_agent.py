@@ -594,11 +594,20 @@ STEP 5 - SET TP AND SL AT STRUCTURAL LEVELS ON THE TRADING TIMEFRAME
 - SL: just beyond the 15M candle that proves this read was wrong (beyond the wick that invalidates the setup)
 - R:R >= 1.5:1 on 15M trades. If levels are too tight and RR is under 1.3, skip and find a better coin. For 1H setups, aim for 1.8:1+.
 
-STEP 6 - RETURN YOUR BEST 1-3 SETUPS
+STEP 6 - CROSS-CHECK: DOES THE CHART MATCH THE NUMBERS? (CRITICAL)
+Before finalizing any setup, look back at the chart image and verify:
+- Does the chart VISUALLY confirm what the numbers suggest? If the numbers say RSI=28 (oversold) but the chart shows price still in a clean downtrend with no base, do NOT long — the numbers are early, the chart is truth.
+- Is the entry level visible on the chart as a real level? If the suggested entry is in the middle of open air with no wicks or structure near it, reject it.
+- Is the TP blocked by a visible level on the chart before it gets there? A daily resistance drawn on the chart between entry and TP kills the trade — adjust TP to just below that level.
+- Does the candle pattern visually match the direction? If you're calling SHORT but the last 4 candles on the 15M chart are clear green momentum candles with no wick rejection, that's a mismatch — pass on it.
+- Does volume (bar height at bottom of candles) support the move? Visually expanding volume on the setup candle = conviction. Dying volume = no edge.
+- Flag any coin where the chart and numbers are telling different stories — note it in market_summary so it's visible.
+
+STEP 7 - RETURN YOUR BEST 1-3 SETUPS
 Return only setups you would actually take. Quality over quantity.
 - If 3 genuine setups exist across different coins -> return all 3
 - If only 1 good setup exists -> return 1 (do not manufacture bad trades)
-- ALWAYS return at least 1. Never return empty.
+- If nothing is clean -> return empty trades array. Never force a bad trade.
 - Do NOT return two trades on the same coin.
 - Do NOT suggest a trade if the same coin+direction is already open.
 
@@ -629,7 +638,8 @@ Respond with ONLY this JSON:
   ],
   "market_summary": "<1-2 sentences: BTC 15M structure right now and what it means for alts>",
   "coins_to_avoid": ["<sym>"],
-  "next_check_focus": "<specific 15M level or pattern to watch next cycle>"
+  "next_check_focus": "<specific 15M level or pattern to watch next cycle>",
+  "chart_warnings": ["<any coin where chart and numbers conflict, e.g. 'ETH: RSI oversold but chart shows no base, skip longs'>"]
 }}"""
 
         try:
@@ -722,6 +732,14 @@ Respond with ONLY this JSON:
         "market_summary": result.get("market_summary"),
         "coins_to_avoid": result.get("coins_to_avoid", []),
     })
+
+    # Print any chart/number conflicts Claude flagged
+    warnings = result.get("chart_warnings", [])
+    if warnings:
+        print(f"", flush=True)
+        print(f"  ── CHART WARNINGS ⚠️  ───────────────────────────────────", flush=True)
+        for w in warnings:
+            print(f"  ⚠  {w}", flush=True)
 
     summary = result.get("market_summary", "")
     if summary:
