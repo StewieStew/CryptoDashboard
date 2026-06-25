@@ -1710,6 +1710,63 @@ MAX_AGENT_HISTORY = 100
 _pending_signals: dict = {}  # signals queued, waiting for price to hit entry level
 
 
+def _persist_insights():
+    """Save agent insights + pending signals to the persistent DB so they survive restarts."""
+    try:
+        db = learning._get_db()
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS agent_state (
+                key   TEXT PRIMARY KEY,
+                value TEXT,
+                saved_at TEXT
+            )""")
+        now = datetime.now(timezone.utc).isoformat()
+        db.execute("INSERT OR REPLACE INTO agent_state VALUES ('insights',?,?)",
+                   (json.dumps(_agent_insights[-MAX_AGENT_HISTORY:]), now))
+        db.execute("INSERT OR REPLACE INTO agent_state VALUES ('reports',?,?)",
+                   (json.dumps(_agent_reports[-MAX_AGENT_HISTORY:]), now))
+        db.execute("INSERT OR REPLACE INTO agent_state VALUES ('pending',?,?)",
+                   (json.dumps(_pending_signals), now))
+        db.commit()
+        db.close()
+    except Exception:
+        pass
+
+
+def _load_persisted_insights():
+    """On startup: reload insights + pending signals from the persistent DB."""
+    global _agent_insights, _agent_reports, _pending_signals
+    try:
+        db = learning._get_db()
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS agent_state (
+                key   TEXT PRIMARY KEY,
+                value TEXT,
+                saved_at TEXT
+            )""")
+        for key, target in [('insights', None), ('reports', None), ('pending', None)]:
+            row = db.execute("SELECT value FROM agent_state WHERE key=?", (key,)).fetchone()
+            if row:
+                data = json.loads(row[0])
+                if key == 'insights':
+                    _agent_insights = data if isinstance(data, list) else []
+                elif key == 'reports':
+                    _agent_reports = data if isinstance(data, list) else []
+                elif key == 'pending':
+                    _pending_signals = data if isinstance(data, dict) else {}
+        db.close()
+        total = len(_agent_insights) + len(_agent_reports) + len(_pending_signals)
+        if total:
+            print(f"[AGENT STATE] Restored {len(_agent_insights)} insights, "
+                  f"{len(_agent_reports)} reports, {len(_pending_signals)} pending signals", flush=True)
+    except Exception as e:
+        print(f"[AGENT STATE] Could not restore state: {e}", flush=True)
+
+
+# Load persisted state immediately on startup — before any requests come in
+_load_persisted_insights()
+
+
 @app.route("/api/agent/insight", methods=["POST"])
 def agent_insight():
     """Receive market intelligence from the Mac Mini local agent."""
@@ -1719,6 +1776,7 @@ def agent_insight():
         _agent_insights.append(body)
         if len(_agent_insights) > MAX_AGENT_HISTORY:
             _agent_insights.pop(0)
+    _persist_insights()
     return jsonify({"status": "received", "count": len(_agent_insights)})
 
 
@@ -1731,6 +1789,7 @@ def agent_report():
         _agent_reports.append(body)
         if len(_agent_reports) > MAX_AGENT_HISTORY:
             _agent_reports.pop(0)
+    _persist_insights()
     # If it's a postmortem, attach it to the trade record
     if body.get("type") == "postmortem" and body.get("trade_id"):
         try:
@@ -1939,12 +1998,14 @@ def _agent_trade_executor() -> None:
                             "dist_pct":   round(_dist_pct, 2),
                             "status":     "pending",
                         }
+                    _persist_insights()
                     print(f"[AGENT EXEC] {_sym} {_dir}: PENDING — waiting for ${_entry:,.4f}  (live ${_live:,.4f}, {_dist_pct:.2f}% away)", flush=True)
                     continue
 
-                # Price hit the level — remove from pending
+                # Price hit the level — remove from pending and persist
                 with _agent_lock:
                     _pending_signals.pop(_ck, None)
+                _persist_insights()
                 if _dir == "LONG"  and _live <= _sl * 1.005:
                     print(f"[AGENT EXEC] {_sym}: SL already crossed (live={_live:.4f} sl={_sl:.4f})", flush=True)
                     continue
