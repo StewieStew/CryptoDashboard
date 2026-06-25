@@ -154,7 +154,7 @@ Respond with ONLY this JSON:
 def identify_patterns(closed_trades: list) -> dict:
     """Analyze all closed trades and find statistical patterns."""
     client = _claude()
-    if not client or len(closed_trades) < 5:
+    if not client or len(closed_trades) < 2:
         return {}
 
     # Format trades for analysis

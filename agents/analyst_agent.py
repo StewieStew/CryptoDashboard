@@ -395,7 +395,7 @@ Set timeframe to "15m" when entry and TP/SL are based on 15M structure. Use "1h"
 STEP 5 - SET TP AND SL AT STRUCTURAL LEVELS ON THE TRADING TIMEFRAME
 - TP: next significant 15M or 1H level that price is projected to reach (prior swing high for SHORT, swing low for LONG)
 - SL: just beyond the 15M candle that proves this read was wrong (beyond the wick that invalidates the setup)
-- R:R >= 1.8:1. If 15M levels are too tight, check if 1H levels give a viable setup with wider TP.
+- R:R >= 1.5:1 on 15M trades. If levels are too tight and RR is under 1.3, skip and find a better coin. For 1H setups, aim for 1.8:1+.
 
 STEP 6 - RETURN YOUR BEST 1-3 SETUPS
 Return only setups you would actually take. Quality over quantity.

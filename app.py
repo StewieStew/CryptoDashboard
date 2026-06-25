@@ -1773,7 +1773,7 @@ _agent_signal_cooldown: dict = {}   # sym → last signal epoch
 # ── Risk management constants ─────────────────────────────────────────────────
 MAX_OPEN_TRADES   = 5       # up to 5 open at once — build data fast
 DAILY_LOSS_LIMIT  = 0.08    # stop only if down 8% in a day (give room to breathe)
-MIN_RR_RATIO      = 1.8     # R:R ≥ 1.8:1 — enough edge to be profitable at 40% win rate
+MIN_RR_RATIO      = 1.5     # R:R ≥ 1.5:1 — 15M trades have tighter levels; still profitable at 40% WR
 SIGNAL_COOLDOWN   = 10 * 60 # 10 min cooldown — trade frequently to build data
 _daily_pnl_cache: dict = {"date": None, "pnl": 0.0}
 
