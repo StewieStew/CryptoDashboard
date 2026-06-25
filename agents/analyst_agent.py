@@ -56,47 +56,92 @@ def fetch_orderbook(symbol: str) -> dict:
 
 
 def calc_rsi(closes: list, period: int = 14) -> float:
-    if len(closes) < period + 1:
+    """Wilder's RSI — matches TradingView and every real charting platform."""
+    if len(closes) < period + 2:
         return 50.0
-    deltas = np.diff(closes[-(period + 2):])
+    deltas = np.diff(closes)
     gains  = np.where(deltas > 0, deltas, 0.0)
     losses = np.where(deltas < 0, -deltas, 0.0)
-    avg_g  = np.mean(gains[-period:])
-    avg_l  = np.mean(losses[-period:])
-    return float(100.0 - 100.0 / (1.0 + avg_g / avg_l)) if avg_l > 0 else 50.0
+    # Seed with simple average for the first period
+    avg_g = float(np.mean(gains[:period]))
+    avg_l = float(np.mean(losses[:period]))
+    # Wilder's smoothing over remaining bars
+    for g, l in zip(gains[period:], losses[period:]):
+        avg_g = (avg_g * (period - 1) + g) / period
+        avg_l = (avg_l * (period - 1) + l) / period
+    return float(100.0 - 100.0 / (1.0 + avg_g / avg_l)) if avg_l > 0 else 100.0
+
+
+def calc_ema(closes: list, period: int) -> float:
+    """True Exponential Moving Average — matches TradingView."""
+    if len(closes) < period:
+        return float(np.mean(closes)) if closes else 0.0
+    k = 2.0 / (period + 1)
+    ema = float(np.mean(closes[:period]))  # seed with SMA
+    for price in closes[period:]:
+        ema = price * k + ema * (1 - k)
+    return ema
 
 
 def calc_atr(candles: list, period: int = 14) -> float:
+    """Wilder's ATR — exponential smoothing, not simple average."""
     if len(candles) < period + 1:
         return 0.0
     trs = []
     for i in range(1, len(candles)):
-        h = candles[i]["high"]
-        l = candles[i]["low"]
+        h  = candles[i]["high"]
+        l  = candles[i]["low"]
         pc = candles[i-1]["close"]
         trs.append(max(h - l, abs(h - pc), abs(l - pc)))
-    return float(np.mean(trs[-period:]))
+    # Seed with SMA, then Wilder's smoothing
+    atr = float(np.mean(trs[:period]))
+    for tr in trs[period:]:
+        atr = (atr * (period - 1) + tr) / period
+    return atr
 
 
-def find_swing_levels(candles: list) -> dict:
-    """Find recent swing highs and lows — natural support/resistance."""
-    if len(candles) < 10:
+def find_swing_levels(candles_15m: list, candles_4h: list = None, candles_1d: list = None) -> dict:
+    """
+    Find structural support/resistance from higher timeframes.
+    Uses daily swing highs/lows first (major levels), supplemented by 4h.
+    These are the levels a real trader draws on their chart.
+    """
+    price = candles_15m[-1]["close"] if candles_15m else 0
+    if not price:
         return {}
-    highs = [c["high"]  for c in candles]
-    lows  = [c["low"]   for c in candles]
-    price = candles[-1]["close"]
 
-    # Find swing highs above price (resistance)
+    all_highs = []
+    all_lows  = []
+
+    # Daily levels — most significant (last 60 days)
+    if candles_1d and len(candles_1d) >= 5:
+        for c in candles_1d[-60:]:
+            all_highs.append(c["high"])
+            all_lows.append(c["low"])
+
+    # 4h levels — intermediate structure (last 90 candles = ~15 days)
+    if candles_4h and len(candles_4h) >= 5:
+        for c in candles_4h[-90:]:
+            all_highs.append(c["high"])
+            all_lows.append(c["low"])
+
+    # Fallback: use 4h or 1h data if that's all we have
+    if not all_highs:
+        for c in (candles_15m or [])[-100:]:
+            all_highs.append(c["high"])
+            all_lows.append(c["low"])
+
+    # Nearest structural resistance above price
     resistances = sorted(
-        [h for h in highs[-50:] if h > price],
+        list(set(round(h, 8) for h in all_highs if h > price * 1.001)),
         key=lambda x: abs(x - price)
-    )[:3]
+    )[:5]
 
-    # Find swing lows below price (support)
+    # Nearest structural support below price
     supports = sorted(
-        [l for l in lows[-50:] if l < price],
+        list(set(round(l, 8) for l in all_lows if l < price * 0.999)),
         key=lambda x: abs(x - price)
-    )[:3]
+    )[:5]
 
     return {
         "price":       price,
@@ -107,33 +152,144 @@ def find_swing_levels(candles: list) -> dict:
     }
 
 
-def find_liquidity_clusters(candles: list, price: float) -> list:
+def find_liquidity_clusters(candles_15m: list, price: float,
+                            candles_4h: list = None, candles_1d: list = None) -> list:
+    """
+    Find liquidity pools (equal highs / equal lows) across all timeframes.
+    4h and daily clusters are structurally significant — that's where stops actually pool.
+    """
+    all_highs = []
+    all_lows  = []
+
+    # Daily highs/lows carry the most weight — swing traders' stops live here
+    if candles_1d:
+        for c in candles_1d[-60:]:
+            all_highs.append(("1d", c["high"]))
+            all_lows.append(("1d", c["low"]))
+
+    # 4h highs/lows — intermediate pools
+    if candles_4h:
+        for c in candles_4h[-90:]:
+            all_highs.append(("4h", c["high"]))
+            all_lows.append(("4h", c["low"]))
+
+    # 15m for short-term micro clusters
+    for c in (candles_15m or [])[-100:]:
+        all_highs.append(("15m", c["high"]))
+        all_lows.append(("15m", c["low"]))
+
     clusters = []
-    if len(candles) < 20:
-        return clusters
-    highs = [c["high"] for c in candles[-100:]]
-    lows  = [c["low"]  for c in candles[-100:]]
-    seen  = set()
-    for h in highs:
-        key = round(h / price * 500)
+    seen = set()
+
+    for tf, h in all_highs:
+        key = round(h / price * 200)
         if key in seen:
             continue
-        count = sum(1 for hh in highs if abs(hh - h) / h < 0.005)
-        if count >= 2 and abs(h - price) / price < 0.10:
+        count = sum(1 for _, hh in all_highs if abs(hh - h) / h < 0.005)
+        # Weight: daily clusters need 2 touches, 4h need 3, 15m need 4
+        min_touches = 2 if tf == "1d" else 3 if tf == "4h" else 4
+        if count >= min_touches and abs(h - price) / price < 0.15:
             seen.add(key)
             clusters.append({"type": "sell_stops", "price": round(h, 8),
-                              "strength": count, "side": "above" if h > price else "below"})
+                              "strength": count, "tf": tf,
+                              "side": "above" if h > price else "below"})
+
     seen = set()
-    for l in lows:
-        key = round(l / price * 500)
+    for tf, l in all_lows:
+        key = round(l / price * 200)
         if key in seen:
             continue
-        count = sum(1 for ll in lows if abs(ll - l) / l < 0.005)
-        if count >= 2 and abs(l - price) / price < 0.10:
+        count = sum(1 for _, ll in all_lows if abs(ll - l) / l < 0.005)
+        min_touches = 2 if tf == "1d" else 3 if tf == "4h" else 4
+        if count >= min_touches and abs(l - price) / price < 0.15:
             seen.add(key)
             clusters.append({"type": "buy_stops", "price": round(l, 8),
-                              "strength": count, "side": "above" if l > price else "below"})
-    return sorted(clusters, key=lambda x: abs(x["price"] - price))[:6]
+                              "strength": count, "tf": tf,
+                              "side": "above" if l > price else "below"})
+
+    return sorted(clusters, key=lambda x: abs(x["price"] - price))[:8]
+
+
+def render_chart_image(symbol: str, c1h: list, c15m: list,
+                       ema20_1h: float, ema50_1h: float,
+                       ema20_15m: float, ema50_15m: float,
+                       supports: list, resistances: list) -> str | None:
+    """
+    Render a dark-theme 2-panel candlestick chart (1H top, 15M bottom).
+    Draws EMA20/50 and key S/R levels. Returns base64 PNG or None.
+    """
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Rectangle
+        from io import BytesIO
+        import base64
+
+        fig, (ax1, ax2) = plt.subplots(
+            2, 1, figsize=(14, 8),
+            facecolor="#0d0d1a",
+            gridspec_kw={"height_ratios": [1.5, 1]},
+        )
+        fig.subplots_adjust(hspace=0.08)
+
+        def _draw(ax, candles, n, tf_label):
+            candles = candles[-n:]
+            ax.set_facecolor("#0d0d1a")
+            ax.tick_params(colors="#888899", labelsize=7)
+            for spine in ax.spines.values():
+                spine.set_color("#222244")
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+            ax.grid(True, alpha=0.12, color="#333355", linewidth=0.5)
+
+            price_min = min(c["low"]  for c in candles)
+            price_max = max(c["high"] for c in candles)
+            pad = (price_max - price_min) * 0.04
+            ax.set_ylim(price_min - pad, price_max + pad)
+            ax.set_xlim(-1, len(candles) + 1)
+
+            for i, c in enumerate(candles):
+                o, h, l, cl = c["open"], c["high"], c["low"], c["close"]
+                color = "#26a69a" if cl >= o else "#ef5350"
+                ax.add_patch(Rectangle(
+                    (i - 0.38, min(o, cl)), 0.76, max(abs(cl - o), (price_max - price_min) * 0.002),
+                    color=color, zorder=2
+                ))
+                ax.plot([i, i], [l, h], color=color, linewidth=0.9, zorder=1)
+
+            ax.set_title(
+                f"{symbol}  {tf_label}",
+                color="#ccccdd", fontsize=9, loc="left", pad=5, fontweight="bold"
+            )
+            return len(candles)
+
+        n1h  = _draw(ax1, c1h,  48, "1H — last 48 bars (2 days)")
+        n15m = _draw(ax2, c15m, 96, "15M — last 96 bars (24 hours)")
+
+        # EMA lines
+        for ax, e20, e50 in [(ax1, ema20_1h, ema50_1h), (ax2, ema20_15m, ema50_15m)]:
+            ax.axhline(e20, color="#00e5ff", linewidth=1.1, alpha=0.85, label=f"EMA20  {e20:.4f}")
+            ax.axhline(e50, color="#ff9800", linewidth=1.1, alpha=0.85, label=f"EMA50  {e50:.4f}")
+            ax.legend(loc="upper left", fontsize=6.5, facecolor="#0d0d1a",
+                      labelcolor="white", framealpha=0.6, edgecolor="#333355")
+
+        # S/R lines on both panels
+        for ax in (ax1, ax2):
+            for r in resistances[:4]:
+                ax.axhline(r, color="#ef5350", linewidth=0.75, linestyle="--", alpha=0.65, zorder=0)
+            for s in supports[:4]:
+                ax.axhline(s, color="#26a69a", linewidth=0.75, linestyle="--", alpha=0.65, zorder=0)
+
+        buf = BytesIO()
+        fig.savefig(buf, format="png", dpi=110, bbox_inches="tight", facecolor="#0d0d1a")
+        plt.close(fig)
+        buf.seek(0)
+        return base64.b64encode(buf.read()).decode()
+
+    except Exception as e:
+        print(f"  [CHART] {symbol} render failed: {e}", flush=True)
+        return None
 
 
 def fmt_candles(candles: list, n: int = 20) -> str:
@@ -165,8 +321,9 @@ def run() -> dict:
     # No blocking rules — learning is observation only, never restriction
 
     # Gather full market data for all coins
-    coin_blocks = []
-    coin_data   = {}
+    coin_blocks  = []
+    coin_data    = {}
+    chart_images = {}  # sym -> base64 PNG
 
     for sym in COINS:
         coin = sym.replace("USDT", "")
@@ -197,8 +354,8 @@ def run() -> dict:
         chg_24h = (price - closes[-25]) / closes[-25] * 100 if len(closes)  >= 25 else 0
         chg_7d  = (price - closes1d[-8])/ closes1d[-8]* 100 if len(closes1d)>=  8 else 0
 
-        levels   = find_swing_levels(c15m if c15m else c1h)
-        clusters = find_liquidity_clusters(c15m if c15m else c1h, price)
+        levels   = find_swing_levels(c15m if c15m else c1h, c4h, c1d)
+        clusters = find_liquidity_clusters(c15m if c15m else c1h, price, c4h, c1d)
 
         # Order book
         bids = [(float(p), float(q)) for p, q in ob.get("bids", [])[:30]]
@@ -208,12 +365,15 @@ def run() -> dict:
         ob_ratio = bid_vol / ask_vol if ask_vol > 0 else 1.0
         ob_pressure = "BUY" if ob_ratio > 1.3 else "SELL" if ob_ratio < 0.7 else "NEUTRAL"
 
-        # Trend: is price above/below key MAs?
-        ema20_15m = float(np.mean(closes15m[-20:])) if len(closes15m) >= 20 else price
-        ema50_15m = float(np.mean(closes15m[-50:])) if len(closes15m) >= 50 else price
-        ema20_1h  = float(np.mean(closes[-20:]))    if len(closes)    >= 20 else price
-        ema50_1h  = float(np.mean(closes[-50:]))    if len(closes)    >= 50 else price
-        ema20_4h  = float(np.mean(closes4h[-20:]))  if len(closes4h)  >= 20 else price
+        # Trend: price vs real EMAs (Wilder exponential, matches TradingView)
+        ema20_15m = calc_ema(closes15m, 20) if len(closes15m) >= 20 else price
+        ema50_15m = calc_ema(closes15m, 50) if len(closes15m) >= 50 else price
+        ema20_1h  = calc_ema(closes,    20) if len(closes)    >= 20 else price
+        ema50_1h  = calc_ema(closes,    50) if len(closes)    >= 50 else price
+        ema20_4h  = calc_ema(closes4h,  20) if len(closes4h)  >= 20 else price
+        ema50_4h  = calc_ema(closes4h,  50) if len(closes4h)  >= 50 else price
+        ema20_1d  = calc_ema(closes1d,  20) if len(closes1d)  >= 20 else price
+        ema50_1d  = calc_ema(closes1d,  50) if len(closes1d)  >= 50 else price
 
         # Volume trend (15m)
         vols15m  = [c["volume"] for c in c15m[-20:]] if c15m else []
@@ -231,19 +391,29 @@ def run() -> dict:
             "price": price, "rsi_15m": rsi_15m, "rsi_1h": rsi_1h, "rsi_4h": rsi_4h, "rsi_1d": rsi_1d,
             "atr_15m": atr_15m, "atr_1h": atr_1h, "chg_1h": chg_1h, "chg_24h": chg_24h, "chg_7d": chg_7d,
             "levels": levels, "clusters": clusters, "ob_ratio": ob_ratio,
-            "ob_pressure": ob_pressure, "ema20_1h": ema20_1h, "ema50_1h": ema50_1h,
-            "ema20_4h": ema20_4h, "vol_trend": vol_trend, "bias": coin_bias.get(coin, "neutral"),
+            "ob_pressure": ob_pressure,
+            "ema20_15m": ema20_15m, "ema50_15m": ema50_15m,
+            "ema20_1h": ema20_1h,   "ema50_1h": ema50_1h,
+            "ema20_4h": ema20_4h,   "ema50_4h": ema50_4h,
+            "ema20_1d": ema20_1d,   "ema50_1d": ema50_1d,
+            "vol_trend": vol_trend, "bias": coin_bias.get(coin, "neutral"),
         }
 
         # Print what we found for this coin
-        ema_pos = f"{'above' if price > ema20_15m else 'below'} 20EMA / {'above' if price > ema50_15m else 'below'} 50EMA"
+        def _pos(p, e): return "▲" if p > e else "▼"
+        ema_str = (f"15m {_pos(price,ema20_15m)}20/{_pos(price,ema50_15m)}50  "
+                   f"1h {_pos(price,ema20_1h)}20/{_pos(price,ema50_1h)}50  "
+                   f"4h {_pos(price,ema20_4h)}20/{_pos(price,ema50_4h)}50  "
+                   f"1d {_pos(price,ema20_1d)}20/{_pos(price,ema50_1d)}50")
         ob_str  = f"OB {ob_pressure} ({ob_ratio:.2f})"
         macro_b = coin_bias.get(coin, "neutral").upper()
-        print(f"  {coin:4s}  ${price:<12,.4f}  RSI 15m={rsi_15m:.0f}  1h={rsi_1h:.0f}  4h={rsi_4h:.0f}  |  Vol: {vol_trend}  |  {ema_pos}  |  {ob_str}  |  Macro: {macro_b}", flush=True)
-        sup = levels.get("support", 0)
-        res = levels.get("resistance", 0)
-        if sup and res:
-            print(f"       Support: {sup:.4f}  Resistance: {res:.4f}  ATR(15m): {atr_15m:.4f}", flush=True)
+        print(f"  {coin:4s}  ${price:<12,.4f}  RSI 15m={rsi_15m:.0f}  1h={rsi_1h:.0f}  4h={rsi_4h:.0f}  1d={rsi_1d:.0f}  |  Vol: {vol_trend}  |  {ob_str}  |  Macro: {macro_b}", flush=True)
+        print(f"       EMA: {ema_str}", flush=True)
+        sups = levels.get("supports", [])
+        ress = levels.get("resistances", [])
+        sup_disp = "  ".join(f"${s:.4f}" for s in sups[:3])
+        res_disp = "  ".join(f"${r:.4f}" for r in ress[:3])
+        print(f"       Sup(1D/4H): {sup_disp or 'none'}  |  Res(1D/4H): {res_disp or 'none'}  |  ATR(15m): {atr_15m:.4f}", flush=True)
 
         liq_str = "\n".join(
             f"  {c['type']} @ {c['price']:.6f} (x{c['strength']}, {c['side']})"
@@ -256,18 +426,42 @@ def run() -> dict:
             for w in whale_for_coin[:2]
         ) or "  No whale activity"
 
+        # Build multi-timeframe level stack for Claude
+        res_stack = "  ".join(f"${r:.4f}" for r in levels.get("resistances", [])[:4])
+        sup_stack = "  ".join(f"${s:.4f}" for s in levels.get("supports",    [])[:4])
+        liq_str2  = "\n".join(
+            f"  [{c['tf']}] {c['type']} @ ${c['price']:.4f} (x{c['strength']}, {c['side']})"
+            for c in clusters[:6]
+        ) or "  None"
+
+        # Generate chart image so Claude can visually read the candles
+        chart_b64 = render_chart_image(
+            sym, c1h, c15m,
+            ema20_1h, ema50_1h, ema20_15m, ema50_15m,
+            levels.get("supports", []), levels.get("resistances", [])
+        )
+        if chart_b64:
+            chart_images[sym] = chart_b64
+            print(f"       Chart: ✓ rendered", flush=True)
+        else:
+            print(f"       Chart: ✗ failed (text-only)", flush=True)
+
         coin_blocks.append(f"""
 ══ {sym} ══════════════════════════════════════
 Price: ${price:.6f}  |  1h: {chg_1h:+.2f}%  |  24h: {chg_24h:+.2f}%  |  7d: {chg_7d:+.2f}%
-RSI: 15m={rsi_15m:.0f}  1h={rsi_1h:.0f}  4h={rsi_4h:.0f}  1d={rsi_1d:.0f}
-Trend (15m): {'ABOVE' if price > ema20_15m else 'BELOW'} 20EMA  |  {'ABOVE' if price > ema50_15m else 'BELOW'} 50EMA
-Trend (1h):  {'ABOVE' if price > ema20_1h  else 'BELOW'} 20EMA  |  {'ABOVE' if price > ema50_1h  else 'BELOW'} 50EMA  |  {'ABOVE' if price > ema20_4h else 'BELOW'} 20EMA(4h)
-Volume: {vol_trend}  |  Order book pressure: {ob_pressure} (ratio={ob_ratio:.2f})
-ATR(15m): {atr_15m:.6f}  |  ATR(1h): {atr_1h:.6f}  |  Macro bias: {coin_bias.get(coin,'neutral').upper()}
-Support: ${levels.get('support',0):.6f}  |  Resistance: ${levels.get('resistance',0):.6f}
+RSI:     15m={rsi_15m:.0f}   1h={rsi_1h:.0f}   4h={rsi_4h:.0f}   1d={rsi_1d:.0f}
+EMA(20): 15m=${ema20_15m:.4f}  1h=${ema20_1h:.4f}  4h=${ema20_4h:.4f}  1d=${ema20_1d:.4f}
+EMA(50): 15m=${ema50_15m:.4f}  1h=${ema50_1h:.4f}  4h=${ema50_4h:.4f}  1d=${ema50_1d:.4f}
+Price vs EMA: 15m={'▲' if price>ema20_15m else '▼'}20/{'▲' if price>ema50_15m else '▼'}50  |  1h={'▲' if price>ema20_1h else '▼'}20/{'▲' if price>ema50_1h else '▼'}50  |  4h={'▲' if price>ema20_4h else '▼'}20/{'▲' if price>ema50_4h else '▼'}50  |  1d={'▲' if price>ema20_1d else '▼'}20/{'▲' if price>ema50_1d else '▼'}50
+Volume: {vol_trend}  |  Order book: {ob_pressure} ({ob_ratio:.2f})  |  Macro bias: {coin_bias.get(coin,'neutral').upper()}
+ATR(15m): {atr_15m:.6f}  |  ATR(1h): {atr_1h:.6f}
 
-Liquidity clusters:
-{liq_str}
+KEY LEVELS (from 1D + 4H structure):
+  Resistances above: {res_stack or 'none found'}
+  Supports below:    {sup_stack or 'none found'}
+
+Liquidity pools (stop clusters across timeframes):
+{liq_str2}
 
 Whale activity:
 {whale_str}
@@ -439,10 +633,30 @@ Respond with ONLY this JSON:
 }}"""
 
         try:
+            # Build message content: chart images first, then the text prompt
+            # Claude sees the charts visually AND reads the raw numbers
+            content = []
+            for sym in COINS:
+                img = chart_images.get(sym)
+                if img:
+                    content.append({
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": "image/png", "data": img}
+                    })
+                    content.append({
+                        "type": "text",
+                        "text": (f"↑ {sym} chart — Top panel: 1H (48 bars = 2 days). "
+                                 f"Bottom panel: 15M (96 bars = 24h). "
+                                 f"Cyan line = EMA20. Orange line = EMA50. "
+                                 f"Red dashed = resistance levels (from 1D+4H). "
+                                 f"Green dashed = support levels (from 1D+4H).")
+                    })
+            content.append({"type": "text", "text": prompt})
+
             msg = client.messages.create(
                 model="claude-sonnet-4-6",
                 max_tokens=2000,
-                messages=[{"role": "user", "content": prompt}],
+                messages=[{"role": "user", "content": content}],
             )
             raw = msg.content[0].text.strip()
             if raw.startswith("```"):
@@ -464,6 +678,12 @@ Respond with ONLY this JSON:
     trades = result.get("trades", [])
     if not trades and result.get("best_trade"):
         trades = [result["best_trade"]]  # backward compat
+
+    # Hard filter: drop any trade that doesn't meet minimum R:R
+    before = len(trades)
+    trades = [t for t in trades if float(t.get("rr_ratio", 0)) >= MIN_RR]
+    if len(trades) < before:
+        print(f"  [FILTER] Dropped {before - len(trades)} trade(s) below R:R {MIN_RR}:1", flush=True)
 
     # Use the highest-confidence trade as the primary signal for dashboard display
     trade = max(trades, key=lambda t: t.get("confidence", 0)) if trades else {}
