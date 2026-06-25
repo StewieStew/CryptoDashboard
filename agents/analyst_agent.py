@@ -247,7 +247,7 @@ def render_chart_image(symbol: str, c4h: list, c1h: list, c15m: list,
 
             # ── Price panel ──────────────────────────────────────────────
             ax.set_facecolor("#0d0d1a")
-            ax.tick_params(colors="#888899", labelsize=7)
+            ax.tick_params(colors="#aaaacc", labelsize=13)
             for spine in ax.spines.values():
                 spine.set_color("#222244")
             ax.spines["top"].set_visible(False)
@@ -274,17 +274,18 @@ def render_chart_image(symbol: str, c4h: list, c1h: list, c15m: list,
 
             # Current price line
             cur = candles[-1]["close"]
-            ax.axhline(cur, color="#ffffff", linewidth=0.7, linestyle=":",
-                       alpha=0.5, zorder=3)
-            ax.text(len(candles) + 0.2, cur, f" {cur:.4f}",
-                    color="#ffffff", fontsize=6, va="center", alpha=0.7)
+            ax.axhline(cur, color="#ffffff", linewidth=1.0, linestyle=":",
+                       alpha=0.6, zorder=3)
+            ax.text(len(candles) + 0.3, cur, f" {cur:.4f}",
+                    color="#ffffff", fontsize=13, va="center", alpha=0.9,
+                    fontweight="bold")
 
-            ax.set_title(tf_label, color="#aaaacc", fontsize=8,
-                         loc="left", pad=3, fontweight="bold")
+            ax.set_title(tf_label, color="#ccccee", fontsize=14,
+                         loc="left", pad=6, fontweight="bold")
 
             # ── Volume panel ─────────────────────────────────────────────
             axvol.set_facecolor("#0d0d1a")
-            axvol.tick_params(colors="#888899", labelsize=6)
+            axvol.tick_params(colors="#888899", labelsize=10)
             for spine in axvol.spines.values():
                 spine.set_color("#222244")
             axvol.spines["top"].set_visible(False)
@@ -305,7 +306,7 @@ def render_chart_image(symbol: str, c4h: list, c1h: list, c15m: list,
             # Average volume line
             axvol.axhline(vol_avg, color="#666688", linewidth=0.6,
                           linestyle="--", alpha=0.6)
-            axvol.set_ylabel("Vol", color="#666688", fontsize=6, labelpad=2)
+            axvol.set_ylabel("Vol", color="#888899", fontsize=11, labelpad=3)
 
             return len(candles)
 
@@ -320,27 +321,29 @@ def render_chart_image(symbol: str, c4h: list, c1h: list, c15m: list,
             (ax15, ema20_15m, ema50_15m),
         ]
         for ax, e20, e50 in ema_panels:
-            ax.axhline(e20, color="#00e5ff", linewidth=1.1, alpha=0.85,
-                       label=f"EMA20 {e20:.4f}")
-            ax.axhline(e50, color="#ff9800", linewidth=1.1, alpha=0.85,
-                       label=f"EMA50 {e50:.4f}")
-            ax.legend(loc="upper left", fontsize=6, facecolor="#0d0d1a",
-                      labelcolor="white", framealpha=0.55, edgecolor="#333355")
+            ax.axhline(e20, color="#00e5ff", linewidth=1.5, alpha=0.85,
+                       label=f"EMA20  {e20:.4f}")
+            ax.axhline(e50, color="#ff9800", linewidth=1.5, alpha=0.85,
+                       label=f"EMA50  {e50:.4f}")
+            ax.legend(loc="upper left", fontsize=12, facecolor="#0d0d1a",
+                      labelcolor="white", framealpha=0.6, edgecolor="#333355")
 
         # S/R levels with price labels on right edge
         price_panels = [ax4h, ax1h, ax15]
         for ax in price_panels:
             xlim = ax.get_xlim()[1]
             for r in resistances[:5]:
-                ax.axhline(r, color="#ef5350", linewidth=0.8,
-                           linestyle="--", alpha=0.6, zorder=0)
-                ax.text(xlim - 1, r, f"{r:.4f} ", color="#ef5350",
-                        fontsize=5.5, va="bottom", ha="right", alpha=0.8)
+                ax.axhline(r, color="#ef5350", linewidth=1.0,
+                           linestyle="--", alpha=0.65, zorder=0)
+                ax.text(xlim - 0.5, r, f"  {r:.4f}", color="#ef5350",
+                        fontsize=11, va="bottom", ha="right", alpha=0.9,
+                        fontweight="bold")
             for s in supports[:5]:
-                ax.axhline(s, color="#26a69a", linewidth=0.8,
-                           linestyle="--", alpha=0.6, zorder=0)
-                ax.text(xlim - 1, s, f"{s:.4f} ", color="#26a69a",
-                        fontsize=5.5, va="top", ha="right", alpha=0.8)
+                ax.axhline(s, color="#26a69a", linewidth=1.0,
+                           linestyle="--", alpha=0.65, zorder=0)
+                ax.text(xlim - 0.5, s, f"  {s:.4f}", color="#26a69a",
+                        fontsize=11, va="top", ha="right", alpha=0.9,
+                        fontweight="bold")
 
         buf = BytesIO()
         fig.savefig(buf, format="png", dpi=150, bbox_inches="tight",
@@ -502,14 +505,24 @@ def run() -> dict:
         ) or "  None"
 
         # Generate chart image so Claude can visually read the candles
-        chart_b64 = render_chart_image(
-            sym, c4h, c1h, c15m,
-            ema20_4h, ema50_4h, ema20_1h, ema50_1h, ema20_15m, ema50_15m,
-            levels.get("supports", []), levels.get("resistances", [])
-        )
+        # Try TradingView first (real professional charts via Playwright)
+        # Falls back to matplotlib if Playwright isn't installed
+        from agents import chart_capture as _cc
+        if _cc.is_available():
+            print(f"       Chart: capturing TradingView (4H / 1H / 15M)...", flush=True)
+            chart_b64 = _cc.capture_coin(sym, ["4h", "1h", "15m"])
+            _source = "TradingView"
+        else:
+            chart_b64 = render_chart_image(
+                sym, c4h, c1h, c15m,
+                ema20_4h, ema50_4h, ema20_1h, ema50_1h, ema20_15m, ema50_15m,
+                levels.get("supports", []), levels.get("resistances", [])
+            )
+            _source = "matplotlib"
+
         if chart_b64:
             chart_images[sym] = chart_b64
-            # Save to disk so you can see exactly what Claude is looking at
+            # Save to disk so you can see what Claude is looking at
             try:
                 import base64 as _b64
                 from pathlib import Path as _Path
@@ -517,9 +530,9 @@ def run() -> dict:
                 _chart_dir.mkdir(exist_ok=True)
                 _chart_path = _chart_dir / f"{sym}.png"
                 _chart_path.write_bytes(_b64.b64decode(chart_b64))
-                print(f"       Chart: ✓ saved → charts/{sym}.png", flush=True)
+                print(f"       Chart: ✓ {_source} → charts/{sym}.png", flush=True)
             except Exception as _ce:
-                print(f"       Chart: ✓ rendered (save failed: {_ce})", flush=True)
+                print(f"       Chart: ✓ {_source} (save failed: {_ce})", flush=True)
         else:
             print(f"       Chart: ✗ failed (text-only)", flush=True)
 
