@@ -210,13 +210,18 @@ def find_liquidity_clusters(candles_15m: list, price: float,
     return sorted(clusters, key=lambda x: abs(x["price"] - price))[:8]
 
 
-def render_chart_image(symbol: str, c1h: list, c15m: list,
+def render_chart_image(symbol: str, c4h: list, c1h: list, c15m: list,
+                       ema20_4h: float, ema50_4h: float,
                        ema20_1h: float, ema50_1h: float,
                        ema20_15m: float, ema50_15m: float,
                        supports: list, resistances: list) -> str | None:
     """
-    Render a dark-theme 2-panel candlestick chart (1H top, 15M bottom).
-    Draws EMA20/50 and key S/R levels. Returns base64 PNG or None.
+    Render a dark-theme 3-panel candlestick chart:
+      Top    — 4H  (120 bars = 20 days of structure)
+      Middle — 1H  (72 bars  = 3 days of detail)
+      Bottom — 15M (96 bars  = 24 hours of the setup)
+    EMA20/50 and key S/R levels drawn on every panel.
+    Returns base64 PNG or None on failure.
     """
     try:
         import matplotlib
@@ -226,15 +231,21 @@ def render_chart_image(symbol: str, c1h: list, c15m: list,
         from io import BytesIO
         import base64
 
-        fig, (ax1, ax2) = plt.subplots(
-            2, 1, figsize=(14, 8),
+        # 6 subplots: price + volume panel for each of 4H, 1H, 15M
+        fig, axes = plt.subplots(
+            6, 1, figsize=(16, 16),
             facecolor="#0d0d1a",
-            gridspec_kw={"height_ratios": [1.5, 1]},
+            gridspec_kw={"height_ratios": [3, 0.8, 2, 0.8, 1.5, 0.8]},
         )
-        fig.subplots_adjust(hspace=0.08)
+        fig.subplots_adjust(hspace=0.04)
+        ax4h, axv4h, ax1h, axv1h, ax15, axv15 = axes
 
-        def _draw(ax, candles, n, tf_label):
-            candles = candles[-n:]
+        def _draw(ax, axvol, candles, n, tf_label):
+            candles = candles[-n:] if len(candles) >= n else candles
+            if not candles:
+                return 0
+
+            # ── Price panel ──────────────────────────────────────────────
             ax.set_facecolor("#0d0d1a")
             ax.tick_params(colors="#888899", labelsize=7)
             for spine in ax.spines.values():
@@ -249,40 +260,91 @@ def render_chart_image(symbol: str, c1h: list, c15m: list,
             ax.set_ylim(price_min - pad, price_max + pad)
             ax.set_xlim(-1, len(candles) + 1)
 
+            min_body = (price_max - price_min) * 0.0015
+            colors = []
             for i, c in enumerate(candles):
                 o, h, l, cl = c["open"], c["high"], c["low"], c["close"]
-                color = "#26a69a" if cl >= o else "#ef5350"
+                col = "#26a69a" if cl >= o else "#ef5350"
+                colors.append(col)
                 ax.add_patch(Rectangle(
-                    (i - 0.38, min(o, cl)), 0.76, max(abs(cl - o), (price_max - price_min) * 0.002),
-                    color=color, zorder=2
+                    (i - 0.38, min(o, cl)), 0.76, max(abs(cl - o), min_body),
+                    color=col, zorder=2
                 ))
-                ax.plot([i, i], [l, h], color=color, linewidth=0.9, zorder=1)
+                ax.plot([i, i], [l, h], color=col, linewidth=0.8, zorder=1)
 
-            ax.set_title(
-                f"{symbol}  {tf_label}",
-                color="#ccccdd", fontsize=9, loc="left", pad=5, fontweight="bold"
-            )
+            # Current price line
+            cur = candles[-1]["close"]
+            ax.axhline(cur, color="#ffffff", linewidth=0.7, linestyle=":",
+                       alpha=0.5, zorder=3)
+            ax.text(len(candles) + 0.2, cur, f" {cur:.4f}",
+                    color="#ffffff", fontsize=6, va="center", alpha=0.7)
+
+            ax.set_title(tf_label, color="#aaaacc", fontsize=8,
+                         loc="left", pad=3, fontweight="bold")
+
+            # ── Volume panel ─────────────────────────────────────────────
+            axvol.set_facecolor("#0d0d1a")
+            axvol.tick_params(colors="#888899", labelsize=6)
+            for spine in axvol.spines.values():
+                spine.set_color("#222244")
+            axvol.spines["top"].set_visible(False)
+            axvol.spines["right"].set_visible(False)
+            axvol.set_xlim(-1, len(candles) + 1)
+
+            vols = [c.get("volume", 0) for c in candles]
+            vol_avg = sum(vols) / len(vols) if vols else 1
+            max_vol = max(vols) if vols else 1
+            axvol.set_ylim(0, max_vol * 1.15)
+
+            for i, (c, v) in enumerate(zip(candles, vols)):
+                col = "#26a69a" if c["close"] >= c["open"] else "#ef5350"
+                # High volume = fully opaque, low = more transparent
+                alpha = 0.4 + 0.6 * min(v / (vol_avg * 2), 1.0)
+                axvol.bar(i, v, width=0.7, color=col, alpha=alpha, zorder=2)
+
+            # Average volume line
+            axvol.axhline(vol_avg, color="#666688", linewidth=0.6,
+                          linestyle="--", alpha=0.6)
+            axvol.set_ylabel("Vol", color="#666688", fontsize=6, labelpad=2)
+
             return len(candles)
 
-        n1h  = _draw(ax1, c1h,  48, "1H — last 48 bars (2 days)")
-        n15m = _draw(ax2, c15m, 96, "15M — last 96 bars (24 hours)")
+        _draw(ax4h, axv4h, c4h,  120, f"{symbol}  ·  4H — 120 bars (~20 days)")
+        _draw(ax1h, axv1h, c1h,   72, f"{symbol}  ·  1H — 72 bars (3 days)")
+        _draw(ax15, axv15, c15m,  96, f"{symbol}  ·  15M — 96 bars (24 hours)")
 
-        # EMA lines
-        for ax, e20, e50 in [(ax1, ema20_1h, ema50_1h), (ax2, ema20_15m, ema50_15m)]:
-            ax.axhline(e20, color="#00e5ff", linewidth=1.1, alpha=0.85, label=f"EMA20  {e20:.4f}")
-            ax.axhline(e50, color="#ff9800", linewidth=1.1, alpha=0.85, label=f"EMA50  {e50:.4f}")
-            ax.legend(loc="upper left", fontsize=6.5, facecolor="#0d0d1a",
-                      labelcolor="white", framealpha=0.6, edgecolor="#333355")
+        # EMA20 (cyan) and EMA50 (orange) on each price panel
+        ema_panels = [
+            (ax4h, ema20_4h,  ema50_4h),
+            (ax1h, ema20_1h,  ema50_1h),
+            (ax15, ema20_15m, ema50_15m),
+        ]
+        for ax, e20, e50 in ema_panels:
+            ax.axhline(e20, color="#00e5ff", linewidth=1.1, alpha=0.85,
+                       label=f"EMA20 {e20:.4f}")
+            ax.axhline(e50, color="#ff9800", linewidth=1.1, alpha=0.85,
+                       label=f"EMA50 {e50:.4f}")
+            ax.legend(loc="upper left", fontsize=6, facecolor="#0d0d1a",
+                      labelcolor="white", framealpha=0.55, edgecolor="#333355")
 
-        # S/R lines on both panels
-        for ax in (ax1, ax2):
-            for r in resistances[:4]:
-                ax.axhline(r, color="#ef5350", linewidth=0.75, linestyle="--", alpha=0.65, zorder=0)
-            for s in supports[:4]:
-                ax.axhline(s, color="#26a69a", linewidth=0.75, linestyle="--", alpha=0.65, zorder=0)
+        # S/R levels with price labels on right edge
+        price_panels = [ax4h, ax1h, ax15]
+        for ax in price_panels:
+            xlim = ax.get_xlim()[1]
+            for r in resistances[:5]:
+                ax.axhline(r, color="#ef5350", linewidth=0.8,
+                           linestyle="--", alpha=0.6, zorder=0)
+                ax.text(xlim - 1, r, f"{r:.4f} ", color="#ef5350",
+                        fontsize=5.5, va="bottom", ha="right", alpha=0.8)
+            for s in supports[:5]:
+                ax.axhline(s, color="#26a69a", linewidth=0.8,
+                           linestyle="--", alpha=0.6, zorder=0)
+                ax.text(xlim - 1, s, f"{s:.4f} ", color="#26a69a",
+                        fontsize=5.5, va="top", ha="right", alpha=0.8)
 
         buf = BytesIO()
-        fig.savefig(buf, format="png", dpi=110, bbox_inches="tight", facecolor="#0d0d1a")
+        fig.savefig(buf, format="png", dpi=110, bbox_inches="tight",
+                    facecolor="#0d0d1a")
         plt.close(fig)
         buf.seek(0)
         return base64.b64encode(buf.read()).decode()
@@ -332,10 +394,10 @@ def run() -> dict:
 
     for sym in COINS:
         coin = sym.replace("USDT", "")
-        c15m = fetch_candles(sym, "15m", 80)   # ~20 hours of 15m data
-        c1h  = fetch_candles(sym, "1h",  100)
-        c4h  = fetch_candles(sym, "4h",   50)
-        c1d  = fetch_candles(sym, "1d",   30)
+        c15m = fetch_candles(sym, "15m", 100)  # ~25 hours of 15m data
+        c1h  = fetch_candles(sym, "1h",  100)  # ~4 days
+        c4h  = fetch_candles(sym, "4h",  130)  # ~21 days for chart + EMA50 seed
+        c1d  = fetch_candles(sym, "1d",   60)  # 60 days for S/R levels
         ob   = fetch_orderbook(sym)
 
         if not c1h:
@@ -441,8 +503,8 @@ def run() -> dict:
 
         # Generate chart image so Claude can visually read the candles
         chart_b64 = render_chart_image(
-            sym, c1h, c15m,
-            ema20_1h, ema50_1h, ema20_15m, ema50_15m,
+            sym, c4h, c1h, c15m,
+            ema20_4h, ema50_4h, ema20_1h, ema50_1h, ema20_15m, ema50_15m,
             levels.get("supports", []), levels.get("resistances", [])
         )
         if chart_b64:
@@ -663,6 +725,39 @@ Respond with ONLY this JSON:
 }}"""
 
         try:
+            # ── Self-evaluation: ask Claude to critique its own charts ────
+            # Runs once per session, saves suggestions to state so we can act on them
+            _eval_done = get_state("chart_eval_done", False)
+            if chart_images and not _eval_done and client:
+                try:
+                    _eval_content = []
+                    for _s, _img in list(chart_images.items())[:2]:  # just first 2 to save tokens
+                        _eval_content.append({"type": "image",
+                            "source": {"type": "base64", "media_type": "image/png", "data": _img}})
+                        _eval_content.append({"type": "text", "text": f"↑ {_s} chart (4H/1H/15M panels, volume bars, EMA20/50, S/R levels)"})
+                    _eval_content.append({"type": "text", "text": (
+                        "You are reviewing the chart images your own trading system generates to analyse setups. "
+                        "As a professional crypto trader, what key technical indicators, overlays, or visual elements "
+                        "are MISSING from these charts that would meaningfully improve your ability to identify and "
+                        "validate trade setups? Be specific — name exactly what should be added and why it matters. "
+                        "Keep it to the top 3-5 most impactful additions only. Reply in plain text, no JSON.")})
+                    _eval_msg = client.messages.create(
+                        model="claude-haiku-4-5-20251001",
+                        max_tokens=400,
+                        messages=[{"role": "user", "content": _eval_content}],
+                    )
+                    _suggestions = _eval_msg.content[0].text.strip()
+                    set_state("chart_improvement_suggestions", _suggestions)
+                    set_state("chart_eval_done", True)
+                    print(f"\n  ── CHART SELF-EVAL ────────────────────────────────────", flush=True)
+                    print(f"  Claude's suggestions for chart improvements:", flush=True)
+                    for _line in _suggestions.splitlines():
+                        if _line.strip():
+                            print(f"  {_line}", flush=True)
+                    print(f"", flush=True)
+                except Exception as _ee:
+                    print(f"  [CHART EVAL] failed: {_ee}", flush=True)
+
             # Build message content: chart images first, then the text prompt
             # Claude sees the charts visually AND reads the raw numbers
             content = []
@@ -675,11 +770,11 @@ Respond with ONLY this JSON:
                     })
                     content.append({
                         "type": "text",
-                        "text": (f"↑ {sym} chart — Top panel: 1H (48 bars = 2 days). "
-                                 f"Bottom panel: 15M (96 bars = 24h). "
-                                 f"Cyan line = EMA20. Orange line = EMA50. "
-                                 f"Red dashed = resistance levels (from 1D+4H). "
-                                 f"Green dashed = support levels (from 1D+4H).")
+                        "text": (f"↑ {sym} chart — Top: 4H (120 bars = 20 days of structure). "
+                                 f"Middle: 1H (72 bars = 3 days). "
+                                 f"Bottom: 15M (96 bars = 24h, where the setup forms). "
+                                 f"Cyan = EMA20. Orange = EMA50. "
+                                 f"Red dashed = resistance (1D+4H). Green dashed = support (1D+4H).")
                     })
             content.append({"type": "text", "text": prompt})
 
