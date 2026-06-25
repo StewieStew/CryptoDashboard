@@ -221,7 +221,18 @@ Identify patterns and propose improvements. Respond with ONLY this JSON:
         raw = msg.content[0].text.strip()
         if raw.startswith("```"):
             raw = raw.split("```")[1].lstrip("json").strip()
-        return json.loads(raw)
+        if raw.endswith("```"):
+            raw = raw[:-3].strip()
+        import re as _re
+        raw = _re.sub(r'//[^\n]*', '', raw)
+        raw = _re.sub(r',\s*([\]}])', r'\1', raw)
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            open_b = raw.count("{") - raw.count("}")
+            open_a = raw.count("[") - raw.count("]")
+            raw += "]" * max(open_a, 0) + "}" * max(open_b, 0)
+            return json.loads(raw)
     except Exception as e:
         print(f"[LEARNING AGENT] Pattern analysis error: {e}", flush=True)
         return {}
@@ -315,7 +326,26 @@ Respond with ONLY a JSON array of rules (empty array if not enough data):
         raw = msg.content[0].text.strip()
         if raw.startswith("```"):
             raw = raw.split("```")[1].lstrip("json").strip()
-        rules = json.loads(raw)
+        # Strip trailing ``` if present
+        if raw.endswith("```"):
+            raw = raw[:-3].strip()
+        # Remove JS-style comments (// ...) that Claude sometimes adds
+        import re as _re
+        raw = _re.sub(r'//[^\n]*', '', raw)
+        # Remove trailing commas before ] or } (invalid JSON)
+        raw = _re.sub(r',\s*([\]}])', r'\1', raw)
+        # Try to fix unclosed brackets
+        try:
+            rules = json.loads(raw)
+        except json.JSONDecodeError:
+            open_b = raw.count("{") - raw.count("}")
+            open_a = raw.count("[") - raw.count("]")
+            raw += "]" * max(open_a, 0) + "}" * max(open_b, 0)
+            try:
+                rules = json.loads(raw)
+            except Exception:
+                print(f"[LEARNING AGENT] Could not parse rules JSON — skipping rule update", flush=True)
+                rules = []
         if not isinstance(rules, list):
             rules = []
 
