@@ -176,31 +176,35 @@ def run() -> dict:
 
     for sym in COINS:
         coin = sym.replace("USDT", "")
-        c1h  = fetch_candles(sym, "1h", 100)
-        c4h  = fetch_candles(sym, "4h",  50)
-        c1d  = fetch_candles(sym, "1d",  30)
+        c15m = fetch_candles(sym, "15m", 80)   # ~20 hours of 15m data
+        c1h  = fetch_candles(sym, "1h",  100)
+        c4h  = fetch_candles(sym, "4h",   50)
+        c1d  = fetch_candles(sym, "1d",   30)
         ob   = fetch_orderbook(sym)
 
         if not c1h:
             time.sleep(0.5)
             continue
 
-        price   = c1h[-1]["close"]
-        closes  = [c["close"] for c in c1h]
-        closes4h= [c["close"] for c in c4h]
-        closes1d= [c["close"] for c in c1d]
+        price    = c15m[-1]["close"] if c15m else c1h[-1]["close"]
+        closes   = [c["close"] for c in c1h]
+        closes15m= [c["close"] for c in c15m]
+        closes4h = [c["close"] for c in c4h]
+        closes1d = [c["close"] for c in c1d]
 
+        rsi_15m = calc_rsi(closes15m)
         rsi_1h  = calc_rsi(closes)
         rsi_4h  = calc_rsi(closes4h)
         rsi_1d  = calc_rsi(closes1d)
+        atr_15m = calc_atr(c15m) if c15m else 0.0
         atr_1h  = calc_atr(c1h)
 
         chg_1h  = (price - closes[-2])  / closes[-2]  * 100 if len(closes)  >= 2  else 0
         chg_24h = (price - closes[-25]) / closes[-25] * 100 if len(closes)  >= 25 else 0
         chg_7d  = (price - closes1d[-8])/ closes1d[-8]* 100 if len(closes1d)>=  8 else 0
 
-        levels   = find_swing_levels(c1h)
-        clusters = find_liquidity_clusters(c1h, price)
+        levels   = find_swing_levels(c15m if c15m else c1h)
+        clusters = find_liquidity_clusters(c15m if c15m else c1h, price)
 
         # Order book
         bids = [(float(p), float(q)) for p, q in ob.get("bids", [])[:30]]
@@ -211,19 +215,27 @@ def run() -> dict:
         ob_pressure = "BUY" if ob_ratio > 1.3 else "SELL" if ob_ratio < 0.7 else "NEUTRAL"
 
         # Trend: is price above/below key MAs?
-        ema20_1h = float(np.mean(closes[-20:])) if len(closes) >= 20 else price
-        ema50_1h = float(np.mean(closes[-50:])) if len(closes) >= 50 else price
-        ema20_4h = float(np.mean(closes4h[-20:])) if len(closes4h) >= 20 else price
+        ema20_15m = float(np.mean(closes15m[-20:])) if len(closes15m) >= 20 else price
+        ema50_15m = float(np.mean(closes15m[-50:])) if len(closes15m) >= 50 else price
+        ema20_1h  = float(np.mean(closes[-20:]))    if len(closes)    >= 20 else price
+        ema50_1h  = float(np.mean(closes[-50:]))    if len(closes)    >= 50 else price
+        ema20_4h  = float(np.mean(closes4h[-20:]))  if len(closes4h)  >= 20 else price
 
-        # Volume trend
-        vols   = [c["volume"] for c in c1h[-20:]]
-        vol_avg= float(np.mean(vols[:-3]))
-        vol_now= float(np.mean(vols[-3:]))
-        vol_trend = "expanding" if vol_now > vol_avg * 1.2 else "contracting" if vol_now < vol_avg * 0.8 else "normal"
+        # Volume trend (15m)
+        vols15m  = [c["volume"] for c in c15m[-20:]] if c15m else []
+        if len(vols15m) >= 6:
+            vol_avg15m = float(np.mean(vols15m[:-3]))
+            vol_now15m = float(np.mean(vols15m[-3:]))
+            vol_trend  = "expanding" if vol_now15m > vol_avg15m * 1.2 else "contracting" if vol_now15m < vol_avg15m * 0.8 else "normal"
+        else:
+            vols   = [c["volume"] for c in c1h[-20:]]
+            vol_avg= float(np.mean(vols[:-3]))
+            vol_now= float(np.mean(vols[-3:]))
+            vol_trend = "expanding" if vol_now > vol_avg * 1.2 else "contracting" if vol_now < vol_avg * 0.8 else "normal"
 
         coin_data[sym] = {
-            "price": price, "rsi_1h": rsi_1h, "rsi_4h": rsi_4h, "rsi_1d": rsi_1d,
-            "atr_1h": atr_1h, "chg_1h": chg_1h, "chg_24h": chg_24h, "chg_7d": chg_7d,
+            "price": price, "rsi_15m": rsi_15m, "rsi_1h": rsi_1h, "rsi_4h": rsi_4h, "rsi_1d": rsi_1d,
+            "atr_15m": atr_15m, "atr_1h": atr_1h, "chg_1h": chg_1h, "chg_24h": chg_24h, "chg_7d": chg_7d,
             "levels": levels, "clusters": clusters, "ob_ratio": ob_ratio,
             "ob_pressure": ob_pressure, "ema20_1h": ema20_1h, "ema50_1h": ema50_1h,
             "ema20_4h": ema20_4h, "vol_trend": vol_trend, "bias": coin_bias.get(coin, "neutral"),
@@ -243,10 +255,11 @@ def run() -> dict:
         coin_blocks.append(f"""
 ══ {sym} ══════════════════════════════════════
 Price: ${price:.6f}  |  1h: {chg_1h:+.2f}%  |  24h: {chg_24h:+.2f}%  |  7d: {chg_7d:+.2f}%
-RSI: 1h={rsi_1h:.0f}  4h={rsi_4h:.0f}  1d={rsi_1d:.0f}
-Trend: {'ABOVE' if price > ema20_1h else 'BELOW'} 20EMA(1h)  |  {'ABOVE' if price > ema50_1h else 'BELOW'} 50EMA(1h)  |  {'ABOVE' if price > ema20_4h else 'BELOW'} 20EMA(4h)
+RSI: 15m={rsi_15m:.0f}  1h={rsi_1h:.0f}  4h={rsi_4h:.0f}  1d={rsi_1d:.0f}
+Trend (15m): {'ABOVE' if price > ema20_15m else 'BELOW'} 20EMA  |  {'ABOVE' if price > ema50_15m else 'BELOW'} 50EMA
+Trend (1h):  {'ABOVE' if price > ema20_1h  else 'BELOW'} 20EMA  |  {'ABOVE' if price > ema50_1h  else 'BELOW'} 50EMA  |  {'ABOVE' if price > ema20_4h else 'BELOW'} 20EMA(4h)
 Volume: {vol_trend}  |  Order book pressure: {ob_pressure} (ratio={ob_ratio:.2f})
-ATR(1h): {atr_1h:.6f}  |  Macro bias: {coin_bias.get(coin,'neutral').upper()}
+ATR(15m): {atr_15m:.6f}  |  ATR(1h): {atr_1h:.6f}  |  Macro bias: {coin_bias.get(coin,'neutral').upper()}
 Support: ${levels.get('support',0):.6f}  |  Resistance: ${levels.get('resistance',0):.6f}
 
 Liquidity clusters:
@@ -255,11 +268,14 @@ Liquidity clusters:
 Whale activity:
 {whale_str}
 
-1H candles (last 20):
-{fmt_candles(c1h, 20)}
+15M candles (last 24 = 6 hours):
+{fmt_candles(c15m, 24)}
 
-4H candles (last 8):
-{fmt_candles(c4h, 8)}
+1H candles (last 12):
+{fmt_candles(c1h, 12)}
+
+4H candles (last 6):
+{fmt_candles(c4h, 6)}
 
 1D candles (last 5):
 {fmt_candles(c1d, 5)}
@@ -294,18 +310,37 @@ Whale activity:
         for t in open_t:
             open_str += f"  {t.get('symbol')} {t.get('direction')} @ {t.get('entry')} (TP={t.get('tp')} SL={t.get('sl')})\n"
 
-    # Postmortems context
-    postmortems = get_knowledge("loss_patterns", 5) + get_knowledge("win_patterns", 5)
-    pm_str = "\n".join(
-        f"  [{p.get('pattern','')}] {p.get('lesson','')[:80]}"
-        for p in postmortems if p.get("pattern")
-    ) or "  Still building — no patterns yet."
+    # Postmortems context — pull both patterns and specific checks
+    loss_pms = get_knowledge("loss_patterns", 6)
+    win_pms  = get_knowledge("win_patterns",  4)
+    all_pms  = loss_pms + win_pms
+
+    loss_str = "\n".join(
+        f"  LOSS [{p.get('pattern','')}] {p.get('symbol','')} {p.get('direction','')} — "
+        f"lesson: {p.get('lesson','')[:80]} | check: {p.get('check','')[:60]}"
+        for p in loss_pms if p.get("pattern")
+    ) or "  No losses analyzed yet."
+
+    win_str = "\n".join(
+        f"  WIN  [{p.get('pattern','')}] {p.get('symbol','')} {p.get('direction','')} — "
+        f"lesson: {p.get('lesson','')[:80]}"
+        for p in win_pms if p.get("pattern")
+    ) or "  No wins analyzed yet."
+
+    pm_str = f"LOSSES:\n{loss_str}\nWINS:\n{win_str}"
+
+    # Also pull improvement suggestions
+    improvements = get_knowledge("improvements", 3)
+    improve_str = "\n".join(
+        f"  - {imp.get('suggestion','')[:100]}"
+        for imp in improvements if imp.get("suggestion")
+    ) or ""
 
     client = _claude()
     result = {}
 
     if client:
-        prompt = f"""You are a professional crypto trader checking the market. Your job is to find the single best trade available RIGHT NOW and execute it with proper risk management.
+        prompt = f"""You are an experienced CRYPTO trader doing your market read. This is crypto — not stocks. BTC leads everything, alts follow or diverge, and the 24/7 market means momentum can shift fast. You read candle patterns on the actual trading timeframe, project where the NEXT few candles are headed, and set entries at the level that confirms your projection. You never chase. You wait for price to come to you.
 
 MARKET CONTEXT:
 Macro regime: {macro_regime} | Fear & Greed: {fear_greed.get('value','?')} ({fear_greed.get('label','?')})
@@ -316,34 +351,66 @@ BOT STATUS:
 {trade_ctx}
 {open_str}
 
-LESSONS FROM PAST TRADES:
+WHAT THE BOT HAS LEARNED FROM PAST TRADES (apply these now):
 {pm_str}
-
+{f"IMPROVEMENTS SUGGESTED:{chr(10)}{improve_str}" if improve_str else ""}
 {rules_str}
 
 FULL MARKET DATA:
 {''.join(coin_blocks)}
 
-YOUR TASK AS A TRADER:
-A real trader runs positions on MULTIPLE timeframes simultaneously — a 4h swing trade and a 15m scalp can both be open at the same time on different coins.
+YOUR PROCESS — think like a crypto trader reading live charts:
 
-**YOU MUST ALWAYS RETURN AT LEAST 1 TRADE. NEVER RETURN AN EMPTY TRADES ARRAY.**
-This system learns from every trade outcome — it NEEDS reps to improve. In ranging or choppy markets, find the single best short-term scalp available. There is always something worth trading. If conditions are poor, return 1 trade with a tight SL and note the marginal quality in risk_note. Do not skip trading just because the market isn't perfect.
+STEP 1 - READ BTC FIRST (everything in crypto follows BTC)
+Start with BTCUSDT 15M candles, then check 1H for confirmation:
+- What are the last 24 x 15M candles doing? Trending, coiling, distributing, recovering?
+- What do the LAST 4 x 15M candles show right now: momentum building, fading, or reversing?
+- Where is BTC relative to its nearest 15M and 1H key levels?
+This is your master bias. When BTC 15M is breaking down, alt shorts are favored. When BTC stabilizes and bounces off a level, alt longs become viable. Counter-BTC trades need very strong coin-specific justification.
 
-1. Read ALL the data above like a real trader
-2. Find AT LEAST 1 and UP TO 3 trades across different coins AND timeframes (15m, 1h, 4h):
-   - Each trade needs its own confluence: order book, volume, RSI, structure, liquidity
-   - 15m trades: tighter SL, quicker TP, need strong momentum signal
-   - 1h trades: structural entries, good for trending setups
-   - 4h trades: swing setups, wider SL, bigger TP targets
-3. Entry at current price. TP at next key level. SL at nearest structural swing.
-4. MINIMUM 2:1 R:R on every trade — non-negotiable
-5. Do NOT suggest a trade if the same coin+direction is already in open_positions above
+STEP 2 - FOR EACH ALT: READ THE 15M CANDLES AS A STORY (past 6 hours > now > next 1-2 hours)
+The 15M chart is where trades actually form. Read the last 24 x 15M candles as a sequence:
+  PAST (candles 1-16, the first ~4 hours): What was happening? Trending, ranging, fake breakout, reversal?
+  NOW (candles 17-24, last 2 hours, especially last 4): What is price doing right now? Building toward a level? Rejecting a key zone? Volume picking up or dying?
+  NEXT (your projection for the next 4-8 x 15M candles = next 1-2 hours):
+    - 15M range tightening (smaller candles, highs/lows converging) -> coiling for breakout. Pick direction based on BTC bias and 1H trend.
+    - 15M lower highs on each bounce approaching a resistance -> distribution. Short the next bounce.
+    - 15M higher lows with increasing volume at a support -> accumulation. Long on next dip.
+    - 15M big move then shrinking candles with volume dying -> exhaustion, likely reversal.
+    - 15M strong close through a key level with volume -> continuation, enter on first pullback.
+Then cross-check: do the 1H candles (last 12) confirm the 15M story and direction?
 
-RISK MANAGEMENT (non-negotiable):
-- R:R ≥ 2:1 on every trade
-- No duplicate coin+direction already open
-- ATR-based SL: 1-1.5× ATR for proper sizing
+STEP 3 - CONFIRM WITH 1H AND 4H
+- Does your 15M setup align with the 1H trend direction?
+- Are there 4H or 1D levels nearby that would block the projected TP before it reaches the target?
+- 15M setups WITH the 1H trend are high probability. Counter-trend 15M trades need exceptional justification.
+
+STEP 4 - SET ENTRY AT A MEANINGFUL 15M LEVEL
+The entry must be at a level that means something on the 15M chart:
+- Price is AT a key 15M level right now with confirmation (wick rejection, engulfing close, RSI divergence) -> entry = current price
+- Price needs to pull back to the 15M level first before the move starts -> set entry = that pullback level and wait
+- Price is mid-range on 15M with no nearby structure -> skip this coin
+Set timeframe to "15m" when entry and TP/SL are based on 15M structure. Use "1h" when levels are wider 1H structures.
+
+STEP 5 - SET TP AND SL AT STRUCTURAL LEVELS ON THE TRADING TIMEFRAME
+- TP: next significant 15M or 1H level that price is projected to reach (prior swing high for SHORT, swing low for LONG)
+- SL: just beyond the 15M candle that proves this read was wrong (beyond the wick that invalidates the setup)
+- R:R >= 1.8:1. If 15M levels are too tight, check if 1H levels give a viable setup with wider TP.
+
+STEP 6 - RETURN YOUR BEST 1-3 SETUPS
+Return only setups you would actually take. Quality over quantity.
+- If 3 genuine setups exist across different coins -> return all 3
+- If only 1 good setup exists -> return 1 (do not manufacture bad trades)
+- ALWAYS return at least 1. Never return empty.
+- Do NOT return two trades on the same coin.
+- Do NOT suggest a trade if the same coin+direction is already open.
+
+CRYPTO CONTEXT:
+- Fear and Greed above 75 = overleveraged long market -> SHORT setups on 15M rejection candles are high probability
+- Fear and Greed below 25 = capitulation -> LONG setups if BTC 15M shows a base forming (higher lows)
+- Volume expanding on a 15M move = real conviction. Volume shrinking = likely to reverse or stall.
+- Rejection wicks on the 15M at a key level with high volume = strong signal that level matters
+- Lower highs on 15M = distribution (favor shorts on bounces). Higher lows on 15M = accumulation (favor longs on dips).
 
 Respond with ONLY this JSON:
 {{
@@ -352,20 +419,20 @@ Respond with ONLY this JSON:
       "symbol": "<XYZUSDT>",
       "direction": "<LONG|SHORT>",
       "timeframe": "<15m|1h|4h>",
-      "entry": <current_price>,
-      "tp": <take_profit_price>,
-      "sl": <stop_loss_price>,
+      "entry": <entry_price - current price if at the level now, or the 15M level you are waiting for>,
+      "tp": <take_profit - next real structural level on the 15M or 1H that price is heading to>,
+      "sl": <stop_loss - just beyond the 15M level that invalidates this read>,
       "rr_ratio": <tp_dist / sl_dist>,
       "confidence": <1-10>,
       "confluence_factors": ["<factor1>", "<factor2>", "<factor3>"],
-      "reason": "<2-3 sentences: specific setup, confluence, why now>",
-      "risk_note": "<specific risk>",
+      "reason": "<2-3 sentences: what the 15M candles are building toward, what you project happens in the next 1-2 hours, and why this entry level makes sense>",
+      "risk_note": "<what would prove this 15M read wrong>",
       "setup_quality": "<strong|moderate|marginal>"
     }}
   ],
-  "market_summary": "<1-2 sentences on overall market>",
+  "market_summary": "<1-2 sentences: BTC 15M structure right now and what it means for alts>",
   "coins_to_avoid": ["<sym>"],
-  "next_check_focus": "<what to watch next cycle>"
+  "next_check_focus": "<specific 15M level or pattern to watch next cycle>"
 }}"""
 
         try:

@@ -29,10 +29,20 @@ def _claude():
 
 def get_all_trades() -> list:
     try:
-        r = requests.get(f"{RENDER_URL}/api/trades", timeout=12)
-        return r.json() if r.status_code == 200 else []
-    except Exception:
-        return []
+        import time as _t
+        # Cache-busting param ensures we get live data, not a CDN-cached response
+        r = requests.get(f"{RENDER_URL}/api/trades?ts={int(_t.time())}", timeout=12)
+        if r.status_code == 200:
+            trades = r.json()
+            by_status = {}
+            for t in trades:
+                s = t.get("status", "?")
+                by_status[s] = by_status.get(s, 0) + 1
+            print(f"[LEARNING AGENT] Fetched {len(trades)} trades: {by_status}", flush=True)
+            return trades
+    except Exception as e:
+        print(f"[LEARNING AGENT] get_all_trades error: {e}", flush=True)
+    return []
 
 
 def get_candles_around_trade(symbol: str, opened_at: str,
@@ -81,39 +91,49 @@ def write_postmortem(trade: dict, candles: list,
     prior_patterns = get_knowledge("win_patterns", 5) + get_knowledge("loss_patterns", 5)
     pattern_str    = "\n".join(p.get("pattern", "") for p in prior_patterns if p.get("pattern"))
 
-    prompt = f"""You are the Learning Agent on a crypto trading desk. Write a detailed post-mortem on this closed trade.
+    prompt = f"""You are the Learning Agent on a crypto trading desk. Write a detailed post-mortem on this closed trade. This is CRYPTO — everything moves with BTC, and the 15M and 1H candles tell the real story.
 
-═══ TRADE ═══════════════════════
+TRADE DETAILS:
 {sym} {direction} on {trade.get('interval','')}
 Signal type: {sig_type}
-Entry: {entry:.6f} | TP: {tp:.6f} | SL: {sl:.6f}
-Close: {close_px:.6f} | ROI: {roi:+.2f}%
+Entry: {entry:.6f}  |  TP: {tp:.6f}  |  SL: {sl:.6f}
+Close: {close_px:.6f}  |  ROI: {roi:+.2f}%
 Outcome: {outcome.upper()}
-Opened: {opened} | Closed: {closed}
+Opened: {opened}  |  Closed: {closed}
 Original signal reason: {reason}
 
-═══ CANDLES (last 20 bars) ═══════
+CANDLES DURING THE TRADE (1H):
 {candle_str}
 
-═══ MACRO AT TIME OF TRADE ════════
+MACRO AT TIME OF TRADE:
 Regime: {macro_context.get('regime_type','unknown')}
 Risk level: {macro_context.get('risk_level','unknown')}
-Coin bias for {sym.replace('USDT','')}: {macro_context.get('coin_bias',{}).get(sym.replace('USDT',''),'unknown')}
+Coin bias: {macro_context.get('coin_bias',{}).get(sym.replace('USDT',''),'unknown')}
 
-═══ KNOWN PATTERNS SO FAR ═════════
-{pattern_str if pattern_str else 'Still building pattern library.'}
+KNOWN PATTERNS SO FAR:
+{pattern_str if pattern_str else 'Still building — no patterns yet.'}
 
-Write a post-mortem and extract lessons. Respond with ONLY this JSON:
+Analyze this trade like a senior crypto trader reviewing a junior's position. Ask:
+1. What was the 15M/1H structure ACTUALLY doing when this trade was entered? Was the candle pattern valid?
+2. Was the entry at a real structural level or mid-range?
+3. Did BTC's structure support this directional trade? Or was the bot trading against BTC?
+4. What did price do after entry — did it immediately go wrong, or did it work initially then reverse?
+5. What specific 15M candle signal would have confirmed OR warned against this trade?
+6. What rule should the bot follow to avoid repeating this mistake (or reinforce this win)?
+
+Respond with ONLY this JSON:
 {{
-  "what_happened": "<2-3 sentences: what the market actually did>",
-  "why_it_{outcome}": "<2-3 sentences: specific reason for this outcome>",
+  "what_happened": "<2-3 sentences: what price action actually did on the 15M/1H during this trade>",
+  "why_it_{outcome}": "<2-3 sentences: specific candle/structure reason this trade won or lost>",
+  "was_btc_aligned": "<yes|no|neutral — was BTC moving in the same direction as this trade?>",
+  "was_entry_at_level": "<yes|no — was the entry at a real 15M/1H structural level or mid-range?>",
   "was_setup_valid": "<yes|no|marginal>",
   "should_have_been_skipped": <true|false>,
-  "skip_reason": "<why it should have been skipped, or null if valid>",
-  "key_lesson": "<the single most important thing to learn from this trade>",
-  "pattern_identified": "<pattern name if one exists, e.g. 'short against uptrend', 'dip in bear market'>",
-  "what_to_look_for_next_time": "<specific condition to check before taking similar setup>",
-  "improvement_suggestion": "<one concrete change to the bot's logic>"
+  "skip_reason": "<why it should have been skipped, or null if it was valid>",
+  "key_lesson": "<the single most important thing to apply to the NEXT similar setup>",
+  "pattern_identified": "<short pattern name, e.g. 'short_against_btc_uptrend', '15m_exhaustion_reversal', 'mid_range_entry_no_level'>",
+  "what_to_look_for_next_time": "<specific 15M candle condition to check before taking a similar setup>",
+  "improvement_suggestion": "<one concrete rule the analyst should apply going forward>"
 }}"""
 
     try:
@@ -391,7 +411,7 @@ def run() -> dict:
     # ── Pattern analysis (every run if we have enough data) ────────────────
     patterns = {}
     rules    = []
-    if len(closed_trades) >= 5:
+    if len(closed_trades) >= 2:  # start learning with just 2 trades
         print(f"[LEARNING AGENT]   Analyzing patterns across {len(closed_trades)} trades...", flush=True)
         patterns = identify_patterns(closed_trades)
 

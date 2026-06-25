@@ -1774,7 +1774,7 @@ _agent_signal_cooldown: dict = {}   # sym → last signal epoch
 MAX_OPEN_TRADES   = 5       # up to 5 open at once — build data fast
 DAILY_LOSS_LIMIT  = 0.08    # stop only if down 8% in a day (give room to breathe)
 MIN_RR_RATIO      = 1.8     # R:R ≥ 1.8:1 — enough edge to be profitable at 40% win rate
-SIGNAL_COOLDOWN   = 30 * 60 # 30 min cooldown — trade frequently to build data
+SIGNAL_COOLDOWN   = 10 * 60 # 10 min cooldown — trade frequently to build data
 _daily_pnl_cache: dict = {"date": None, "pnl": 0.0}
 
 
@@ -1826,7 +1826,7 @@ def _agent_trade_executor() -> None:
                     try:
                         _ts = insight.get("timestamp") or insight.get("received_at", "")
                         _age = (_now_utc - datetime.fromisoformat(_ts.replace("Z", "+00:00"))).total_seconds()
-                        if _age > 1200:
+                        if _age > 7200:
                             break  # insights are ordered oldest→newest; older ones won't help
                     except Exception:
                         pass
@@ -1905,12 +1905,20 @@ def _agent_trade_executor() -> None:
                 except Exception:
                     _live  = _entry
 
-                # Gate 5: SL not already crossed (2% buffer — paper trading, allow reasonable price movement)
-                if _dir == "LONG"  and _live <= _sl * 1.02:
-                    print(f"[AGENT EXEC] {_sym}: well below SL (live={_live:.4f} sl={_sl:.4f})", flush=True)
+                # Gate 5: Entry proximity check — analyst may set a LIMIT entry at a key level.
+                # If live price is within 0.5% of the signal's entry target → enter now.
+                # If live price is far from the target → wait (signal stays in queue for 20 min).
+                # Only reject if SL is fully crossed with no buffer.
+                _entry_dist = abs(_live - _entry) / _entry if _entry else 0
+                if _entry_dist > 0.005:
+                    # Price hasn't reached the target level yet — keep waiting
+                    print(f"[AGENT EXEC] {_sym}: waiting for level (live={_live:.4f} target={_entry:.4f} dist={_entry_dist*100:.2f}%)", flush=True)
                     continue
-                if _dir == "SHORT" and _live >= _sl * 0.98:
-                    print(f"[AGENT EXEC] {_sym}: well above SL (live={_live:.4f} sl={_sl:.4f})", flush=True)
+                if _dir == "LONG"  and _live <= _sl * 1.005:
+                    print(f"[AGENT EXEC] {_sym}: SL already crossed (live={_live:.4f} sl={_sl:.4f})", flush=True)
+                    continue
+                if _dir == "SHORT" and _live >= _sl * 0.995:
+                    print(f"[AGENT EXEC] {_sym}: SL already crossed (live={_live:.4f} sl={_sl:.4f})", flush=True)
                     continue
 
                 # Gate 6: Signal freshness — skip if signal is older than 20 min (stale)
@@ -1919,7 +1927,7 @@ def _agent_trade_executor() -> None:
                     if _sig_ts:
                         from datetime import timezone as _tz
                         _sig_age = (datetime.now(_tz.utc) - datetime.fromisoformat(_sig_ts.replace("Z","+00:00"))).total_seconds()
-                        if _sig_age > 1200:
+                        if _sig_age > 7200:  # 2 hours — gives limit orders time to fill
                             print(f"[AGENT EXEC] {_sym}: signal too old ({_sig_age/60:.1f}min) — skipping", flush=True)
                             continue
                 except Exception:
