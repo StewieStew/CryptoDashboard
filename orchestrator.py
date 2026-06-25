@@ -206,7 +206,7 @@ def main():
     log("  AGENTS:")
     log(f"  • MACRO    — runs every {MACRO_INTERVAL//60}min  — news, sentiment, regime")
     log(f"  • ANALYST  — runs every {ANALYST_INTERVAL//60}min  — price action, levels, ratings")
-    log(f"  • TELEGRAM — runs every {TELEGRAM_INTERVAL//60}min  — {'ENABLED (scanning channels)' if _TG_ENABLED else 'DISABLED (run setup_telegram.command to enable)'}")
+    log(f"  • TELEGRAM — REAL-TIME listener — {'ENABLED' if _TG_ENABLED else 'DISABLED (run setup_telegram.command)'}")
     log(f"  • RISK     — runs every {RISK_INTERVAL//60}min   — monitors open trades")
     log(f"  • LEARNING — runs every {LEARNING_INTERVAL//60}min — post-mortems, improvements")
     log("═" * 65)
@@ -215,9 +215,21 @@ def main():
         log("Startup checks failed. Exiting.", "ERROR")
         return
 
+    # Start Telegram listener in background thread (real-time, not scheduled)
+    if _TG_ENABLED and _tg_agent:
+        try:
+            started = _tg_agent.start_listener()
+            if started:
+                log("  Telegram listener started — watching groups in real-time")
+            else:
+                log("  Telegram listener failed to start — check setup_telegram.command", "WARN")
+        except Exception as _tg_err:
+            log(f"  Telegram listener error: {_tg_err}", "WARN")
+
     discord(
-        "Trading desk is online. All 4 agents starting.\n"
+        "Trading desk is online. All agents starting.\n"
         f"Monitoring: BTC, ETH, XRP, DOGE, SOL\n"
+        f"Telegram: {'real-time' if _TG_ENABLED else 'not configured'}\n"
         f"Render: {RENDER_URL}",
         "🚀 Trading Desk Online",
         color=0x57f287,
@@ -235,11 +247,10 @@ def main():
         try:
             now = time.time()
 
-            # Run agents in order (macro → analyst → telegram → risk → learning)
+            # Run agents in order (macro → analyst → risk → learning)
+            # Telegram runs in its own background thread — not scheduled here
             run_agent_safe("macro",    macro_agent.run,    MACRO_INTERVAL)
             run_agent_safe("analyst",  analyst_agent.run,  ANALYST_INTERVAL)
-            if _TG_ENABLED and _tg_agent:
-                run_agent_safe("telegram", _tg_agent.run, TELEGRAM_INTERVAL)
             run_agent_safe("risk",     risk_agent.run,     RISK_INTERVAL)
             run_agent_safe("learning", learning_agent.run, LEARNING_INTERVAL)
 

@@ -1,19 +1,22 @@
 """
-TELEGRAM SIGNAL AGENT — runs every 30 minutes
-Job: Monitor configured Telegram trading channels.
-     Download chart images, read signal text, extract trade setups.
-     Feed valid signals into the executor pipeline on Render.
+TELEGRAM SIGNAL AGENT — real-time listener
+Job: Listen to configured private Telegram groups in a background thread.
+     The moment a message is posted, analyze it (text + chart image).
+     If it's a trade signal, post it to Render immediately.
+
+Unlike the other agents (which poll on a schedule), this one starts once
+at orchestrator launch and stays connected 24/7 via Telethon's event system.
 
 Requires:
-  TG_API_ID    — from my.telegram.org
-  TG_API_HASH  — from my.telegram.org
-  TG_CHANNEL_1 — @username or invite link of first channel
-  TG_CHANNEL_2 — (optional) second channel
-  tg_session   — created by setup_telegram.command (one-time login)
+  TG_API_ID        — from my.telegram.org
+  TG_API_HASH      — from my.telegram.org
+  TG_CHANNEL_1     — numeric group ID (set by setup_telegram.command)
+  TG_CHANNEL_2     — (optional) second group ID
+  agents/tg_session — created by setup_telegram.command (one-time login)
 """
 from __future__ import annotations
-import json, os, base64, time
-from datetime import datetime, timezone, timedelta
+import json, os, base64, threading, time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import anthropic
@@ -24,19 +27,33 @@ from agents.state import get_state, add_knowledge, post_to_render
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 RENDER_URL    = os.environ.get("RENDER_URL", "https://cryptodashboard-nuf5.onrender.com")
 
-TG_API_ID    = os.environ.get("TG_API_ID", "")
-TG_API_HASH  = os.environ.get("TG_API_HASH", "")
-TG_CHANNEL_1 = os.environ.get("TG_CHANNEL_1", "")
-TG_CHANNEL_2 = os.environ.get("TG_CHANNEL_2", "")
-
+TG_API_ID   = os.environ.get("TG_API_ID", "")
+TG_API_HASH = os.environ.get("TG_API_HASH", "")
 SESSION_PATH = str(Path.home() / "Desktop" / "CryptoDashboard" / "agents" / "tg_session")
 
-# Coins the executor knows about
-KNOWN_COINS = {"BTC", "ETH", "XRP", "DOGE", "SOL",
-               "BTCUSDT", "ETHUSDT", "XRPUSDT", "DOGEUSDT", "SOLUSDT"}
+KNOWN_COINS = {"BTC", "ETH", "XRP", "DOGE", "SOL"}
 
-# Track which message IDs we've already processed (in-memory, resets on restart)
-_seen_msg_ids: set = set()
+# Runtime state
+_listener_thread: threading.Thread | None = None
+_listener_running = False
+_signals_processed = 0
+
+
+def _parse_channel(raw: str):
+    """Return int ID if numeric, else string @username."""
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return raw
+
+
+def _get_channels() -> list:
+    ch1 = _parse_channel(os.environ.get("TG_CHANNEL_1", ""))
+    ch2 = _parse_channel(os.environ.get("TG_CHANNEL_2", ""))
+    return [c for c in [ch1, ch2] if c]
 
 
 def _claude():
@@ -45,96 +62,26 @@ def _claude():
     return anthropic.Anthropic(api_key=ANTHROPIC_KEY)
 
 
-def fetch_recent_messages(channel: str, limit: int = 20) -> list:
-    """Fetch recent messages from a Telegram channel using Telethon."""
-    try:
-        from telethon.sync import TelegramClient
-        client = TelegramClient(SESSION_PATH, int(TG_API_ID), TG_API_HASH)
-        client.connect()
-
-        if not client.is_user_authorized():
-            print(f"[TG AGENT] Not logged in — run setup_telegram.command first", flush=True)
-            client.disconnect()
-            return []
-
-        # Only fetch messages from the last 2 hours
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
-        messages = []
-
-        for msg in client.iter_messages(channel, limit=limit):
-            if msg.date.replace(tzinfo=timezone.utc) < cutoff:
-                break
-            if msg.id in _seen_msg_ids:
-                continue
-
-            entry = {
-                "id":       msg.id,
-                "channel":  channel,
-                "text":     msg.text or "",
-                "date":     msg.date.isoformat(),
-                "has_image": False,
-                "image_b64": None,
-            }
-
-            # Download image if present
-            if msg.photo or (msg.document and "image" in (getattr(msg.document, "mime_type", "") or "")):
-                try:
-                    img_bytes = client.download_media(msg, bytes)
-                    if img_bytes:
-                        entry["has_image"] = True
-                        entry["image_b64"] = base64.b64encode(img_bytes).decode()
-                except Exception as img_err:
-                    print(f"[TG AGENT] Image download error: {img_err}", flush=True)
-
-            messages.append(entry)
-
-        client.disconnect()
-        return messages
-
-    except ImportError:
-        print("[TG AGENT] Telethon not installed — run setup_telegram.command", flush=True)
-        return []
-    except Exception as e:
-        print(f"[TG AGENT] fetch_recent_messages error ({channel}): {e}", flush=True)
-        return []
-
-
-def analyze_message(msg: dict, macro_regime: str) -> dict | None:
+def analyze_message(text: str, image_b64: str | None, channel_id, macro_regime: str) -> dict | None:
     """
-    Use Claude to analyze a Telegram message (text + optional chart image).
-    Returns a trade signal dict if a clear signal is found, else None.
+    Send message content to Claude for signal extraction.
+    Returns a trade signal dict or None.
     """
     client = _claude()
     if not client:
         return None
 
-    text = msg.get("text", "").strip()
-    has_image = msg.get("has_image", False)
-    image_b64 = msg.get("image_b64")
-
-    # Skip if no content at all
-    if not text and not has_image:
+    # Quick pre-filter: skip pure non-trading text with no image
+    trading_kw = {"long", "short", "buy", "sell", "entry", "tp", "sl",
+                  "target", "stop", "btc", "eth", "xrp", "sol", "doge",
+                  "usdt", "breakout", "support", "resistance", "signal",
+                  "trade", "position", "setup"}
+    if not image_b64 and not any(kw in (text or "").lower() for kw in trading_kw):
         return None
-
-    # Quick pre-filter: skip if text has no trading-relevant keywords and no image
-    trading_keywords = {"long", "short", "buy", "sell", "entry", "tp", "sl",
-                        "target", "stop", "btc", "eth", "xrp", "sol", "doge",
-                        "usdt", "breakout", "support", "resistance", "signal"}
-    if not has_image and not any(kw in text.lower() for kw in trading_keywords):
-        return None
-
-    system = """You are a crypto trading signal extractor. Your job is to analyze Telegram messages from trading channels and determine:
-1. Is this a real trade signal (entry, TP, SL for a specific coin)?
-2. If yes, extract the exact trade parameters.
-3. If it's just discussion, news, or non-actionable content — return null.
-
-Be strict: only extract signals that have a clear direction (LONG/SHORT/BUY/SELL), a coin, and at least one price level (entry OR TP OR SL).
-If levels are missing, do not guess — return null."""
 
     content = []
 
-    # Add image if present
-    if has_image and image_b64:
+    if image_b64:
         content.append({
             "type": "image",
             "source": {
@@ -144,19 +91,23 @@ If levels are missing, do not guess — return null."""
             }
         })
 
-    # Add text context
-    prompt_text = f"""Telegram channel message received at {msg.get('date','')}.
+    content.append({"type": "text", "text": f"""Telegram trading group message. Macro regime: {macro_regime}
 
-Current macro regime: {macro_regime}
+MESSAGE:
+{text.strip() if text else "(image only — no text)"}
 
-MESSAGE TEXT:
-{text if text else "(no text — image only)"}
+Is this a trade signal? Extract it if so, return null if not.
 
-Analyze this message. If it contains a trade signal, extract it. If not, return null.
+Rules:
+- Only extract if there is a clear LONG or SHORT direction and at least one price level
+- BUY = LONG, SELL = SHORT
+- Symbol must end in USDT. Only: BTCUSDT ETHUSDT XRPUSDT DOGEUSDT SOLUSDT
+- If entry price is missing, use null (executor uses live price)
+- If you see a chart image with a setup drawn on it, describe it and extract levels from the chart
 
-Respond with ONLY one of:
-- null (if no actionable trade signal)
-- A JSON object like:
+Respond with ONLY:
+- null (if no trade signal)
+- JSON:
 {{
   "symbol": "ETHUSDT",
   "direction": "SHORT",
@@ -166,130 +117,185 @@ Respond with ONLY one of:
   "sl": 2490.00,
   "rr_ratio": 1.75,
   "confidence": 7,
-  "reason": "<2 sentences: what the channel said and why it looks valid>",
+  "reason": "<what the channel said and why it looks valid>",
   "source": "telegram",
-  "channel": "{msg.get('channel','')}",
-  "raw_text": "{text[:120].replace(chr(10),' ')}"
-}}
-
-Rules:
-- symbol must end in USDT (e.g. ETHUSDT not ETH)
-- direction must be LONG or SHORT
-- if the message says BUY = LONG, SELL = SHORT
-- if no clear entry price, use null for entry (executor will use live price)
-- if rr_ratio cannot be calculated from the levels, estimate it
-- only return a signal for coins in: BTC ETH XRP DOGE SOL
-- if the chart image shows a setup but text has no levels, describe what you see and set confidence <= 4
-"""
-
-    content.append({"type": "text", "text": prompt_text})
+  "channel_id": "{channel_id}"
+}}"""})
 
     try:
-        msg_response = client.messages.create(
+        resp = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=600,
-            system=system,
+            max_tokens=500,
             messages=[{"role": "user", "content": content}],
         )
-        raw = msg_response.content[0].text.strip()
+        raw = resp.content[0].text.strip()
 
         if raw.lower() in ("null", "none", ""):
             return None
-
         if raw.startswith("```"):
             raw = raw.split("```")[1].lstrip("json").strip()
+        if raw.endswith("```"):
+            raw = raw[:-3].strip()
 
-        signal = json.loads(raw)
+        sig = json.loads(raw)
 
-        # Validate required fields
-        if not signal.get("symbol") or not signal.get("direction"):
+        if not sig.get("symbol") or sig.get("direction") not in ("LONG", "SHORT"):
             return None
-        if signal["direction"] not in ("LONG", "SHORT"):
-            return None
 
-        # Normalize symbol
-        sym = signal["symbol"].upper()
+        sym = sig["symbol"].upper()
         if not sym.endswith("USDT"):
             sym += "USDT"
-        signal["symbol"] = sym
-
-        return signal
+        sig["symbol"] = sym
+        return sig
 
     except Exception as e:
-        print(f"[TG AGENT] analyze_message error: {e}", flush=True)
+        print(f"[TG AGENT] analyze error: {e}", flush=True)
         return None
 
 
-def run() -> dict:
-    """Main agent loop — called by orchestrator every 30 min."""
-    print("[TG AGENT] Running...", flush=True)
+def _post_signal(sig: dict):
+    """Post a signal to Render and save to knowledge base."""
+    global _signals_processed
+    _signals_processed += 1
+
+    print(f"[TG AGENT] *** SIGNAL: {sig.get('symbol')} {sig.get('direction')} "
+          f"entry={sig.get('entry')} tp={sig.get('tp')} sl={sig.get('sl')} "
+          f"rr={sig.get('rr_ratio','?')} conf={sig.get('confidence')}/10", flush=True)
+
+    post_to_render("/api/agent/insight", {
+        "type":          "telegram_signal",
+        "agent":         "telegram",
+        "timestamp":     datetime.now(timezone.utc).isoformat(),
+        "trade_signal":  sig,
+        "all_signals":   [sig],
+        "market_summary": f"Real-time signal from Telegram group {sig.get('channel_id','')}",
+    })
+
+    add_knowledge("telegram_signals", {
+        "symbol":    sig.get("symbol"),
+        "direction": sig.get("direction"),
+        "channel":   sig.get("channel_id"),
+        "rr":        sig.get("rr_ratio"),
+        "confidence":sig.get("confidence"),
+        "reason":    (sig.get("reason") or "")[:100],
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+
+
+def _listener_loop():
+    """
+    Background thread: connects to Telegram and listens for new messages
+    in real time. Fires instantly whenever a message is posted.
+    Reconnects automatically if the connection drops.
+    """
+    global _listener_running
+
+    channels = _get_channels()
+    if not channels:
+        print("[TG AGENT] No channels configured — listener not started", flush=True)
+        return
+
+    print(f"[TG AGENT] Starting real-time listener for {len(channels)} group(s)...", flush=True)
+
+    while _listener_running:
+        try:
+            import asyncio
+            from telethon import TelegramClient, events
+
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            client = TelegramClient(SESSION_PATH, int(TG_API_ID), TG_API_HASH, loop=loop)
+
+            @client.on(events.NewMessage(chats=channels))
+            async def handler(event):
+                msg      = event.message
+                text     = msg.text or ""
+                image_b64 = None
+
+                # Download image if attached
+                if msg.photo or (msg.document and
+                        "image" in (getattr(msg.document, "mime_type", "") or "")):
+                    try:
+                        img_bytes = await client.download_media(msg, bytes)
+                        if img_bytes:
+                            image_b64 = base64.b64encode(img_bytes).decode()
+                    except Exception as img_err:
+                        print(f"[TG AGENT] Image download error: {img_err}", flush=True)
+
+                # Skip empty messages
+                if not text and not image_b64:
+                    return
+
+                channel_id = event.chat_id
+                preview = text[:60].replace("\n", " ") if text else "[image]"
+                print(f"[TG AGENT] New message in {channel_id}: {preview}...", flush=True)
+
+                # Get current macro regime for context
+                macro_regime = get_state("macro_regime", {}).get("regime_type", "uncertain")
+
+                # Analyze message
+                sig = analyze_message(text, image_b64, channel_id, macro_regime)
+                if sig:
+                    _post_signal(sig)
+                else:
+                    print(f"[TG AGENT] No signal in message.", flush=True)
+
+            print("[TG AGENT] Connected. Listening for messages...", flush=True)
+            with client:
+                client.run_until_disconnected()
+
+        except Exception as e:
+            if not _listener_running:
+                break
+            print(f"[TG AGENT] Connection dropped: {e} — reconnecting in 30s...", flush=True)
+            time.sleep(30)
+
+    print("[TG AGENT] Listener stopped.", flush=True)
+
+
+def start_listener():
+    """
+    Start the real-time listener in a background daemon thread.
+    Called once by the orchestrator at startup.
+    """
+    global _listener_thread, _listener_running
 
     if not TG_API_ID or not TG_API_HASH:
         print("[TG AGENT] Not configured — run setup_telegram.command first", flush=True)
-        return {}
+        return False
 
-    channels = [c for c in [TG_CHANNEL_1, TG_CHANNEL_2] if c]
+    if not Path(SESSION_PATH + ".session").exists():
+        print("[TG AGENT] No session file — run setup_telegram.command first", flush=True)
+        return False
+
+    channels = _get_channels()
     if not channels:
         print("[TG AGENT] No channels configured", flush=True)
-        return {}
+        return False
 
-    macro_regime = get_state("macro_regime", {}).get("regime_type", "uncertain")
+    _listener_running = True
+    _listener_thread = threading.Thread(target=_listener_loop, daemon=True, name="TelegramListener")
+    _listener_thread.start()
+    return True
 
-    all_signals = []
-    total_msgs  = 0
 
-    for channel in channels:
-        print(f"[TG AGENT] Fetching {channel}...", flush=True)
-        messages = fetch_recent_messages(channel, limit=30)
-        print(f"[TG AGENT]   {len(messages)} new messages", flush=True)
-        total_msgs += len(messages)
+def stop_listener():
+    """Stop the listener thread gracefully."""
+    global _listener_running
+    _listener_running = False
 
-        for msg in messages:
-            _seen_msg_ids.add(msg["id"])
 
-            signal = analyze_message(msg, macro_regime)
-            if signal:
-                all_signals.append(signal)
-                print(f"[TG AGENT]   Signal found: {signal.get('symbol')} {signal.get('direction')} "
-                      f"entry={signal.get('entry')} tp={signal.get('tp')} sl={signal.get('sl')} "
-                      f"rr={signal.get('rr_ratio','?')} conf={signal.get('confidence')}/10", flush=True)
-            else:
-                # Brief note for non-signals so we can see the agent is reading
-                txt_preview = msg.get("text","")[:60].replace("\n"," ")
-                if txt_preview or msg.get("has_image"):
-                    print(f"[TG AGENT]   No signal: {'[IMG] ' if msg.get('has_image') else ''}{txt_preview}...", flush=True)
-
-        time.sleep(1)  # be polite to Telegram API
-
-    # Post signals to Render executor pipeline
-    posted = 0
-    for sig in all_signals:
-        success = post_to_render("/api/agent/insight", {
-            "type":         "telegram_signal",
-            "agent":        "telegram",
-            "timestamp":    datetime.now(timezone.utc).isoformat(),
-            "trade_signal": sig,
-            "all_signals":  [sig],
-            "market_summary": f"Signal from {sig.get('channel','')}",
-        })
-        if success:
-            posted += 1
-            add_knowledge("telegram_signals", {
-                "symbol":    sig.get("symbol"),
-                "direction": sig.get("direction"),
-                "channel":   sig.get("channel"),
-                "rr":        sig.get("rr_ratio"),
-                "confidence":sig.get("confidence"),
-                "reason":    sig.get("reason","")[:100],
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
-
-    print(f"[TG AGENT] Done. Messages scanned: {total_msgs} | Signals found: {len(all_signals)} | Posted: {posted}", flush=True)
-
+def run() -> dict:
+    """
+    Called by orchestrator scheduler — just returns status.
+    The real work happens in the background listener thread.
+    """
+    alive = _listener_thread is not None and _listener_thread.is_alive()
+    print(f"[TG AGENT] Listener status: {'running' if alive else 'NOT running'} | "
+          f"Signals processed: {_signals_processed}", flush=True)
     return {
-        "timestamp":     datetime.now(timezone.utc).isoformat(),
-        "messages_read": total_msgs,
-        "signals_found": len(all_signals),
-        "signals_posted": posted,
-        "channels":      channels,
+        "listener_running": alive,
+        "signals_processed": _signals_processed,
+        "channels": _get_channels(),
     }
