@@ -20,7 +20,7 @@ import anthropic
 import numpy as np
 
 from agents.state import (set_state, get_state, add_report, add_knowledge,
-                           get_knowledge, post_to_render)
+                           get_knowledge, post_to_render, get_session)
 
 COINS         = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "DOGEUSDT", "SOLUSDT"]
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -308,6 +308,11 @@ def fmt_candles(candles: list, n: int = 20) -> str:
 
 
 def run() -> dict:
+    session = get_session()
+    print(f"  Session: {session['session']}  ({session['quality']} quality)  "
+          f"{'⚠ CAUTION' if session['caution'] else '✓ active'}", flush=True)
+    if session["caution"]:
+        print(f"  ⚠  {session['note']}", flush=True)
     print("  Scanning charts...", flush=True)
 
     macro        = get_state("macro_regime", {})
@@ -544,6 +549,11 @@ MARKET CONTEXT:
 Macro regime: {macro_regime} | Fear & Greed: {fear_greed.get('value','?')} ({fear_greed.get('label','?')})
 DeFi TVL: ${defi_tvl.get('total_tvl_bn',0):.1f}B ({defi_tvl.get('tvl_change_24h',0):+.1f}% 24h) — {defi_tvl.get('tvl_signal','?')}
 BTC active addresses: {btc_onchain.get('active_addresses',0):,} ({btc_onchain.get('active_addr_change',0):+.1f}% vs yesterday)
+
+TRADING SESSION (critical for setup quality):
+Current session: {session['session']}  |  Quality: {session['quality']}  |  UTC hour: {session['hour_utc']}:00
+{session['note']}
+{"⚠ CAUTION SESSION: Only take setups with exceptional clarity. Widen SL slightly — this is a low-liquidity window where stop hunts are common." if session['caution'] else "✓ Active session: volume and liquidity support directional moves."}
 
 BOT STATUS:
 {trade_ctx}

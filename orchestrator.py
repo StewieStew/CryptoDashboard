@@ -42,7 +42,7 @@ if _env_file.exists():
 
 # ── Import all agents ─────────────────────────────────────────────────────────
 from agents import state as S
-from agents import macro_agent, analyst_agent, risk_agent, learning_agent
+from agents import macro_agent, analyst_agent, risk_agent, learning_agent, trade_manager_agent
 
 # Telegram agent — optional, only active if TG_API_ID env var is set
 try:
@@ -60,18 +60,20 @@ LOG_DIR = Path.home() / "CryptoDashboard" / "agent_kb"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Schedule config ───────────────────────────────────────────────────────────
-MACRO_INTERVAL     = 60 * 60   # 60 minutes (was 30 — halved to save credits)
+MACRO_INTERVAL     = 60 * 60   # 60 minutes
 ANALYST_INTERVAL   = 30 * 60   # 30 minutes — quality setups, not frequency
-RISK_INTERVAL      =  5 * 60   #  5 minutes (Haiku — cheap, keep fast for open trade monitoring)
-LEARNING_INTERVAL  = 60 * 60   # 60 minutes (no-op until trades exist)
-TELEGRAM_INTERVAL  = 30 * 60   # 30 minutes — scan channels for signals
+RISK_INTERVAL      =  5 * 60   #  5 minutes (Haiku — cheap, keep fast)
+TRADE_MGR_INTERVAL =  5 * 60   #  5 minutes — BE stops, partials, trails
+LEARNING_INTERVAL  = 60 * 60   # 60 minutes
+TELEGRAM_INTERVAL  = 30 * 60   # 30 minutes
 
 _last_run = {
-    "macro":    0,
-    "analyst":  0,
-    "risk":     0,
-    "learning": 0,
-    "telegram": 0,
+    "macro":       0,
+    "analyst":     0,
+    "risk":        0,
+    "trade_mgr":   0,
+    "learning":    0,
+    "telegram":    0,
 }
 
 
@@ -126,11 +128,12 @@ def run_agent_safe(name: str, fn, interval: int) -> None:
     if not should_run(name, interval):
         return
     labels = {
-        "macro":    "MACRO  — reading market regime & sentiment",
-        "analyst":  "ANALYST — scanning charts for setups",
-        "risk":     "RISK   — checking open trades",
-        "learning": "LEARNING — reviewing closed trades",
-        "telegram": "TELEGRAM — listener status",
+        "macro":     "MACRO    — reading market regime & sentiment",
+        "analyst":   "ANALYST  — scanning charts for setups",
+        "risk":      "RISK     — checking open trades",
+        "trade_mgr": "TRADE MGR — managing open positions (BE/trail/partial)",
+        "learning":  "LEARNING — reviewing closed trades",
+        "telegram":  "TELEGRAM — listener status",
     }
     log_divider(labels.get(name, name.upper()))
     try:
@@ -227,11 +230,12 @@ def main():
     log(f"  Discord: {'configured ✓' if DISCORD_URL else 'not configured'}")
     log("═" * 65)
     log("  AGENTS:")
-    log(f"  • MACRO    — runs every {MACRO_INTERVAL//60}min  — news, sentiment, regime")
-    log(f"  • ANALYST  — runs every {ANALYST_INTERVAL//60}min  — price action, levels, ratings")
-    log(f"  • TELEGRAM — REAL-TIME listener — {'ENABLED' if _TG_ENABLED else 'DISABLED (run setup_telegram.command)'}")
-    log(f"  • RISK     — runs every {RISK_INTERVAL//60}min   — monitors open trades")
-    log(f"  • LEARNING — runs every {LEARNING_INTERVAL//60}min — post-mortems, improvements")
+    log(f"  • MACRO     — runs every {MACRO_INTERVAL//60}min  — news, sentiment, regime")
+    log(f"  • ANALYST   — runs every {ANALYST_INTERVAL//60}min  — price action, levels, charts, ratings")
+    log(f"  • TELEGRAM  — REAL-TIME listener — {'ENABLED' if _TG_ENABLED else 'DISABLED (run setup_telegram.command)'}")
+    log(f"  • RISK      — runs every {RISK_INTERVAL//60}min   — monitors open trades, flags problems")
+    log(f"  • TRADE MGR — runs every {TRADE_MGR_INTERVAL//60}min   — BE stops, partial profits, trailing stops")
+    log(f"  • LEARNING  — runs every {LEARNING_INTERVAL//60}min — post-mortems, improvements")
     log("═" * 65)
 
     if not startup_checks():
@@ -272,10 +276,11 @@ def main():
 
             # Run agents in order (macro → analyst → risk → learning)
             # Telegram runs in its own background thread — not scheduled here
-            run_agent_safe("macro",    macro_agent.run,    MACRO_INTERVAL)
-            run_agent_safe("analyst",  analyst_agent.run,  ANALYST_INTERVAL)
-            run_agent_safe("risk",     risk_agent.run,     RISK_INTERVAL)
-            run_agent_safe("learning", learning_agent.run, LEARNING_INTERVAL)
+            run_agent_safe("macro",     macro_agent.run,         MACRO_INTERVAL)
+            run_agent_safe("analyst",   analyst_agent.run,       ANALYST_INTERVAL)
+            run_agent_safe("risk",      risk_agent.run,          RISK_INTERVAL)
+            run_agent_safe("trade_mgr", trade_manager_agent.run, TRADE_MGR_INTERVAL)
+            run_agent_safe("learning",  learning_agent.run,      LEARNING_INTERVAL)
 
             # Hourly desk briefing
             if now - briefing_last >= 3600:

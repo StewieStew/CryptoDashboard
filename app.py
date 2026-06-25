@@ -1813,6 +1813,60 @@ def agent_pending():
         return jsonify(list(_pending_signals.values()))
 
 
+@app.route("/api/trade/adjust", methods=["POST"])
+def trade_adjust():
+    """
+    Trade Manager posts SL adjustments and partial exits here.
+    sl_adjust  — move the stop loss on an open trade
+    partial_exit — mark 50% of the position as closed at the current price
+    """
+    body      = request.get_json() or {}
+    action    = body.get("type", "")
+    trade_id  = body.get("trade_id")
+    reason    = body.get("reason", "")
+
+    if not trade_id:
+        return jsonify({"error": "trade_id required"}), 400
+
+    db = learning._get_db()
+    try:
+        if action == "sl_adjust":
+            new_sl = float(body.get("new_sl", 0))
+            if not new_sl:
+                return jsonify({"error": "new_sl required"}), 400
+            db.execute("UPDATE trades SET sl=? WHERE id=?", (new_sl, trade_id))
+            db.commit()
+            print(f"[TRADE ADJUST] #{trade_id} SL → {new_sl:.6f}  ({reason[:80]})", flush=True)
+            return jsonify({"status": "sl_adjusted", "trade_id": trade_id, "new_sl": new_sl})
+
+        elif action == "partial_exit":
+            price = float(body.get("price", 0))
+            pct   = int(body.get("pct", 50))
+            # Log partial exit as a note in the trade's ai_analysis field
+            row = db.execute("SELECT ai_analysis FROM trades WHERE id=?", (trade_id,)).fetchone()
+            existing = json.loads(row[0]) if row and row[0] else {}
+            existing.setdefault("partial_exits", []).append({
+                "price":  price,
+                "pct":    pct,
+                "reason": reason,
+                "at":     datetime.now(timezone.utc).isoformat(),
+            })
+            db.execute("UPDATE trades SET ai_analysis=? WHERE id=?",
+                       (json.dumps(existing), trade_id))
+            db.commit()
+            print(f"[TRADE ADJUST] #{trade_id} PARTIAL {pct}% at {price:.6f}  ({reason[:80]})", flush=True)
+            return jsonify({"status": "partial_logged", "trade_id": trade_id,
+                            "price": price, "pct": pct})
+
+        else:
+            return jsonify({"error": f"unknown action: {action}"}), 400
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        db.close()
+
+
 @app.route("/api/agent/intelligence")
 def agent_intelligence():
     """Return latest agent intelligence for the dashboard."""

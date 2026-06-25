@@ -8,6 +8,78 @@ import sqlite3, json, os
 from datetime import datetime, timezone
 from pathlib import Path
 
+
+# ── Trading Session Clock ──────────────────────────────────────────────────────
+def get_session() -> dict:
+    """
+    Return the current trading session and its trading characteristics.
+    All times in UTC. Crypto trades 24/7 but session timing matters enormously —
+    Asian = choppy range, London/NY = real directional moves with volume.
+    """
+    hour = datetime.now(timezone.utc).hour  # 0-23 UTC
+
+    # Session boundaries (UTC)
+    # Asian:   00:00 – 08:00 UTC  (Tokyo/Singapore — low volume, range-bound)
+    # London:  07:00 – 16:00 UTC  (London open at 08:00 = big moves start)
+    # NY:      13:00 – 22:00 UTC  (NY open at 13:30 = highest volume overlap)
+    # Dead:    22:00 – 00:00 UTC  (post-NY, pre-Asia — avoid)
+
+    if 0 <= hour < 7:
+        session = "ASIAN"
+        quality = "low"
+        note    = ("Asian session — low volume, choppy ranges, frequent fakeouts. "
+                   "Avoid breakout trades. Range setups only if very clean structure.")
+        caution = True
+    elif 7 <= hour < 8:
+        session = "LONDON_PRE"
+        quality = "medium"
+        note    = ("London pre-market — volatility picking up. Watch for London open "
+                   "sweep (spike to grab stops) in the first 30 min after 08:00 UTC.")
+        caution = False
+    elif 8 <= hour < 13:
+        session = "LONDON"
+        quality = "high"
+        note    = ("London session — strong directional moves, real volume. "
+                   "Best time for breakout and trend-following setups.")
+        caution = False
+    elif 13 <= hour < 14:
+        session = "LONDON_NY_OVERLAP"
+        quality = "very_high"
+        note    = ("London/NY overlap — peak volume of the day. "
+                   "Highest probability for sustained directional moves. "
+                   "Watch for NY open sweep at 13:30 UTC, then follow the real direction.")
+        caution = False
+    elif 14 <= hour < 21:
+        session = "NEW_YORK"
+        quality = "high"
+        note    = ("New York session — high volume, trending moves. "
+                   "Good for continuation setups with the established intraday trend.")
+        caution = False
+    elif 21 <= hour < 22:
+        session = "NY_CLOSE"
+        quality = "medium"
+        note    = ("Approaching NY close — institutions reducing exposure. "
+                   "Avoid new entries. Manage open trades.")
+        caution = True
+    else:  # 22-23
+        session = "DEAD_ZONE"
+        quality = "very_low"
+        note    = ("Dead zone — post-NY, pre-Asia. Thinnest liquidity of the day. "
+                   "Do not enter new trades. Any moves here are not representative.")
+        caution = True
+
+    return {
+        "session":     session,
+        "quality":     quality,
+        "note":        note,
+        "caution":     caution,
+        "hour_utc":    hour,
+        "is_london":   8  <= hour < 16,
+        "is_ny":       13 <= hour < 22,
+        "is_asian":    hour < 7 or hour >= 22,
+        "is_overlap":  13 <= hour < 16,
+    }
+
 DB_PATH = Path.home() / "CryptoDashboard" / "agent_kb" / "agent_state.db"
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
