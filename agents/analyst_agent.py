@@ -447,7 +447,17 @@ def run() -> dict:
         )
         if chart_b64:
             chart_images[sym] = chart_b64
-            print(f"       Chart: ✓ rendered", flush=True)
+            # Save to disk so you can see exactly what Claude is looking at
+            try:
+                import base64 as _b64
+                from pathlib import Path as _Path
+                _chart_dir = _Path.home() / "Desktop" / "CryptoDashboard" / "charts"
+                _chart_dir.mkdir(exist_ok=True)
+                _chart_path = _chart_dir / f"{sym}.png"
+                _chart_path.write_bytes(_b64.b64decode(chart_b64))
+                print(f"       Chart: ✓ saved → charts/{sym}.png", flush=True)
+            except Exception as _ce:
+                print(f"       Chart: ✓ rendered (save failed: {_ce})", flush=True)
         else:
             print(f"       Chart: ✗ failed (text-only)", flush=True)
 
