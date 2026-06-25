@@ -76,14 +76,30 @@ _last_run = {
 
 
 def log(msg: str, level: str = "INFO") -> None:
-    ts   = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    line = f"[{ts}] [{level}] {msg}"
+    ts   = datetime.now(timezone.utc).strftime("%H:%M UTC")
+    # Clean readable format — no JSON noise, just what matters
+    if level == "ERROR":
+        line = f"  !! {ts}  {msg}"
+    elif level == "WARN":
+        line = f"  ?? {ts}  {msg}"
+    else:
+        line = f"  {ts}  {msg}"
     print(line, flush=True)
     try:
         with open(LOG_DIR / "orchestrator.log", "a") as f:
             f.write(line + "\n")
     except Exception:
         pass
+
+
+def log_divider(label: str = "") -> None:
+    """Print a clean section divider."""
+    ts = datetime.now(timezone.utc).strftime("%H:%M UTC")
+    if label:
+        pad = "─" * max(0, 52 - len(label))
+        print(f"\n  ┌─ {label} {pad}", flush=True)
+    else:
+        print(f"  └{'─'*55}", flush=True)
 
 
 def discord(content: str, title: str = "", color: int = 0x5865F2) -> None:
@@ -109,15 +125,22 @@ def should_run(agent: str, interval: int) -> bool:
 def run_agent_safe(name: str, fn, interval: int) -> None:
     if not should_run(name, interval):
         return
+    labels = {
+        "macro":    "MACRO  — reading market regime & sentiment",
+        "analyst":  "ANALYST — scanning charts for setups",
+        "risk":     "RISK   — checking open trades",
+        "learning": "LEARNING — reviewing closed trades",
+        "telegram": "TELEGRAM — listener status",
+    }
+    log_divider(labels.get(name, name.upper()))
     try:
-        log(f"── Running {name.upper()} AGENT ──")
         result = fn()
         _last_run[name] = time.time()
-        log(f"── {name.upper()} AGENT complete ──")
+        log_divider()
         return result
     except Exception as e:
-        log(f"{name.upper()} AGENT ERROR: {e}", "ERROR")
-        log(traceback.format_exc(), "ERROR")
+        log(f"{name.upper()} crashed: {e}", "ERROR")
+        log_divider()
 
 
 def post_desk_briefing() -> None:

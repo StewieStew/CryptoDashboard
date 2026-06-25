@@ -152,7 +152,7 @@ def fmt_candles(candles: list, n: int = 20) -> str:
 
 
 def run() -> dict:
-    print("[ANALYST AGENT] Running...", flush=True)
+    print("  Running...", flush=True)
 
     macro        = get_state("macro_regime", {})
     macro_regime = macro.get("regime_type", "uncertain")
@@ -455,7 +455,7 @@ Respond with ONLY this JSON:
                 except Exception:
                     result = {}
         except Exception as e:
-            print(f"[ANALYST AGENT] Claude error: {e}", flush=True)
+            print(f"  Claude error: {e}", flush=True)
 
     # Handle both old single-trade and new multi-trade response formats
     trades = result.get("trades", [])
@@ -500,9 +500,26 @@ Respond with ONLY this JSON:
         "coins_to_avoid": result.get("coins_to_avoid", []),
     })
 
-    print(f"[ANALYST AGENT] Done. {len(trades)} signal(s):", flush=True)
-    for t in trades:
-        print(f"  {t.get('symbol')} {t.get('direction')} {t.get('timeframe')} | "
-              f"R:R {t.get('rr_ratio',0):.1f}:1 | {t.get('setup_quality')} | "
-              f"confidence {t.get('confidence')}/10", flush=True)
+    summary = result.get("market_summary", "")
+    if summary:
+        print(f"  Market: {summary}", flush=True)
+
+    if trades:
+        print(f"  Found {len(trades)} setup(s):", flush=True)
+        for t in trades:
+            sym    = t.get('symbol','').replace('USDT','')
+            dirn   = t.get('direction','')
+            tf     = t.get('timeframe','')
+            rr     = t.get('rr_ratio', 0)
+            conf   = t.get('confidence', 0)
+            qual   = t.get('setup_quality','')
+            entry  = t.get('entry')
+            status = "ENTER NOW" if entry else "WAITING FOR LEVEL"
+            arrow  = "SHORT ↓" if dirn == "SHORT" else "LONG ↑"
+            print(f"    {sym} {arrow} ({tf}) — R:R {rr:.1f}:1 — confidence {conf}/10 [{qual}]", flush=True)
+            if t.get('reason'):
+                print(f"    Why: {t.get('reason','')[:120]}", flush=True)
+    else:
+        print(f"  No clean setups found this cycle — waiting for better levels.", flush=True)
+
     return output

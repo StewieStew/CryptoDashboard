@@ -293,7 +293,7 @@ def fetch_stablecoin_flows() -> dict:
 
 def run() -> dict:
     """Execute macro analysis. Returns findings dict."""
-    print("[MACRO AGENT] Running...", flush=True)
+    print("  Reading news, sentiment, on-chain data...", flush=True)
 
     fg         = fetch_fear_greed()
     btc_dom    = fetch_btc_dominance()
@@ -305,7 +305,7 @@ def run() -> dict:
     defi_tvl   = fetch_defi_tvl()
     whales     = fetch_whale_alert()
     stables    = fetch_stablecoin_flows()
-    print("[MACRO AGENT]   On-chain data fetched.", flush=True)
+    print("  On-chain data fetched.", flush=True)
 
     # Format for Claude
     fg_str = f"Fear & Greed: {fg.get('current',{}).get('value','?')} ({fg.get('current',{}).get('label','?')}) | Yesterday: {fg.get('yesterday',{}).get('value','?')}"
@@ -457,7 +457,5 @@ Assess the macro environment and output ONLY this JSON:
         "advice":    result.get("trading_advice"),
     })
 
-    print(f"[MACRO AGENT] Done. Regime: {result.get('regime_type')} | "
-          f"Risk: {result.get('risk_level')} | "
-          f"Advice: {result.get('trading_advice','')[:60]}", flush=True)
+    print(f"  Regime: {result.get('regime_type','?')} | Risk: {result.get('risk_level','?')} | {result.get('trading_advice','')[:80]}", flush=True)
     return result

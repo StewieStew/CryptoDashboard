@@ -77,7 +77,7 @@ def calc_unrealized_pnl(trade: dict, live_price: float) -> dict:
 
 def run() -> dict:
     """Monitor open trades and assess risk."""
-    print("[RISK AGENT] Running...", flush=True)
+    print("  Running...", flush=True)
 
     # Get open trades from Render
     open_trades = []
@@ -93,7 +93,7 @@ def run() -> dict:
         closed_recent = []
 
     if not open_trades:
-        print("[RISK AGENT] No open trades to monitor.", flush=True)
+        print("  No open trades to monitor.", flush=True)
         result = {
             "timestamp":    datetime.now(timezone.utc).isoformat(),
             "open_count":   0,
@@ -238,7 +238,7 @@ Respond with ONLY this JSON:
                 })
 
         except Exception as e:
-            print(f"[RISK AGENT] Claude error: {e}", flush=True)
+            print(f"  Claude error: {e}", flush=True)
 
     result = {
         "timestamp":        datetime.now(timezone.utc).isoformat(),
@@ -260,6 +260,6 @@ Respond with ONLY this JSON:
 
     alert_count = len(alerts)
     exit_count  = sum(1 for r in exit_recs if r.get("action") == "exit")
-    print(f"[RISK AGENT] Done. Open: {len(open_trades)} | Alerts: {alert_count} | "
+    print(f"  Done. Open: {len(open_trades)} | Alerts: {alert_count} | "
           f"Exit recs: {exit_count} | Health: {portfolio_health}", flush=True)
     return result

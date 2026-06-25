@@ -174,10 +174,12 @@ def post_to_render(endpoint: str, data: dict) -> bool:
     for attempt in range(3):
         try:
             r = requests.post(url, json=data, timeout=90)
+            body = r.text[:120]
+            if r.status_code not in (200,201): print(f"  !! Render {endpoint} → {r.status_code} (attempt {attempt+1})", flush=True)
             if r.status_code in (200, 201):
                 return True
-        except Exception:
-            pass
+        except Exception as _e:
+            print(f"  !! Render {endpoint} failed (attempt {attempt+1}): {_e}", flush=True)
         if attempt < 2:
             _time.sleep(5)  # brief pause before retry
     return False
