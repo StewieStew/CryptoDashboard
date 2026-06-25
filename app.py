@@ -1905,12 +1905,12 @@ def _agent_trade_executor() -> None:
                 except Exception:
                     _live  = _entry
 
-                # Gate 5: SL not already crossed (0.5% buffer — small bounces shouldn't kill valid setups)
-                if _dir == "LONG"  and _live <= _sl * 1.005:
-                    print(f"[AGENT EXEC] {_sym}: at/below SL already (live={_live:.4f} sl={_sl:.4f})", flush=True)
+                # Gate 5: SL not already crossed (2% buffer — paper trading, allow reasonable price movement)
+                if _dir == "LONG"  and _live <= _sl * 1.02:
+                    print(f"[AGENT EXEC] {_sym}: well below SL (live={_live:.4f} sl={_sl:.4f})", flush=True)
                     continue
-                if _dir == "SHORT" and _live >= _sl * 0.995:
-                    print(f"[AGENT EXEC] {_sym}: at/above SL already (live={_live:.4f} sl={_sl:.4f})", flush=True)
+                if _dir == "SHORT" and _live >= _sl * 0.98:
+                    print(f"[AGENT EXEC] {_sym}: well above SL (live={_live:.4f} sl={_sl:.4f})", flush=True)
                     continue
 
                 # Gate 6: Signal freshness — skip if signal is older than 20 min (stale)
