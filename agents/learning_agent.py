@@ -138,7 +138,7 @@ Respond with ONLY this JSON:
 
     try:
         msg = client.messages.create(
-            model="claude-sonnet-4-6",
+            model="claude-haiku-4-5-20251001",
             max_tokens=1500,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -214,7 +214,7 @@ Identify patterns and propose improvements. Respond with ONLY this JSON:
 
     try:
         msg = client.messages.create(
-            model="claude-sonnet-4-6",
+            model="claude-haiku-4-5-20251001",
             max_tokens=1500,
             messages=[{"role": "user", "content": prompt}],
         )

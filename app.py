@@ -1947,7 +1947,7 @@ def _agent_trade_executor() -> None:
                     try:
                         _ts = insight.get("timestamp") or insight.get("received_at", "")
                         _age = (_now_utc - datetime.fromisoformat(_ts.replace("Z", "+00:00"))).total_seconds()
-                        if _age > 7200:
+                        if _age > 1800:
                             break  # insights are ordered oldest→newest; older ones won't help
                     except Exception:
                         pass
@@ -2040,7 +2040,7 @@ def _agent_trade_executor() -> None:
                         # Price hasn't dropped down to the support level yet
                         _waiting = True
                 else:
-                    print(f"[AGENT EXEC] {_sym} {_dir}: market entry — executing immediately at ${_live:,.4f}", flush=True)
+                    print(f"[MARKET ENTRY] {_sym}: executing immediately at ${_live:,.4f}", flush=True)
 
                 if _waiting:
                     # Track as a pending (queued) limit order visible on the dashboard
@@ -2054,7 +2054,7 @@ def _agent_trade_executor() -> None:
                             "status":     "pending",
                         }
                     _persist_insights()
-                    print(f"[AGENT EXEC] {_sym} {_dir}: PENDING — waiting for ${_entry:,.4f}  (live ${_live:,.4f}, {_dist_pct:.2f}% away)", flush=True)
+                    print(f"[LIMIT ENTRY - expires in 30min] {_sym}: waiting for ${_entry:,.4f}  (live ${_live:,.4f}, {_dist_pct:.2f}% away)", flush=True)
                     continue
 
                 # Price hit the level — remove from pending and persist
@@ -2074,8 +2074,8 @@ def _agent_trade_executor() -> None:
                     if _sig_ts:
                         from datetime import timezone as _tz
                         _sig_age = (datetime.now(_tz.utc) - datetime.fromisoformat(_sig_ts.replace("Z","+00:00"))).total_seconds()
-                        if _sig_age > 7200:  # 2 hours — gives limit orders time to fill
-                            print(f"[AGENT EXEC] {_sym}: signal too old ({_sig_age/60:.1f}min) — skipping", flush=True)
+                        if _sig_age > 1800:  # 30 min — limit orders expire after 30 min
+                            print(f"[AGENT EXEC] {_sym}: signal too old ({_sig_age/60:.1f}min) — dropping", flush=True)
                             continue
                 except Exception:
                     pass

@@ -700,6 +700,11 @@ The entry must be at a level that means something on the 15M chart:
 - Price is mid-range on 15M with no nearby structure -> skip this coin
 Set timeframe to "15m" when entry and TP/SL are based on 15M structure. Use "1h" when levels are wider 1H structures.
 
+Choose entry_type for each trade (this drives whether the bot fires immediately or waits):
+- "market" — enter immediately at current live price. Use when: (a) price is already at or within 0.3% of the entry level, (b) momentum is strong and missing the move is a bigger risk than a slightly worse fill, or (c) a breakout is already in progress with volume confirming.
+- "limit" — wait for price to pull back to the entry level. Use when: price is extended >0.5% away from entry and a realistic pullback to that level is expected within 30 minutes. Warning: limit orders expire after 30 minutes with no fill — only use limit if the pullback is genuinely likely in that window.
+Always set entry_type_reason: explain in one sentence why you chose market vs limit (distance from entry, momentum state, breakout vs pullback).
+
 STEP 5 - SET TP AND SL AT STRUCTURAL LEVELS ON THE TRADING TIMEFRAME
 - TP: next significant 15M or 1H level that price is projected to reach (prior swing high for SHORT, swing low for LONG)
 - SL: just beyond the 15M candle that proves this read was wrong (beyond the wick that invalidates the setup)
@@ -745,7 +750,8 @@ Respond with ONLY this JSON:
       "reason": "<2-3 sentences: what the 15M candles are building toward, what you project happens in the next 1-2 hours, and why this entry level makes sense>",
       "risk_note": "<what would prove this 15M read wrong>",
       "setup_quality": "<strong|moderate|marginal>",
-      "entry_type": "<limit|market>"
+      "entry_type": "<limit|market>",
+      "entry_type_reason": "<one sentence: why market vs limit — price distance from entry, momentum state>"
     }}
   ],
   "market_summary": "<1-2 sentences: BTC 15M structure right now and what it means for alts>",
@@ -925,10 +931,15 @@ Respond with ONLY this JSON:
             entry = t.get('entry', 0)
             tp    = t.get('tp', 0)
             sl    = t.get('sl', 0)
+            etype   = t.get('entry_type', 'limit').lower()
+            ereason = t.get('entry_type_reason', '')
             arrow = "SHORT ↓" if dirn == "SHORT" else "LONG ↑"
             stars = "★★★" if qual == "strong" else "★★☆" if qual == "moderate" else "★☆☆"
             print(f"  [{i}] {sym} {arrow} ({tf})  —  R:R {rr:.1f}:1  —  Confidence {conf}/10  {stars}", flush=True)
-            print(f"      Entry (limit): ${entry:,.4f}  →  fires when price touches this level", flush=True)
+            entry_tag = "[MARKET ENTRY]" if etype == "market" else "[LIMIT ENTRY - expires in 30min]"
+            print(f"      Entry {entry_tag}: ${entry:,.4f}", flush=True)
+            if ereason:
+                print(f"      Entry type reason: {ereason[:120]}", flush=True)
             print(f"      TP: ${tp:,.4f}  |  SL: ${sl:,.4f}", flush=True)
             if t.get('reason'):
                 print(f"      Why: {t.get('reason','')[:150]}", flush=True)
