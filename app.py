@@ -1981,16 +1981,17 @@ def _agent_trade_executor() -> None:
                 if not isinstance(_sig, dict):
                     continue
 
-                _sym   = _sig.get("symbol", "")
-                _dir   = (_sig.get("direction") or "").upper()
-                _entry = float(_sig.get("entry") or 0)
-                _tp    = float(_sig.get("tp")    or 0)
-                _sl    = float(_sig.get("sl")    or 0)
-                _tf    = _sig.get("timeframe", "1h")
-                _conf  = float(_sig.get("confidence") or 5)
-                _rsn   = _sig.get("reason", "AI agent signal")
-                _qual  = _sig.get("setup_quality", "moderate")
-                _fact  = _sig.get("confluence_factors", [])
+                _sym        = _sig.get("symbol", "")
+                _dir        = (_sig.get("direction") or "").upper()
+                _entry      = float(_sig.get("entry") or 0)
+                _tp         = float(_sig.get("tp")    or 0)
+                _sl         = float(_sig.get("sl")    or 0)
+                _tf         = _sig.get("timeframe", "1h")
+                _conf       = float(_sig.get("confidence") or 5)
+                _rsn        = _sig.get("reason", "AI agent signal")
+                _qual       = _sig.get("setup_quality", "moderate")
+                _fact       = _sig.get("confluence_factors", [])
+                _entry_type = (_sig.get("entry_type") or "limit").lower()
 
                 if not _sym or _dir not in ("LONG","SHORT") or not _entry or not _tp or not _sl:
                     continue
@@ -2026,20 +2027,20 @@ def _agent_trade_executor() -> None:
                 except Exception:
                     _live  = _entry
 
-                # Gate 5: Fire the instant price hits the entry level.
-                # Works like a real limit order — once the mark is touched, it executes.
-                # SHORT: analyst targets resistance ABOVE current price — wait for price
-                #        to RALLY UP to that level before shorting.
-                # LONG:  analyst targets support BELOW current price — wait for price
-                #        to DROP DOWN to that level before buying.
-                # 0.1% tolerance on the approach side for API latency / spread.
+                # Gate 5: Limit-order wait vs market execution.
+                # market entries (entry_type="market") skip the wait and execute immediately
+                # at live price — used by the daily minimum fallback so trending days always
+                # get at least one trade instead of sitting in a pending limit that never fills.
                 _waiting = False
-                if _dir == "SHORT" and _live < _entry * 0.999:
-                    # Price hasn't rallied up to the resistance level yet
-                    _waiting = True
-                if _dir == "LONG" and _live > _entry * 1.001:
-                    # Price hasn't dropped down to the support level yet
-                    _waiting = True
+                if _entry_type != "market":
+                    if _dir == "SHORT" and _live < _entry * 0.999:
+                        # Price hasn't rallied up to the resistance level yet
+                        _waiting = True
+                    if _dir == "LONG" and _live > _entry * 1.001:
+                        # Price hasn't dropped down to the support level yet
+                        _waiting = True
+                else:
+                    print(f"[AGENT EXEC] {_sym} {_dir}: market entry — executing immediately at ${_live:,.4f}", flush=True)
 
                 if _waiting:
                     # Track as a pending (queued) limit order visible on the dashboard

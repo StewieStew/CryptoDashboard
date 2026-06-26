@@ -32,13 +32,21 @@ from pathlib import Path
 import requests
 
 # ── Load .env file if present (picks up TG credentials etc.) ──────────────────
-_env_file = Path.home() / "Desktop" / "CryptoDashboard" / ".env"
-if _env_file.exists():
-    for _line in _env_file.read_text().splitlines():
-        _line = _line.strip()
-        if _line and not _line.startswith("#") and "=" in _line:
-            _k, _v = _line.split("=", 1)
-            os.environ.setdefault(_k.strip(), _v.strip())
+# Also check ~/CryptoDashboard/.env for when running via LaunchAgent (no Desktop TCC)
+for _env_candidate in [
+    Path.home() / "Desktop" / "CryptoDashboard" / ".env",
+    Path.home() / "CryptoDashboard" / ".env",
+]:
+    try:
+        if _env_candidate.exists():
+            for _line in _env_candidate.read_text().splitlines():
+                _line = _line.strip()
+                if _line and not _line.startswith("#") and "=" in _line:
+                    _k, _v = _line.split("=", 1)
+                    os.environ.setdefault(_k.strip(), _v.strip())
+            break
+    except (PermissionError, OSError):
+        pass  # Desktop not readable from LaunchAgent context; env vars set via plist
 
 # ── Import all agents ─────────────────────────────────────────────────────────
 from agents import state as S

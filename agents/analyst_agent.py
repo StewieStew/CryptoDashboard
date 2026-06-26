@@ -28,6 +28,22 @@ BINANCE_BASE  = "https://api.binance.us/api/v3"
 MIN_RR        = 1.5   # minimum risk:reward — non-negotiable
 
 
+def _trades_today() -> int:
+    """Count trades opened today (UTC) by querying the Render API."""
+    try:
+        render_url = os.environ.get("RENDER_URL", "https://cryptodashboard-nuf5.onrender.com")
+        r = requests.get(f"{render_url}/api/trades", timeout=10)
+        if r.status_code != 200:
+            return 0
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        return sum(
+            1 for t in r.json()
+            if isinstance(t, dict) and (t.get("opened_at") or "").startswith(today)
+        )
+    except Exception:
+        return 0
+
+
 def _claude():
     if not ANTHROPIC_KEY:
         return None
@@ -728,7 +744,8 @@ Respond with ONLY this JSON:
       "confluence_factors": ["<factor1>", "<factor2>", "<factor3>"],
       "reason": "<2-3 sentences: what the 15M candles are building toward, what you project happens in the next 1-2 hours, and why this entry level makes sense>",
       "risk_note": "<what would prove this 15M read wrong>",
-      "setup_quality": "<strong|moderate|marginal>"
+      "setup_quality": "<strong|moderate|marginal>",
+      "entry_type": "<limit|market>"
     }}
   ],
   "market_summary": "<1-2 sentences: BTC 15M structure right now and what it means for alts>",
@@ -736,6 +753,23 @@ Respond with ONLY this JSON:
   "next_check_focus": "<specific 15M level or pattern to watch next cycle>",
   "chart_warnings": ["<any coin where chart and numbers conflict, e.g. 'ETH: RSI oversold but chart shows no base, skip longs'>"]
 }}"""
+
+        # Daily minimum: if it's after 18:00 UTC and no trades placed today,
+        # force-append a market-entry instruction so the best available setup
+        # executes immediately instead of waiting for a limit pullback.
+        _hour_utc = datetime.now(timezone.utc).hour
+        if _hour_utc >= 18:
+            _today_count = _trades_today()
+            if _today_count == 0:
+                prompt += (
+                    "\n\n⚠️ DAILY MINIMUM NOT MET: No trades have been taken today. "
+                    "If you have ANY setup with R:R ≥ 1.5 and confidence ≥ 5, you MUST include it. "
+                    "Set entry_type to \"market\" so it executes at current price rather than waiting for a pullback. "
+                    "Do not return an empty array — take the best available setup now."
+                )
+                print(f"  [DAILY MIN] No trades today after 18:00 UTC — market entry fallback active", flush=True)
+            else:
+                print(f"  [DAILY MIN] {_today_count} trade(s) taken today — no fallback needed", flush=True)
 
         try:
             # ── Self-evaluation: ask Claude to critique its own charts ────
