@@ -2452,6 +2452,18 @@ def admin_clear_trades():
     return jsonify({"status": "cleared"})
 
 
+@app.route("/api/trades/clear-closed", methods=["POST"])
+def clear_closed_trades():
+    """Delete all closed trades (status win/loss/cancelled) without touching open trades or the adaptation log."""
+    import learning
+    with learning._conn() as db:
+        result = db.execute(
+            "DELETE FROM trades WHERE status IN ('win', 'loss', 'cancelled')"
+        )
+        deleted = result.rowcount
+    return jsonify({"status": "ok", "deleted": deleted})
+
+
 @app.route("/api/admin/reset_learning", methods=["POST"])
 def admin_reset_learning():
     """Reset learning weights, stop_multiplier, and log back to defaults — admin use only."""
