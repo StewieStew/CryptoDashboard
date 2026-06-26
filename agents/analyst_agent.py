@@ -25,7 +25,7 @@ from agents.state import (set_state, get_state, add_report, add_knowledge,
 COINS         = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "DOGEUSDT", "SOLUSDT"]
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 BINANCE_BASE  = "https://api.binance.us/api/v3"
-MIN_RR        = 2.0   # minimum risk:reward — non-negotiable
+MIN_RR        = 1.5   # minimum risk:reward — non-negotiable
 
 
 def _claude():
@@ -638,7 +638,7 @@ BTC active addresses: {btc_onchain.get('active_addresses',0):,} ({btc_onchain.ge
 TRADING SESSION (critical for setup quality):
 Current session: {session['session']}  |  Quality: {session['quality']}  |  UTC hour: {session['hour_utc']}:00
 {session['note']}
-{"⚠ CAUTION SESSION: Only take setups with exceptional clarity. Widen SL slightly — this is a low-liquidity window where stop hunts are common." if session['caution'] else "✓ Active session: volume and liquidity support directional moves."}
+{"⚠ CAUTION SESSION: Only take setups with exceptional clarity. This is a low-liquidity window where stop hunts are common." if session['caution'] else "✓ Active session: volume and liquidity support directional moves."}
 
 BOT STATUS:
 {trade_ctx}
@@ -687,7 +687,7 @@ Set timeframe to "15m" when entry and TP/SL are based on 15M structure. Use "1h"
 STEP 5 - SET TP AND SL AT STRUCTURAL LEVELS ON THE TRADING TIMEFRAME
 - TP: next significant 15M or 1H level that price is projected to reach (prior swing high for SHORT, swing low for LONG)
 - SL: just beyond the 15M candle that proves this read was wrong (beyond the wick that invalidates the setup)
-- R:R >= 1.5:1 on 15M trades. If levels are too tight and RR is under 1.3, skip and find a better coin. For 1H setups, aim for 1.8:1+.
+- R:R >= 2.0:1 on 15M trades. If levels are too tight and RR is under 1.5, skip and find a better coin. For 1H setups, aim for 2.2:1+.
 
 STEP 6 - CROSS-CHECK: DOES THE CHART MATCH THE NUMBERS? (CRITICAL)
 Before finalizing any setup, look back at the chart image and verify:
@@ -702,7 +702,7 @@ STEP 7 - RETURN YOUR BEST 1-3 SETUPS
 Return only setups you would actually take. Quality over quantity.
 - If 3 genuine setups exist across different coins -> return all 3
 - If only 1 good setup exists -> return 1 (do not manufacture bad trades)
-- If nothing is clean -> return empty trades array. Never force a bad trade.
+- If setups are marginal but have at least 2 confirming factors, include them with setup_quality set to "marginal". Only return truly empty array if there is genuinely nothing — no structure, no momentum, no liquidity confluence at all.
 - Do NOT return two trades on the same coin.
 - Do NOT suggest a trade if the same coin+direction is already open.
 
