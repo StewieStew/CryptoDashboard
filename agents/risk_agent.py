@@ -75,22 +75,92 @@ def calc_unrealized_pnl(trade: dict, live_price: float) -> dict:
         return {}
 
 
+PENDING_MAX_HOURS     = 4.0    # cancel pending trades older than this
+PENDING_DRIFT_PCT     = 2.0    # cancel if price moved this % away from entry (wrong dir)
+RENDER_URL_DEFAULT    = "https://cryptodashboard-nuf5.onrender.com"
+
+
+def _cancel_trade(render_url: str, trade_id: str) -> bool:
+    try:
+        r = requests.post(f"{render_url}/api/trades/{trade_id}/cancel", timeout=10)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+def _check_pending_cancellations(render_url: str, pending_trades: list) -> int:
+    """
+    Cancel pending DB trades that have become invalid:
+      1. Price drifted 2%+ away from entry in wrong direction
+      2. SL blown through before entry
+      3. Trade has been pending more than 4 hours
+    Returns count of trades cancelled.
+    """
+    cancelled = 0
+    now_utc = datetime.now(timezone.utc)
+    for trade in pending_trades:
+        sym   = trade.get("symbol", "")
+        entry = float(trade.get("entry", 0))
+        sl    = float(trade.get("sl", 0))
+        dirn  = trade.get("direction", "")
+        tid   = trade.get("id", "")
+        opened = trade.get("opened_at", "")
+        if not (sym and entry and sl and dirn and tid):
+            continue
+        live = get_live_price(sym)
+        if not live:
+            continue
+        reason = None
+        dist_pct = (live - entry) / entry * 100
+        # LONG: waiting for price to fall to entry — cancel if price ran 2%+ above entry
+        if dirn == "LONG" and dist_pct > PENDING_DRIFT_PCT:
+            reason = f"price ran {dist_pct:.1f}% above limit entry — LONG setup stale"
+        # SHORT: waiting for price to rally to entry — cancel if price dropped 2%+ below entry
+        elif dirn == "SHORT" and dist_pct < -PENDING_DRIFT_PCT:
+            reason = f"price fell {abs(dist_pct):.1f}% below limit entry — SHORT setup stale"
+        # SL blown through before entry
+        elif dirn == "LONG" and live <= sl:
+            reason = f"SL at {sl:.4f} blown through at live={live:.4f} before entry"
+        elif dirn == "SHORT" and live >= sl:
+            reason = f"SL at {sl:.4f} blown through at live={live:.4f} before entry"
+        # 4-hour timeout
+        elif opened:
+            try:
+                age_h = (now_utc - datetime.fromisoformat(opened.replace("Z", "+00:00"))).total_seconds() / 3600
+                if age_h > PENDING_MAX_HOURS:
+                    reason = f"pending trade expired ({age_h:.1f}h > {PENDING_MAX_HOURS}h limit)"
+            except Exception:
+                pass
+        if reason:
+            print(f"  [PENDING CANCEL] {sym} {dirn}: {reason}", flush=True)
+            if _cancel_trade(render_url, tid):
+                cancelled += 1
+    return cancelled
+
+
 def run() -> dict:
     """Monitor open trades and assess risk."""
     print("  Running...", flush=True)
 
+    render_url = get_state("render_url", os.environ.get("RENDER_URL", RENDER_URL_DEFAULT))
+
     # Get open trades from Render
     open_trades = []
     try:
-        r = requests.get(
-            f"{get_state('render_url', os.environ.get('RENDER_URL', 'https://cryptodashboard-nuf5.onrender.com'))}/api/trades",
-            timeout=12
-        )
+        r = requests.get(f"{render_url}/api/trades", timeout=12)
         all_trades  = r.json() if r.status_code == 200 else []
         open_trades = [t for t in all_trades if t.get("status") == "open"]
+        pending_trades = [t for t in all_trades if t.get("status") == "pending"]
         closed_recent = [t for t in all_trades if t.get("status") in ("win","loss")][-10:]
     except Exception:
+        pending_trades = []
         closed_recent = []
+
+    # ── Cancel invalidated pending trades ─────────────────────────────────────
+    if pending_trades:
+        n_cancelled = _check_pending_cancellations(render_url, pending_trades)
+        if n_cancelled:
+            print(f"  Cancelled {n_cancelled} stale pending trade(s).", flush=True)
 
     if not open_trades:
         print("  No open trades to monitor.", flush=True)

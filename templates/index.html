@@ -317,10 +317,12 @@ function tradeCardHtml(t, mode){
   const rr=sld>0?(tpd/sld).toFixed(1):'?';
   const id=`chart-${mode}-${sym}-${dir}-${Math.random().toString(36).slice(2,6)}`;
   const badge=mode==='pending'
-    ?`<span class="pending-badge">⏳ LIMIT ORDER</span>`
+    ?`<span class="pending-badge">⏳ PENDING</span>`
     :`<span class="open-badge">● OPEN</span>`;
+  const liveP=parseFloat(t.current_price||t.live_price||0);
+  const distPct=t.dist_pct!=null?t.dist_pct:(liveP&&entry?Math.abs((liveP-entry)/entry*100).toFixed(2):null);
   const rightInfo=mode==='pending'
-    ?`<span class="dist-away">${t.dist_pct||'?'}% from level</span>`
+    ?(distPct?`<span class="dist-away">${distPct}% from level</span>`:`<span style="font-size:11px;color:#555">${ago(t.opened_at)} ago</span>`)
     :`<span style="font-size:11px;color:#555">${ago(t.opened_at)} ago</span>`;
 
   return`<div class="trade-card">
@@ -399,12 +401,17 @@ async function load(){
       const q=sig.setup_quality||'moderate';
       const cf=sig.confluence_factors||[];
       sc.className='sig-card active';
+      const et=sig.entry_type||'limit';
+      const etColor=et==='market'?'rgba(59,130,246,.12)':'rgba(234,179,8,.12)';
+      const etBorder=et==='market'?'rgba(59,130,246,.2)':'rgba(234,179,8,.2)';
+      const etTxt=et==='market'?'#60a5fa':'#eab308';
       sc.innerHTML=`
         <div class="sig-top">
-          <div style="display:flex;align-items:center;gap:10px">
+          <div style="display:flex;align-items:center;gap:8px">
             <span class="sig-sym">${sig.symbol.replace('USDT','')}</span>
             <span class="sig-dir ${(sig.direction||'').toLowerCase()}">${sig.direction}</span>
             <span style="font-size:11px;color:#666">${sig.timeframe||'1h'}</span>
+            <span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px;background:${etColor};color:${etTxt};border:1px solid ${etBorder}">${et.toUpperCase()}</span>
           </div>
           <span class="sig-quality ${q}">${q.toUpperCase()}</span>
         </div>
@@ -485,7 +492,8 @@ async function load(){
     const trades = trRes.ok ? await trRes.json() : [];
     const pending = pendRes.ok ? await pendRes.json() : [];
 
-    const open   = trades.filter(t=>t.status==='open');
+    const open       = trades.filter(t=>t.status==='open');
+    const pendingDB  = trades.filter(t=>t.status==='pending');
     const closed = trades.filter(t=>['win','loss','breakeven'].includes(t.status));
     const wins   = closed.filter(t=>t.status==='win');
     const losses = closed.filter(t=>t.status==='loss');
@@ -499,24 +507,26 @@ async function load(){
     pEl.textContent=closed.length?(roi>=0?'+':'')+roi.toFixed(2)+'%':'—';
     pEl.className='stat-v '+(roi>=0?'g':'r');
 
-    // Tab badges
+    // Tab badges — pending tab shows legacy pending; open tab shows open + DB pending
     const pbtn=document.getElementById('tab-pending-btn');
     const obtn=document.getElementById('tab-open-btn');
     pbtn.innerHTML=`Pending Orders${pending.length?`<span class="tab-badge">${pending.length}</span>`:''}`;
-    obtn.innerHTML=`Open Trades${open.length?`<span class="tab-badge">${open.length}</span>`:''}`;
+    const openTotal=open.length+pendingDB.length;
+    obtn.innerHTML=`Open Trades${openTotal?`<span class="tab-badge">${openTotal}</span>`:''}`;
 
-    // Pending orders tab
+    // Pending orders tab (legacy _pending_signals from /api/agent/pending)
     const pEl2=document.getElementById('pendingList');
     if(pending.length){
       pEl2.innerHTML=pending.map(t=>tradeCardHtml(t,'pending')).join('');
     }else{
-      pEl2.innerHTML='<div class="empty">No pending limit orders right now.<br><span style="font-size:11px;color:#444">Signals appear here when the analyst finds a setup.<br>They fire automatically when price hits the entry level.</span></div>';
+      pEl2.innerHTML='<div class="empty">No legacy pending orders.<br><span style="font-size:11px;color:#444">Limit orders waiting for fill now appear in Open Trades.</span></div>';
     }
 
-    // Open trades tab
+    // Open trades tab — shows active open trades AND pending DB limit orders
     const oEl=document.getElementById('openList');
-    if(open.length){
-      oEl.innerHTML=open.map(t=>tradeCardHtml(t,'open')).join('');
+    const allOpen=[...pendingDB,...open];
+    if(allOpen.length){
+      oEl.innerHTML=allOpen.map(t=>tradeCardHtml(t,t.status==='pending'?'pending':'open')).join('');
     }else oEl.innerHTML='<div class="empty">No open trades</div>';
 
     // Render charts for all cards now that DOM is set

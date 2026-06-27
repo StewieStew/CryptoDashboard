@@ -933,12 +933,75 @@ def _monitor_open_trades() -> int:
     return total_closed
 
 
+def _check_pending_trades() -> int:
+    """
+    Check all status='pending' DB trades every cycle.
+    If live price is within 0.1% of the entry level, flip the trade to 'open'
+    and set entry_price to the actual fill price.
+    Returns the number of trades activated.
+    """
+    import requests as _req_pend
+    all_open = learning.get_open_trades()
+    pending = [t for t in all_open if t.get("status") == "pending"]
+    if not pending:
+        return 0
+
+    activated = 0
+    for trade in pending:
+        sym   = trade["symbol"]
+        entry = float(trade["entry"])
+        dirn  = trade["direction"]
+        try:
+            _px = _req_pend.get(
+                "https://api.binance.us/api/v3/ticker/price",
+                params={"symbol": sym}, timeout=8
+            )
+            live = float(_px.json()["price"])
+        except Exception:
+            continue
+
+        # Fill when price is within 0.1% of the limit entry level
+        if abs(live - entry) / entry <= 0.001:
+            try:
+                db = learning._conn()
+                db.execute(
+                    "UPDATE trades SET status='open', entry=? WHERE id=? AND status='pending'",
+                    (round(live, 8), trade["id"])
+                )
+                db.commit()
+                db.close()
+                activated += 1
+                print(
+                    f"[PENDING FILL] {sym} {dirn}: live={live:.4f} hit entry={entry:.4f} → OPEN",
+                    flush=True,
+                )
+                notifications.send_signal_alert({
+                    "symbol":       sym,
+                    "interval":     trade["interval"],
+                    "direction":    dirn,
+                    "entry":        live,
+                    "tp":           trade["tp"],
+                    "sl":           trade["sl"],
+                    "score":        trade["score"],
+                    "reason":       f"[LIMIT FILLED] {trade.get('reason', '')}",
+                    "target_basis": trade.get("target_basis", ""),
+                    "ai_analysis":  {},
+                    "pending":      False,
+                    "current_price": live,
+                })
+            except Exception as _e:
+                print(f"[PENDING FILL ERROR] {sym}: {_e}", flush=True)
+
+    return activated
+
+
 def _price_monitor_loop() -> None:
     """Lightweight 60-second loop: fetch live prices and close any TP/SL hits."""
     time.sleep(15)   # stagger start so scanner initialises first
     while True:
         try:
             _monitor_open_trades()
+            _check_pending_trades()
         except Exception as exc:
             print(f"[MONITOR ERROR] {exc}", flush=True)
         time.sleep(60)
@@ -1808,9 +1871,20 @@ def agent_report():
 
 @app.route("/api/agent/pending")
 def agent_pending():
-    """Return signals queued as limit orders, waiting for price to hit entry."""
-    with _agent_lock:
-        return jsonify(list(_pending_signals.values()))
+    """Return pending limit trades from the DB."""
+    all_open = learning.get_open_trades()
+    pending = [dict(t) for t in all_open if t.get("status") == "pending"]
+    return jsonify(pending)
+
+
+@app.route("/api/trades/<trade_id>/cancel", methods=["POST"])
+def cancel_pending_trade(trade_id):
+    """Cancel a pending or open trade by ID."""
+    result = learning.close_trade(trade_id, 0.0, "cancelled")
+    if result is None:
+        return jsonify({"error": "trade not found or already closed"}), 404
+    print(f"[CANCEL] Trade {trade_id} cancelled", flush=True)
+    return jsonify({"status": "cancelled", "trade_id": trade_id})
 
 
 @app.route("/api/trade/adjust", methods=["POST"])
@@ -2057,24 +2131,37 @@ def _agent_trade_executor() -> None:
                     print(f"[MARKET ENTRY] {_sym}: executing immediately at ${_live:,.4f}", flush=True)
 
                 if _waiting:
-                    # Track as a pending (queued) limit order visible on the dashboard
+                    # Limit signal: price not yet at entry level.
+                    # Create a pending trade in the DB — visible on dashboard immediately.
+                    # The price monitor will flip it to 'open' when price reaches the level.
                     _dist_pct = abs(_live - _entry) / _entry * 100
-                    with _agent_lock:
-                        _pending_signals[_ck] = {
-                            **_sig,
-                            "queued_at":  datetime.now(timezone.utc).isoformat(),
-                            "live_price": _live,
-                            "dist_pct":   round(_dist_pct, 2),
-                            "status":     "pending",
-                        }
-                    _persist_insights()
-                    print(f"[LIMIT ENTRY - expires in 30min] {_sym}: waiting for ${_entry:,.4f}  (live ${_live:,.4f}, {_dist_pct:.2f}% away)", flush=True)
+                    _ptid = str(uuid.uuid4())
+                    _ptd = {
+                        "id": _ptid, "symbol": _sym, "interval": _tf,
+                        "direction": _dir, "entry": _entry, "current_price": _live,
+                        "tp": _tp, "sl": _sl, "score": _conf, "effective_score": _conf,
+                        "reason": _rsn,
+                        "factors_snapshot": {
+                            "confidence": _conf, "rr_ratio": round(_rr, 2),
+                            "setup_quality": _qual, "confluence_factors": _fact,
+                            "agent_driven": True,
+                        },
+                        "target_basis": "agent_analysis", "tp_source": "agent_analysis",
+                        "opened_at": datetime.now(timezone.utc).isoformat(),
+                        "status": "pending", "entry_type": "limit",
+                        "adx_value": 0, "vwap_side": "unknown",
+                        "signal_type": "AGENT_DRIVEN",
+                    }
+                    if learning.log_trade(_ptd):
+                        _agent_signal_cooldown[_ck] = time.time()
+                        print(
+                            f"[LIMIT PENDING] {_sym} {_dir}: waiting for ${_entry:,.4f}"
+                            f"  (live ${_live:,.4f}, {_dist_pct:.2f}% away) — queued in DB",
+                            flush=True,
+                        )
                     continue
 
-                # Price hit the level — remove from pending and persist
-                with _agent_lock:
-                    _pending_signals.pop(_ck, None)
-                _persist_insights()
+                # Immediate entry: price is already at the limit level, or market entry.
                 if _dir == "LONG"  and _live <= _sl * 1.005:
                     print(f"[AGENT EXEC] {_sym}: SL already crossed (live={_live:.4f} sl={_sl:.4f})", flush=True)
                     continue
@@ -2082,19 +2169,7 @@ def _agent_trade_executor() -> None:
                     print(f"[AGENT EXEC] {_sym}: SL already crossed (live={_live:.4f} sl={_sl:.4f})", flush=True)
                     continue
 
-                # Gate 6: Signal freshness — skip if signal is older than 20 min (stale)
-                try:
-                    _sig_ts = _sig.get("timestamp") or analyst_data.get("timestamp", "")
-                    if _sig_ts:
-                        from datetime import timezone as _tz
-                        _sig_age = (datetime.now(_tz.utc) - datetime.fromisoformat(_sig_ts.replace("Z","+00:00"))).total_seconds()
-                        if _sig_age > 1800:  # 30 min — limit orders expire after 30 min
-                            print(f"[AGENT EXEC] {_sym}: signal too old ({_sig_age/60:.1f}min) — dropping", flush=True)
-                            continue
-                except Exception:
-                    pass
-
-                # All gates passed — open trade
+                # All gates passed — open trade immediately
                 _tid = str(uuid.uuid4())
                 _td  = {
                     "id": _tid, "symbol": _sym, "interval": _tf,
@@ -2108,7 +2183,8 @@ def _agent_trade_executor() -> None:
                     },
                     "target_basis": "agent_analysis", "tp_source": "agent_analysis",
                     "opened_at": datetime.now(timezone.utc).isoformat(),
-                    "status": "open", "adx_value": 0, "vwap_side": "unknown",
+                    "status": "open", "entry_type": _entry_type,
+                    "adx_value": 0, "vwap_side": "unknown",
                     "signal_type": "AGENT_DRIVEN",
                 }
                 if learning.log_trade(_td):

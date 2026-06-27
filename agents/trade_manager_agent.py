@@ -15,7 +15,7 @@ Output: SL adjustment instructions posted to Render /api/trade/adjust
 """
 from __future__ import annotations
 import os, json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import requests
 
@@ -29,6 +29,8 @@ BE_TRIGGER_R    = 1.0   # move SL to break-even after this many R of profit
 PARTIAL_R       = 1.5   # take 50% profit at this R
 TRAIL_START_R   = 2.0   # start trailing stop here
 TRAIL_ATR_MULT  = 1.5   # trail = ATR × this multiplier below/above current price
+PENDING_MAX_HOURS  = 4.0   # cancel pending trades older than this
+PENDING_DRIFT_PCT  = 2.0   # cancel if price moved this % away from entry (wrong dir)
 
 
 def _get_price(symbol: str) -> float:
@@ -79,6 +81,60 @@ def _r_multiple(trade: dict, live: float) -> float:
         return 0.0
 
 
+def _cancel_pending(trade_id: str) -> bool:
+    try:
+        r = requests.post(f"{RENDER_URL}/api/trades/{trade_id}/cancel", timeout=10)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+def _check_pending_cancellations(pending_trades: list) -> int:
+    """
+    Cancel pending DB trades that have become invalid:
+      1. Price drifted 2%+ away from entry in wrong direction
+      2. SL blown through before entry
+      3. Trade pending more than 4 hours
+    Returns count cancelled.
+    """
+    cancelled = 0
+    now_utc = datetime.now(timezone.utc)
+    for trade in pending_trades:
+        sym   = trade.get("symbol", "")
+        entry = float(trade.get("entry", 0))
+        sl    = float(trade.get("sl", 0))
+        dirn  = trade.get("direction", "")
+        tid   = trade.get("id", "")
+        opened = trade.get("opened_at", "")
+        if not (sym and entry and sl and dirn and tid):
+            continue
+        live = _get_price(sym)
+        if not live:
+            continue
+        reason = None
+        dist_pct = (live - entry) / entry * 100
+        if dirn == "LONG" and dist_pct > PENDING_DRIFT_PCT:
+            reason = f"price ran {dist_pct:.1f}% above limit entry — LONG setup stale"
+        elif dirn == "SHORT" and dist_pct < -PENDING_DRIFT_PCT:
+            reason = f"price fell {abs(dist_pct):.1f}% below limit entry — SHORT setup stale"
+        elif dirn == "LONG" and live <= sl:
+            reason = f"SL blown before entry (live={live:.4f} <= sl={sl:.4f})"
+        elif dirn == "SHORT" and live >= sl:
+            reason = f"SL blown before entry (live={live:.4f} >= sl={sl:.4f})"
+        elif opened:
+            try:
+                age_h = (now_utc - datetime.fromisoformat(opened.replace("Z", "+00:00"))).total_seconds() / 3600
+                if age_h > PENDING_MAX_HOURS:
+                    reason = f"expired ({age_h:.1f}h > {PENDING_MAX_HOURS}h limit)"
+            except Exception:
+                pass
+        if reason:
+            print(f"  [PENDING CANCEL] {sym} {dirn}: {reason}", flush=True)
+            if _cancel_pending(tid):
+                cancelled += 1
+    return cancelled
+
+
 def run() -> dict:
     """Check every open trade and post management instructions to Render."""
     print("  Running trade manager...", flush=True)
@@ -86,11 +142,18 @@ def run() -> dict:
     # Fetch open trades from Render
     try:
         r = requests.get(f"{RENDER_URL}/api/trades", timeout=12)
-        all_trades  = r.json() if r.status_code == 200 else []
-        open_trades = [t for t in all_trades if t.get("status") == "open"]
+        all_trades    = r.json() if r.status_code == 200 else []
+        open_trades   = [t for t in all_trades if t.get("status") == "open"]
+        pending_trades = [t for t in all_trades if t.get("status") == "pending"]
     except Exception as e:
         print(f"  [TM] Could not fetch trades: {e}", flush=True)
         return {"actions": [], "open": 0}
+
+    # Cancel any invalidated pending trades
+    if pending_trades:
+        n = _check_pending_cancellations(pending_trades)
+        if n:
+            print(f"  Cancelled {n} stale pending trade(s).", flush=True)
 
     if not open_trades:
         print("  No open trades to manage.", flush=True)

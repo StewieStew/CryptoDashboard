@@ -129,6 +129,7 @@ def _init_db():
             ("tp_source",           "TEXT DEFAULT 'unknown'"),
             ("initial_sl",          "REAL"),   # original SL at entry — never overwritten by trailing logic
             ("tp_reached",          "INTEGER DEFAULT 0"),  # 1 = TP crossed, now in let-it-run trailing mode
+            ("entry_type",          "TEXT DEFAULT 'market'"),  # 'market' or 'limit'
         ]:
             try:
                 db.execute(f"ALTER TABLE trades ADD COLUMN {col} {defn}")
@@ -337,8 +338,9 @@ def log_trade(trade: dict) -> bool:
             db.execute("""
                 INSERT INTO trades
                 (id, symbol, interval, direction, entry, tp, sl, initial_sl, score, effective_score,
-                 reason, factors_snapshot, target_basis, tp_source, opened_at, partial_tp, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 reason, factors_snapshot, target_basis, tp_source, opened_at, partial_tp, status,
+                 entry_type)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 trade["id"], sym, intv, dirn,
                 trade["entry"], trade["tp"], trade["sl"], trade["sl"],  # initial_sl = sl at entry
@@ -350,6 +352,7 @@ def log_trade(trade: dict) -> bool:
                 trade["opened_at"],
                 partial_tp,
                 initial_status,
+                trade.get("entry_type", "market"),
             ))
             db.commit()
             return True
