@@ -1875,13 +1875,27 @@ def agent_intelligence():
         latest_report   = _agent_reports[-1]   if _agent_reports   else {}
         recent_insights = _agent_insights[-10:]
         recent_reports  = _agent_reports[-10:]
+        # Find the most recent analyst_signal chart for the dashboard signal card
+        latest_chart_b64 = None
+        for item in reversed(_agent_insights):
+            if item.get("chart_b64") and item.get("trade_signal", {}).get("symbol"):
+                latest_chart_b64 = item["chart_b64"]
+                break
+    # Strip chart_b64 from feed items to keep the response payload small;
+    # the chart is surfaced separately via latest_chart_b64.
+    def _strip(item):
+        if "chart_b64" in item:
+            item = dict(item)
+            del item["chart_b64"]
+        return item
     return jsonify({
-        "latest_market_analysis": latest_insight,
+        "latest_market_analysis": _strip(latest_insight),
         "latest_report":          latest_report,
-        "recent_insights":        recent_insights,
+        "recent_insights":        [_strip(i) for i in recent_insights],
         "recent_reports":         recent_reports,
         "total_insights":         len(_agent_insights),
         "total_reports":          len(_agent_reports),
+        "latest_chart_b64":       latest_chart_b64,
     })
 
 

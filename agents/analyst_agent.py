@@ -899,6 +899,7 @@ Respond with ONLY this JSON:
         "all_signals":   trades,
         "market_summary": result.get("market_summary"),
         "coins_to_avoid": result.get("coins_to_avoid", []),
+        "chart_b64":     chart_images.get(trade.get("symbol", "")) if trade else None,
     })
 
     # Print any chart/number conflicts Claude flagged

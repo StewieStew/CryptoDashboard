@@ -390,6 +390,7 @@ async function load(){
     for(const i of [...insights].reverse()){
       if(i.trade_signal&&i.trade_signal?.symbol){sig=i.trade_signal;break;}
     }
+    const chartB64=ag.latest_chart_b64||null;
     const sc=document.getElementById('sigCard');
     if(sig&&sig.symbol){
       const tpd=Math.abs((sig.tp-sig.entry)/sig.entry*100);
@@ -417,7 +418,8 @@ async function load(){
           <span>Confidence <strong>${sig.confidence||'?'}/10</strong></span>
         </div>
         ${sig.reason?`<div class="sig-reason">${sig.reason}</div>`:''}
-        ${cf.length?`<div class="ctags">${cf.map(f=>`<span class="ctag">${f}</span>`).join('')}</div>`:''}`;
+        ${cf.length?`<div class="ctags">${cf.map(f=>`<span class="ctag">${f}</span>`).join('')}</div>`:''}
+        ${chartB64?`<img src="data:image/png;base64,${chartB64}" style="max-width:100%;border-radius:8px;margin-top:8px;">`:''}`;
     }else{
       sc.className='sig-card';
       sc.innerHTML='<div class="empty">No signal yet — agent analyzing market...</div>';
