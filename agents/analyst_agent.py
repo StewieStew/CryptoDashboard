@@ -38,7 +38,9 @@ def _trades_today() -> int:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         return sum(
             1 for t in r.json()
-            if isinstance(t, dict) and (t.get("opened_at") or "").startswith(today)
+            if isinstance(t, dict)
+            and (t.get("opened_at") or "").startswith(today)
+            and t.get("status") in ("open", "win", "loss")
         )
     except Exception:
         return 0
