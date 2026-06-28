@@ -80,7 +80,7 @@ def _has_setup(d: dict) -> bool:
 def _trades_today() -> int:
     """Count trades opened today (UTC) by querying the Render API."""
     try:
-        render_url = os.environ.get("RENDER_URL", "https://cryptodashboard-nuf5.onrender.com")
+        render_url = os.environ.get("RENDER_URL", "http://localhost:8080")
         r = requests.get(f"{render_url}/api/trades", timeout=10)
         if r.status_code != 200:
             return 0
@@ -703,7 +703,7 @@ Whale activity:
     # Load prior trades for context
     try:
         import requests as _r
-        render_url = os.environ.get("RENDER_URL", "https://cryptodashboard-nuf5.onrender.com")
+        render_url = os.environ.get("RENDER_URL", "http://localhost:8080")
         trades_r = _r.get(f"{render_url}/api/trades", timeout=10)
         all_trades = trades_r.json() if trades_r.status_code == 200 else []
     except Exception:
@@ -997,6 +997,14 @@ Respond with ONLY this JSON:
     trades = [t for t in trades if float(t.get("rr_ratio", 0)) >= MIN_RR]
     if len(trades) < before:
         print(f"  [FILTER] Dropped {before - len(trades)} trade(s) below R:R {MIN_RR}:1", flush=True)
+
+    # Forced mode: override 15m trades to market entry so they execute immediately
+    # rather than sitting as pending limit orders that may never fill in 30 min.
+    if forced:
+        for t in trades:
+            if t.get("timeframe") == "15m" and t.get("entry_type", "limit") != "market":
+                t["entry_type"] = "market"
+                print(f"  [FORCED] {t.get('symbol','').replace('USDT','')} 15m: entry_type overridden to market", flush=True)
 
     # Use the highest-confidence trade as the primary signal for dashboard display
     trade = max(trades, key=lambda t: t.get("confidence", 0)) if trades else {}

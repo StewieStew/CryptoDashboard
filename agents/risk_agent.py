@@ -77,7 +77,7 @@ def calc_unrealized_pnl(trade: dict, live_price: float) -> dict:
 
 PENDING_MAX_HOURS     = 4.0    # cancel pending trades older than this
 PENDING_DRIFT_PCT     = 2.0    # cancel if price moved this % away from entry (wrong dir)
-RENDER_URL_DEFAULT    = "https://cryptodashboard-nuf5.onrender.com"
+RENDER_URL_DEFAULT    = "http://localhost:8080"
 
 
 def _cancel_trade(render_url: str, trade_id: str) -> bool:

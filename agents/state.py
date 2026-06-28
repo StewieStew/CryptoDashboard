@@ -83,7 +83,7 @@ def get_session() -> dict:
 DB_PATH = Path.home() / "CryptoDashboard" / "agent_kb" / "agent_state.db"
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-RENDER_URL = os.environ.get("RENDER_URL", "https://cryptodashboard-nuf5.onrender.com")
+RENDER_URL = os.environ.get("RENDER_URL", "http://localhost:8080")
 
 
 def _conn() -> sqlite3.Connection:

@@ -2159,6 +2159,8 @@ def _agent_trade_executor() -> None:
                             f"  (live ${_live:,.4f}, {_dist_pct:.2f}% away) — queued in DB",
                             flush=True,
                         )
+                    else:
+                        print(f"[AGENT EXEC] {_sym} {_dir} {_tf}: log_trade rejected pending — cooldown/dedup/R:R check", flush=True)
                     continue
 
                 # Immediate entry: price is already at the limit level, or market entry.
@@ -2207,6 +2209,8 @@ def _agent_trade_executor() -> None:
                         "ai_analysis": {"confluence": _fact},
                         "pending": False, "current_price": _live,
                     })
+                else:
+                    print(f"[AGENT EXEC] {_sym} {_dir} {_tf}: log_trade rejected — cooldown/dedup/R:R/side check (entry={_entry:.4f} tp={_tp:.4f} sl={_sl:.4f})", flush=True)
 
         except Exception as e:
             print(f"[AGENT EXEC] Error: {e}", flush=True)
@@ -3674,7 +3678,7 @@ applyFilters();
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 8080))
     print("\n" + "="*50)
     print("  Crypto Analysis Dashboard")
     print(f"  http://localhost:{port}")

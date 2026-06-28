@@ -17,7 +17,7 @@ The Render bot reads agent intelligence before every trade entry.
 
 Set environment variables:
   ANTHROPIC_API_KEY   — required
-  RENDER_URL          — default: https://cryptodashboard-nuf5.onrender.com
+  RENDER_URL          — default: http://localhost:8080
   DISCORD_WEBHOOK_URL — optional, for desk briefings
 
 Run:         python3 orchestrator.py
@@ -53,7 +53,7 @@ from agents import state as S
 from agents import macro_agent, analyst_agent, risk_agent, learning_agent, trade_manager_agent
 
 
-RENDER_URL    = os.environ.get("RENDER_URL", "https://cryptodashboard-nuf5.onrender.com")
+RENDER_URL    = os.environ.get("RENDER_URL", "http://localhost:8080")
 DISCORD_URL   = os.environ.get("DISCORD_WEBHOOK_URL", "")
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
@@ -79,7 +79,7 @@ _last_run = {
 
 # Forced 15m entry: tracks when we last saw at least one open trade (any timeframe)
 _last_15m_check_time = 0.0
-_had_open_since      = 0.0  # epoch = never seen open trade → forces entry on first check if none open
+_had_open_since      = time.time()  # start clock from now; resets when open/pending trade exists
 
 
 def _check_15m_forced() -> bool:
@@ -92,11 +92,11 @@ def _check_15m_forced() -> bool:
         r = requests.get(f"{RENDER_URL}/api/trades", timeout=10)
         if r.status_code == 200:
             has_open = any(
-                isinstance(t, dict) and t.get("status") == "open"
+                isinstance(t, dict) and t.get("status") in ("open", "pending")
                 for t in r.json()
             )
             if has_open:
-                _had_open_since = now  # reset: we have at least one open trade
+                _had_open_since = now  # reset: we have at least one open or pending trade
     except Exception:
         pass
     _last_15m_check_time = now
@@ -248,6 +248,7 @@ def startup_checks() -> bool:
 
 
 def main():
+    global _had_open_since
     log("═" * 65)
     log("  CRYPTO TRADING DESK — MULTI-AGENT SYSTEM STARTING")
     log(f"  Render: {RENDER_URL}")
@@ -307,6 +308,11 @@ def main():
                            ANALYST_INTERVAL)
             if _last_run["analyst"] != _analyst_ran_before and _include_htf:
                 _last_run["analyst_htf"] = _last_run["analyst"]
+            # After a forced analyst run, restart the 4h clock so it doesn't
+            # retrigger the analyst every 60s while waiting for the trade to fill.
+            if _forced_15m and _last_run["analyst"] != _analyst_ran_before:
+                _had_open_since = time.time()
+                log("Forced entry attempted — 4h timer restarted", "INFO")
             run_agent_safe("risk",      risk_agent.run,          RISK_INTERVAL)
             run_agent_safe("trade_mgr", trade_manager_agent.run, TRADE_MGR_INTERVAL)
             run_agent_safe("learning",  learning_agent.run,      LEARNING_INTERVAL)

@@ -18,14 +18,7 @@ logger = logging.getLogger(__name__)
 # STORAGE PATH
 # ─────────────────────────────────────────────
 _HERE     = os.path.dirname(os.path.abspath(__file__))
-# Use DB_PATH env var if set; otherwise auto-detect Render's persistent /data disk,
-# falling back to the local app directory for development.
-_DEFAULT_DB = (
-    "/data/trades.db"
-    if os.environ.get("RENDER") or os.path.isdir("/data")
-    else os.path.join(_HERE, "trades.db")
-)
-DB_PATH = os.environ.get("DB_PATH", _DEFAULT_DB)
+DB_PATH = os.environ.get("DB_PATH", os.path.join(_HERE, "trades.db"))
 _lock     = threading.Lock()
 
 # ─────────────────────────────────────────────

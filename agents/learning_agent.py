@@ -18,7 +18,7 @@ from agents.state import (set_state, get_state, add_report, add_knowledge,
 
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 BINANCE_BASE  = "https://api.binance.us/api/v3"
-RENDER_URL    = os.environ.get("RENDER_URL", "https://cryptodashboard-nuf5.onrender.com")
+RENDER_URL    = os.environ.get("RENDER_URL", "http://localhost:8080")
 
 
 def _claude():

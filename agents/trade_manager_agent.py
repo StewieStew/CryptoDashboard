@@ -22,7 +22,7 @@ import requests
 from agents.state import get_state, set_state, post_to_render
 
 BINANCE_BASE = "https://api.binance.us/api/v3"
-RENDER_URL   = os.environ.get("RENDER_URL", "https://cryptodashboard-nuf5.onrender.com")
+RENDER_URL   = os.environ.get("RENDER_URL", "http://localhost:8080")
 
 # ── Thresholds ─────────────────────────────────────────────────────────────────
 BE_TRIGGER_R    = 1.0   # move SL to break-even after this many R of profit
