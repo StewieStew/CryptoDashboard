@@ -25,7 +25,7 @@ from agents.state import (set_state, get_state, add_report, add_knowledge,
 COINS         = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "DOGEUSDT", "SOLUSDT"]
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 BINANCE_BASE  = "https://api.binance.us/api/v3"
-MIN_RR        = 1.5   # minimum risk:reward — non-negotiable
+MIN_RR        = 1.2   # minimum risk:reward — just needs to be better than 1:1
 
 
 def _trades_today() -> int:
@@ -712,7 +712,7 @@ Always set entry_type_reason: explain in one sentence why you chose market vs li
 STEP 5 - SET TP AND SL AT STRUCTURAL LEVELS ON THE TRADING TIMEFRAME
 - TP: next significant 15M or 1H level that price is projected to reach (prior swing high for SHORT, swing low for LONG)
 - SL: just beyond the 15M candle that proves this read was wrong (beyond the wick that invalidates the setup)
-- R:R >= 2.0:1 on 15M trades. If levels are too tight and RR is under 1.5, skip and find a better coin. For 1H setups, aim for 2.2:1+.
+- R:R >= 1.2:1 minimum. Aim higher when structure allows, but 1.2:1 is the floor — do not skip a valid setup just because TP isn't far away.
 
 STEP 6 - CROSS-CHECK: DOES THE CHART MATCH THE NUMBERS? (CRITICAL)
 Before finalizing any setup, look back at the chart image and verify:
@@ -724,10 +724,11 @@ Before finalizing any setup, look back at the chart image and verify:
 - Flag any coin where the chart and numbers are telling different stories — note it in market_summary so it's visible.
 
 STEP 7 - RETURN YOUR BEST 1-3 SETUPS
-Return only setups you would actually take. Quality over quantity.
+You MUST return at least 1 trade every cycle. The scanner found a setup — your job is to pick direction and set levels.
 - If 3 genuine setups exist across different coins -> return all 3
-- If only 1 good setup exists -> return 1 (do not manufacture bad trades)
-- If setups are marginal but have at least 2 confirming factors, include them with setup_quality set to "marginal". Only return truly empty array if there is genuinely nothing — no structure, no momentum, no liquidity confluence at all.
+- If only 1 clean setup exists -> return 1
+- If no setup is clean, pick the coin with the clearest EMA alignment across 15M/1H/4H and call the direction the EMAs are pointing. Set SL just beyond the most recent 15M swing extreme in the wrong direction and TP at the next structural level. Set setup_quality to "marginal".
+- NEVER return an empty trades array. There is always a best available setup.
 - Do NOT return two trades on the same coin.
 - Do NOT suggest a trade if the same coin+direction is already open.
 
@@ -881,14 +882,9 @@ Respond with ONLY this JSON:
     if not trades and result.get("best_trade"):
         trades = [result["best_trade"]]  # backward compat
 
-    # Hard filter: drop any trade that doesn't meet minimum R:R
-    # In forced mode, 15m trades bypass this gate — they just need a valid SL and TP
+    # Filter trades below minimum R:R (1.2 — just needs to be better than 1:1)
     before = len(trades)
-    if forced:
-        trades = [t for t in trades
-                  if float(t.get("rr_ratio", 0)) >= MIN_RR or t.get("timeframe") == "15m"]
-    else:
-        trades = [t for t in trades if float(t.get("rr_ratio", 0)) >= MIN_RR]
+    trades = [t for t in trades if float(t.get("rr_ratio", 0)) >= MIN_RR]
     if len(trades) < before:
         print(f"  [FILTER] Dropped {before - len(trades)} trade(s) below R:R {MIN_RR}:1", flush=True)
 

@@ -1982,7 +1982,7 @@ _agent_signal_cooldown: dict = {}   # sym → last signal epoch
 # ── Risk management constants ─────────────────────────────────────────────────
 MAX_OPEN_TRADES   = 5       # up to 5 open at once — build data fast
 DAILY_LOSS_LIMIT  = 0.08    # stop only if down 8% in a day (give room to breathe)
-MIN_RR_RATIO      = 1.5     # R:R ≥ 1.5:1 — 15M trades have tighter levels; still profitable at 40% WR
+MIN_RR_RATIO      = 1.2     # R:R ≥ 1.2:1 — just needs to be better than 1:1
 SIGNAL_COOLDOWN   = 10 * 60 # 10 min cooldown — trade frequently to build data
 _daily_pnl_cache: dict = {"date": None, "pnl": 0.0}
 
@@ -2008,11 +2008,11 @@ def _agent_trade_executor() -> None:
     opens the trade if risk management rules are satisfied.
 
     ONLY hard gates (cannot be overridden):
-      1. R:R must be ≥ 2:1 (non-negotiable math)
-      2. Max 3 open trades at once (portfolio concentration)
-      3. Daily loss limit: stop trading if down 5%+ today
+      1. R:R must be ≥ 1.2:1 (just needs to be better than 1:1)
+      2. Max 5 open trades at once (portfolio concentration)
+      3. Daily loss limit: stop trading if down 8%+ today
       4. No duplicate: same coin+direction already open
-      5. 2-hour cooldown per coin+direction (prevent spam)
+      5. 10-min cooldown per coin+direction (prevent spam)
       6. SL must not already be crossed at live price
 
     Everything else — macro, regime, confidence, rules — is context the
@@ -2215,7 +2215,7 @@ def _agent_trade_executor() -> None:
 
 
 threading.Thread(target=_agent_trade_executor, daemon=True).start()
-print("[AGENT EXECUTOR] Started — AI agents drive all trades. Risk gates: R:R≥2:1, max 3 open, 5% daily loss limit.", flush=True)
+print("[AGENT EXECUTOR] Started — AI agents drive all trades. Risk gates: R:R≥1.2:1, max 5 open, 8% daily loss limit.", flush=True)
 
 
 # ── Weekly review job ─────────────────────────────────────────────────────────
