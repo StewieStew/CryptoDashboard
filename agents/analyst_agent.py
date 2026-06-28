@@ -785,7 +785,7 @@ Respond with ONLY this JSON:
             prompt += (
                 "\n\n🚨 FORCED ENTRY MODE — 4-HOUR TIMER EXPIRED\n\n"
                 "You MUST include at least one 15m trade in your response. This is non-negotiable.\n"
-                "4+ hours have passed without a 15m trade. Stop waiting for perfect signals.\n\n"
+                "4+ hours have passed with ZERO open trades across all timeframes. Stop waiting.\n\n"
                 "For the forced 15m trade:\n"
                 "- Pick the coin with the clearest short-term directional bias right now\n"
                 "- Look at the 15M chart and call the most likely direction for the next 1-2 hours\n"

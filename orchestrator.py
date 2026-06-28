@@ -75,43 +75,30 @@ _last_run = {
     "learning":    0,
 }
 
-# Forced 15m entry: cache last query result to avoid hammering Render every 60s
+# Forced 15m entry: tracks when we last saw at least one open trade (any timeframe)
 _last_15m_check_time = 0.0
-_last_15m_trade_ts   = 0.0
+_had_open_since      = 0.0  # epoch = never seen open trade → forces entry on first check if none open
 
 
 def _check_15m_forced() -> bool:
-    """Return True if 4+ hours have passed since the last completed 15m trade (open/win/loss)."""
-    global _last_15m_check_time, _last_15m_trade_ts
+    """Return True if 4+ hours have passed with zero open trades (any timeframe)."""
+    global _last_15m_check_time, _had_open_since
     now = time.time()
     if now - _last_15m_check_time < 300:  # cache for 5 minutes
-        return now - _last_15m_trade_ts >= 4 * 3600
+        return now - _had_open_since >= 4 * 3600
     try:
         r = requests.get(f"{RENDER_URL}/api/trades", timeout=10)
         if r.status_code == 200:
-            latest = 0.0
-            for t in r.json():
-                if not isinstance(t, dict):
-                    continue
-                if t.get("interval") != "15m":
-                    continue
-                if t.get("status") not in ("open", "win", "loss"):
-                    continue
-                opened = t.get("opened_at", "")
-                if not opened:
-                    continue
-                try:
-                    dt = datetime.fromisoformat(opened.replace("Z", "+00:00"))
-                    ts = dt.timestamp()
-                    if ts > latest:
-                        latest = ts
-                except Exception:
-                    pass
-            _last_15m_trade_ts = latest
+            has_open = any(
+                isinstance(t, dict) and t.get("status") == "open"
+                for t in r.json()
+            )
+            if has_open:
+                _had_open_since = now  # reset: we have at least one open trade
     except Exception:
         pass
     _last_15m_check_time = now
-    return now - _last_15m_trade_ts >= 4 * 3600
+    return now - _had_open_since >= 4 * 3600
 
 
 def log(msg: str, level: str = "INFO") -> None:
@@ -304,8 +291,8 @@ def main():
             # Check 4h forced 15m entry timer — if expired, force an early analyst run
             _forced_15m = _check_15m_forced()
             if _forced_15m:
-                elapsed_h = (now - _last_15m_trade_ts) / 3600
-                log(f"[FORCED ENTRY] {elapsed_h:.1f}h since last 15m trade — analyst MUST take a 15m trade", "WARN")
+                elapsed_h = (now - _had_open_since) / 3600
+                log(f"[FORCED ENTRY] No open trades for {elapsed_h:.1f}h — analyst MUST take a 15m trade", "WARN")
                 if not should_run("analyst", ANALYST_INTERVAL):
                     _last_run["analyst"] = 0  # trigger early analyst run
             run_agent_safe("analyst", lambda: analyst_agent.run(forced=_forced_15m), ANALYST_INTERVAL)
