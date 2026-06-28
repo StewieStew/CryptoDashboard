@@ -2698,6 +2698,17 @@ def admin_set_weights():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/admin/reset_stop_multiplier", methods=["POST"])
+def admin_reset_stop_multiplier():
+    """Reset stop_multiplier to 1.0 in the config table."""
+    import learning as _l
+    with _l._conn() as db:
+        db.execute("UPDATE config SET value='1.0' WHERE key='stop_multiplier'")
+        db.commit()
+        actual = db.execute("SELECT value FROM config WHERE key='stop_multiplier'").fetchone()[0]
+    return jsonify({"status": "ok", "stop_multiplier": float(actual)})
+
+
 # ── Backtester routes ─────────────────────────────────────────────────────────
 
 @app.route("/api/backtest/run", methods=["POST"])

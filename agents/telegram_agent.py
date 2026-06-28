@@ -1,8 +1,18 @@
 """
-TELEGRAM SIGNAL AGENT — real-time listener
-Job: Listen to configured private Telegram groups in a background thread.
-     The moment a message is posted, analyze it (text + chart image).
-     If it's a trade signal, post it to Render immediately.
+TELEGRAM SIGNAL AGENT — real-time listener + direct executor
+Job: Listen to configured Telegram groups. When a message contains a trade
+     signal (coin + direction + SL), parse it directly and open the trade
+     in the DB immediately — no analyst approval required.
+
+Parsing rules:
+  - Coin name: BTC, ETH, XRP, DOGE, SOL (+ common aliases)
+  - Direction: long/buy → LONG, short/sell → SHORT
+  - SL (required): "sl 59600", "stop 59600", "stop loss: 59600"
+  - TP (optional): "tp 62000", "target 62000" — defaults to 2:1 R:R if missing
+  - Entry (optional): "entry 60000" — defaults to live Binance price
+
+Images are downloaded and stored for dashboard display regardless of whether
+a parseable signal is found. They are NOT forwarded to the analyst.
 
 Unlike the other agents (which poll on a schedule), this one starts once
 at orchestrator launch and stays connected 24/7 via Telethon's event system.
@@ -15,23 +25,27 @@ Requires:
   agents/tg_session — created by setup_telegram.command (one-time login)
 """
 from __future__ import annotations
-import json, os, base64, threading, time
+import re, os, base64, threading, time
 from datetime import datetime, timezone
 from pathlib import Path
 
-import anthropic
 import requests
 
 from agents.state import get_state, set_state, add_knowledge, post_to_render
 
-ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-RENDER_URL    = os.environ.get("RENDER_URL", "https://cryptodashboard-nuf5.onrender.com")
-
+RENDER_URL  = os.environ.get("RENDER_URL", "https://cryptodashboard-nuf5.onrender.com")
 TG_API_ID   = os.environ.get("TG_API_ID", "")
 TG_API_HASH = os.environ.get("TG_API_HASH", "")
 SESSION_PATH = str(Path.home() / "Desktop" / "CryptoDashboard" / "agents" / "tg_session")
 
-KNOWN_COINS = {"BTC", "ETH", "XRP", "DOGE", "SOL"}
+# Coin aliases → USDT symbol
+_COIN_MAP = {
+    "bitcoin": "BTCUSDT", "btc": "BTCUSDT",
+    "ethereum": "ETHUSDT", "eth": "ETHUSDT",
+    "ripple": "XRPUSDT",  "xrp": "XRPUSDT",
+    "dogecoin": "DOGEUSDT", "doge": "DOGEUSDT",
+    "solana": "SOLUSDT",  "sol": "SOLUSDT",
+}
 
 # Runtime state
 _listener_thread: threading.Thread | None = None
@@ -56,159 +70,217 @@ def _get_channels() -> list:
     return [c for c in [ch1, ch2] if c]
 
 
-def _claude():
-    if not ANTHROPIC_KEY:
-        return None
-    return anthropic.Anthropic(api_key=ANTHROPIC_KEY)
-
-
-def analyze_message(text: str, image_b64: str | None, channel_id, macro_regime: str) -> dict | None:
+def _parse_signal_text(text: str) -> dict | None:
     """
-    Send message content to Claude for signal extraction.
-    Returns a trade signal dict or None.
+    Regex parser for Telegram trade signals.
+    Minimum required fields: coin name + direction + SL level.
+    Returns a dict or None if minimum fields are not present.
     """
-    client = _claude()
-    if not client:
+    t = text.lower()
+
+    # Coin — try longest aliases first so "dogecoin" beats "doge"
+    symbol = None
+    for alias in sorted(_COIN_MAP, key=len, reverse=True):
+        if re.search(r'\b' + re.escape(alias) + r'\b', t):
+            symbol = _COIN_MAP[alias]
+            break
+    if not symbol:
         return None
 
-    # Quick pre-filter: skip pure non-trading text with no image
-    trading_kw = {"long", "short", "buy", "sell", "entry", "tp", "sl",
-                  "target", "stop", "btc", "eth", "xrp", "sol", "doge",
-                  "usdt", "breakout", "support", "resistance", "signal",
-                  "trade", "position", "setup"}
-    if not image_b64 and not any(kw in (text or "").lower() for kw in trading_kw):
+    # Direction
+    direction = None
+    if re.search(r'\b(long|buy)\b', t):
+        direction = "LONG"
+    elif re.search(r'\b(short|sell)\b', t):
+        direction = "SHORT"
+    if not direction:
         return None
 
-    content = []
+    # SL (required) — matches: "sl 59600", "stop: 59600", "stop loss 59600", "stop at 59600"
+    sl = None
+    sl_m = re.search(
+        r'(?:sl|stop[ -]?loss|stop[ -]?at|stop)\s*[:\-@]?\s*([\d,]+(?:\.\d+)?)',
+        t,
+    )
+    if sl_m:
+        try:
+            sl = float(sl_m.group(1).replace(',', ''))
+        except ValueError:
+            pass
+    if sl is None:
+        return None
 
-    if image_b64:
-        content.append({
-            "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": "image/jpeg",
-                "data": image_b64,
-            }
-        })
+    # TP (optional) — matches: "tp 62000", "tp1 62000", "target 62000", "take profit 62000"
+    tp = None
+    tp_m = re.search(
+        r'(?:tp\d?|take[ -]?profit|target)\s*[:\-@]?\s*([\d,]+(?:\.\d+)?)',
+        t,
+    )
+    if tp_m:
+        try:
+            tp = float(tp_m.group(1).replace(',', ''))
+        except ValueError:
+            pass
 
-    content.append({"type": "text", "text": f"""Telegram trading group message. Macro regime: {macro_regime}
+    # Entry hint (optional) — matches: "entry 60000", "enter at 60000"
+    entry_hint = None
+    entry_m = re.search(
+        r'(?:entry|enter(?:[ -]?at)?)\s*[:\-@]?\s*([\d,]+(?:\.\d+)?)',
+        t,
+    )
+    if entry_m:
+        try:
+            entry_hint = float(entry_m.group(1).replace(',', ''))
+        except ValueError:
+            pass
 
-MESSAGE:
-{text.strip() if text else "(image only — no text)"}
+    return {
+        "symbol":     symbol,
+        "direction":  direction,
+        "sl":         sl,
+        "tp":         tp,          # None → calculated below as 2:1 R:R
+        "entry_hint": entry_hint,  # None → use live Binance price
+    }
 
-Is this a trade signal? Extract it if so, return null if not.
 
-Rules:
-- Only extract if there is a clear LONG or SHORT direction and at least one price level
-- BUY = LONG, SELL = SHORT
-- Symbol must end in USDT. Only: BTCUSDT ETHUSDT XRPUSDT DOGEUSDT SOLUSDT
-- If entry price is missing, use null (executor uses live price)
-- If you see a chart image with a setup drawn on it, describe it and extract levels from the chart
+def _execute_telegram_signal(
+    parsed: dict,
+    image_b64: str | None,
+    mime_type: str,
+    channel_id,
+) -> bool:
+    """
+    Fetch live price, validate levels, and write the trade directly to the DB
+    as status='open'. No analyst cycle, no approval gate.
+    """
+    global _signals_processed
 
-Respond with ONLY:
-- null (if no trade signal)
-- JSON:
-{{
-  "symbol": "ETHUSDT",
-  "direction": "SHORT",
-  "timeframe": "15m",
-  "entry": 2450.00,
-  "tp": 2380.00,
-  "sl": 2490.00,
-  "rr_ratio": 1.75,
-  "confidence": 7,
-  "reason": "<what the channel said and why it looks valid>",
-  "source": "telegram",
-  "channel_id": "{channel_id}"
-}}"""})
+    symbol    = parsed["symbol"]
+    direction = parsed["direction"]
+    sl        = parsed["sl"]
+
+    # Live price from Binance
+    try:
+        r = requests.get(
+            "https://api.binance.us/api/v3/ticker/price",
+            params={"symbol": symbol},
+            timeout=8,
+        )
+        live_price = float(r.json()["price"])
+    except Exception as e:
+        print(f"[TG SIGNAL] Price fetch failed for {symbol}: {e}", flush=True)
+        return False
+
+    # Use entry hint only if within 2% of live (stale channel posts are ignored)
+    entry = live_price
+    hint  = parsed.get("entry_hint")
+    if hint and abs(hint - live_price) / live_price < 0.02:
+        entry = hint
+
+    # SL must be on the correct side of entry
+    if direction == "LONG" and sl >= entry:
+        print(f"[TG SIGNAL] Skipping: LONG SL={sl} >= entry={entry:.4f}", flush=True)
+        return False
+    if direction == "SHORT" and sl <= entry:
+        print(f"[TG SIGNAL] Skipping: SHORT SL={sl} <= entry={entry:.4f}", flush=True)
+        return False
+
+    risk = abs(entry - sl)
+
+    # TP: use channel value if valid, else default 2:1 R:R
+    tp     = parsed.get("tp")
+    tp_src = "signal"
+    if tp is not None and direction == "LONG"  and tp <= entry: tp = None
+    if tp is not None and direction == "SHORT" and tp >= entry: tp = None
+    if tp is None:
+        tp     = (entry + 2.0 * risk) if direction == "LONG" else (entry - 2.0 * risk)
+        tp_src = "2r_default"
+
+    entry = round(entry, 8)
+    tp    = round(tp,    8)
+    sl    = round(sl,    8)
+
+    trade_id = f"TG_{symbol}_1h_{direction}_{int(time.time())}"
+    trade_data = {
+        "id":               trade_id,
+        "symbol":           symbol,
+        "interval":         "1h",
+        "direction":        direction,
+        "entry":            entry,
+        "tp":               tp,
+        "sl":               sl,
+        "score":            7.0,
+        "effective_score":  7.0,
+        "reason":           f"[TELEGRAM SIGNAL] channel {channel_id}",
+        "factors_snapshot": {"source": "telegram", "channel_id": str(channel_id)},
+        "target_basis":     "telegram_signal",
+        "tp_source":        tp_src,
+        "opened_at":        datetime.now(timezone.utc).isoformat(),
+        "status":           "open",
+        "entry_type":       "market",
+    }
 
     try:
-        resp = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=500,
-            messages=[{"role": "user", "content": content}],
-        )
-        raw = resp.content[0].text.strip()
-
-        if not raw or raw.lower() in ("null", "none", ""):
-            return None
-        if raw.startswith("```"):
-            raw = raw.split("```")[1].lstrip("json").strip()
-        if raw.endswith("```"):
-            raw = raw[:-3].strip()
-
-        # Claude sometimes returns "null\n\nExplanation..." — detect null prefix
-        if raw.lower().startswith("null"):
-            return None
-
-        # Use raw_decode so trailing text after the JSON object is ignored
-        try:
-            sig, _ = json.JSONDecoder().raw_decode(raw)
-        except json.JSONDecodeError:
-            return None
-
-        if not sig.get("symbol") or sig.get("direction") not in ("LONG", "SHORT"):
-            return None
-
-        sym = sig["symbol"].upper()
-        if not sym.endswith("USDT"):
-            sym += "USDT"
-        sig["symbol"] = sym
-        return sig
-
+        import learning as _learning
+        logged = _learning.log_trade(trade_data)
     except Exception as e:
-        print(f"[TG AGENT] analyze error: {e}", flush=True)
-        return None
+        print(f"[TG SIGNAL] DB write failed: {e}", flush=True)
+        return False
 
+    if not logged:
+        print(f"[TG SIGNAL] Skipped (duplicate or invalid R:R): {symbol} {direction}", flush=True)
+        return False
 
-def _post_signal(sig: dict, image_b64: str | None = None, mime_type: str = "image/jpeg"):
-    """Post a signal to Render and save to knowledge base."""
-    global _signals_processed
     _signals_processed += 1
+    tp_label = "TP from signal" if tp_src == "signal" else "TP=2:1 R:R (default)"
+    print(
+        f"[TELEGRAM SIGNAL] {symbol} {direction} "
+        f"entry={entry:.4f}  SL={sl:.4f}  TP={tp:.4f}  ({tp_label})",
+        flush=True,
+    )
 
-    img_note = " [+chart]" if image_b64 else ""
-    print(f"[TG AGENT] *** SIGNAL{img_note}: {sig.get('symbol')} {sig.get('direction')} "
-          f"entry={sig.get('entry')} tp={sig.get('tp')} sl={sig.get('sl')} "
-          f"rr={sig.get('rr_ratio','?')} conf={sig.get('confidence')}/10", flush=True)
-
-    post_to_render("/api/agent/insight", {
-        "type":               "telegram_signal",
-        "agent":              "telegram",
-        "timestamp":          datetime.now(timezone.utc).isoformat(),
-        "trade_signal":       sig,
-        "all_signals":        [sig],
-        "market_summary":     f"Real-time signal from Telegram group {sig.get('channel_id','')}",
-        "telegram_image_b64": image_b64,
-        "telegram_image_mime": mime_type if image_b64 else None,
-    })
-
-    # Store the latest Telegram chart image in shared state so the analyst
-    # can include it as additional confluence in its next analysis cycle.
+    # Store image for dashboard display (not for analysis)
     if image_b64:
         set_state("telegram_latest_image", {
             "image_b64": image_b64,
             "mime_type": mime_type,
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "symbol":    sig.get("symbol"),
-            "direction": sig.get("direction"),
+            "symbol":    symbol,
+            "direction": direction,
         })
 
+    # Push to Render dashboard
+    post_to_render("/api/agent/insight", {
+        "type":                "telegram_signal",
+        "agent":               "telegram",
+        "timestamp":           datetime.now(timezone.utc).isoformat(),
+        "trade_signal": {
+            "symbol": symbol, "direction": direction,
+            "entry": entry, "tp": tp, "sl": sl,
+            "reason": f"Direct copy-trade from Telegram channel {channel_id}",
+        },
+        "market_summary":      f"Direct execution: Telegram channel {channel_id}",
+        "telegram_image_b64":  image_b64,
+        "telegram_image_mime": mime_type if image_b64 else None,
+    })
+
     add_knowledge("telegram_signals", {
-        "symbol":    sig.get("symbol"),
-        "direction": sig.get("direction"),
-        "channel":   sig.get("channel_id"),
-        "rr":        sig.get("rr_ratio"),
-        "confidence":sig.get("confidence"),
-        "reason":    (sig.get("reason") or "")[:100],
+        "symbol":    symbol,
+        "direction": direction,
+        "channel":   str(channel_id),
+        "entry":     entry,
+        "tp":        tp,
+        "sl":        sl,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     })
+
+    return True
 
 
 def _listener_loop():
     """
     Background thread: connects to Telegram and listens for new messages
-    in real time. Fires instantly whenever a message is posted.
-    Reconnects automatically if the connection drops.
+    in real time. Reconnects automatically if the connection drops.
     """
     global _listener_running
 
@@ -236,7 +308,8 @@ def _listener_loop():
                 image_b64 = None
                 mime_type = "image/jpeg"
 
-                # Download image attachments only (skip video, audio, stickers)
+                # Download image attachments only (photos and image documents)
+                # Videos, audio, stickers, and other document types are skipped.
                 if msg.photo:
                     try:
                         img_bytes = await client.download_media(msg, bytes)
@@ -255,21 +328,39 @@ def _listener_loop():
                         except Exception as img_err:
                             print(f"[TG AGENT] Image download error: {img_err}", flush=True)
 
-                # Skip empty messages
+                # Skip completely empty messages
                 if not text and not image_b64:
                     return
 
                 channel_id = event.chat_id
-                preview = text[:60].replace("\n", " ") if text else "[image]"
-                print(f"[TG AGENT] New message in {channel_id}: {preview}...", flush=True)
+                preview = text[:60].replace("\n", " ") if text else "[image only]"
+                print(f"[TG AGENT] Message in {channel_id}: {preview}...", flush=True)
 
-                # Get current macro regime for context
-                macro_regime = get_state("macro_regime", {}).get("regime_type", "uncertain")
+                # Parse text for a trade signal and execute directly
+                if text:
+                    parsed = _parse_signal_text(text)
+                    if parsed:
+                        _execute_telegram_signal(
+                            parsed,
+                            image_b64=image_b64,
+                            mime_type=mime_type,
+                            channel_id=channel_id,
+                        )
+                        return
 
-                # Analyze message
-                sig = analyze_message(text, image_b64, channel_id, macro_regime)
-                if sig:
-                    _post_signal(sig, image_b64=image_b64, mime_type=mime_type)
+                # No parseable signal — store image for reference/display if present
+                if image_b64:
+                    try:
+                        set_state("telegram_latest_image", {
+                            "image_b64": image_b64,
+                            "mime_type": mime_type,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "symbol":    None,
+                            "direction": None,
+                        })
+                    except Exception:
+                        pass
+                    print(f"[TG AGENT] Image stored for reference (no signal found).", flush=True)
                 else:
                     print(f"[TG AGENT] No signal in message.", flush=True)
 
@@ -320,14 +411,17 @@ def stop_listener():
 
 def run() -> dict:
     """
-    Called by orchestrator scheduler — just returns status.
+    Called by orchestrator scheduler — just returns listener status.
     The real work happens in the background listener thread.
     """
     alive = _listener_thread is not None and _listener_thread.is_alive()
-    print(f"[TG AGENT] Listener status: {'running' if alive else 'NOT running'} | "
-          f"Signals processed: {_signals_processed}", flush=True)
+    print(
+        f"[TG AGENT] Listener: {'running' if alive else 'NOT running'} | "
+        f"Signals executed: {_signals_processed}",
+        flush=True,
+    )
     return {
-        "listener_running": alive,
+        "listener_running":  alive,
         "signals_processed": _signals_processed,
-        "channels": _get_channels(),
+        "channels":          _get_channels(),
     }
