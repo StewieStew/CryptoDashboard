@@ -50,7 +50,7 @@ for _env_candidate in [
 
 # ── Import all agents ─────────────────────────────────────────────────────────
 from agents import state as S
-from agents import macro_agent, analyst_agent, risk_agent, learning_agent, trade_manager_agent
+from agents import macro_agent, analyst_agent, ceo_agent, risk_agent, learning_agent, trade_manager_agent
 
 
 RENDER_URL    = os.environ.get("RENDER_URL", "http://localhost:8080")
@@ -316,12 +316,25 @@ def main():
             # Include 1h/4h setup checks only every 30 min (15m checks run every cycle)
             _analyst_ran_before = _last_run["analyst"]
             _include_htf = (now - _last_run["analyst_htf"] >= HTF_INTERVAL)
+            # skip_render_post=True: CEO agent controls what reaches the Render executor
             run_agent_safe("analyst",
                            lambda: analyst_agent.run(forced=_forced_15m,
-                                                     include_htf=_include_htf),
+                                                     include_htf=_include_htf,
+                                                     skip_render_post=True),
                            ANALYST_INTERVAL)
             if _last_run["analyst"] != _analyst_ran_before and _include_htf:
                 _last_run["analyst_htf"] = _last_run["analyst"]
+
+            # CEO agent reviews analyst output and decides which trades to forward
+            if _last_run["analyst"] != _analyst_ran_before:
+                _hours_since = (now - _had_open_since) / 3600
+                log_divider("CEO AGENT   — reviewing signals & deciding")
+                try:
+                    ceo_agent.run(forced=_forced_15m, hours_since_trade=_hours_since)
+                except Exception as _ceo_err:
+                    log(f"CEO agent crashed: {_ceo_err}", "ERROR")
+                log_divider()
+
             # After a forced analyst run, only restart the 4h clock if a new trade
             # actually appeared in the DB. If no trade was placed (e.g. the analyst
             # returned a limit order that was rejected or Claude returned nothing),

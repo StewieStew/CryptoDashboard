@@ -123,6 +123,16 @@ def init_db() -> None:
             entry      TEXT,
             created_at TEXT
         );
+        CREATE TABLE IF NOT EXISTS ceo_decisions (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol         TEXT,
+            decision       TEXT,
+            reason         TEXT,
+            approved_count INTEGER,
+            rejected_count INTEGER,
+            message        TEXT,
+            timestamp      TEXT
+        );
     """)
     db.commit()
     db.close()
@@ -213,6 +223,20 @@ def add_knowledge(category: str, entry: dict) -> None:
     db.execute(
         "INSERT INTO knowledge_base (category, entry, created_at) VALUES (?,?,?)",
         (category, json.dumps(entry, default=str),
+         datetime.now(timezone.utc).isoformat())
+    )
+    db.commit()
+    db.close()
+
+
+def log_ceo_decision(symbol: str, decision: str, reason: str,
+                     approved_count: int, rejected_count: int, message: str) -> None:
+    db = _conn()
+    db.execute(
+        """INSERT INTO ceo_decisions
+           (symbol, decision, reason, approved_count, rejected_count, message, timestamp)
+           VALUES (?,?,?,?,?,?,?)""",
+        (symbol, decision, reason, approved_count, rejected_count, message,
          datetime.now(timezone.utc).isoformat())
     )
     db.commit()

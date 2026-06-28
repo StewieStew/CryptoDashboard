@@ -22,59 +22,48 @@ import numpy as np
 from agents.state import (set_state, get_state, add_report, add_knowledge,
                            get_knowledge, post_to_render, get_session)
 
-COINS         = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "DOGEUSDT", "SOLUSDT"]
+COINS         = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 BINANCE_BASE  = "https://api.binance.us/api/v3"
 MIN_RR        = 1.2   # minimum risk:reward — just needs to be better than 1:1
 
 
-def _has_setup(d: dict) -> bool:
-    """Python-only pre-scan. Returns True if this coin shows ≥2 technical signals.
-
-    Used to skip the expensive Claude+vision call when the market is flat/ranging.
-    Err on the side of inclusion — a false positive costs one Claude call; a
-    false negative means a missed trade.
-    """
+def _count_signals(d: dict) -> int:
+    """Count distinct signal types (max 5). Used to rank coins and gate Claude calls."""
     price = d.get("price", 0)
     if not price:
-        return False
-
+        return 0
     signals = 0
-
-    # RSI momentum extremes — any timeframe counts
-    if d.get("rsi_15m", 50) < 35 or d.get("rsi_15m", 50) > 65:
+    # 1. RSI extreme on any timeframe
+    if (d.get("rsi_15m", 50) < 35 or d.get("rsi_15m", 50) > 65 or
+            d.get("rsi_1h",  50) < 30 or d.get("rsi_1h",  50) > 70 or
+            d.get("rsi_4h",  50) < 35 or d.get("rsi_4h",  50) > 65):
         signals += 1
-    if d.get("rsi_1h", 50) < 30 or d.get("rsi_1h", 50) > 70:
-        signals += 1
-    if d.get("rsi_4h", 50) < 35 or d.get("rsi_4h", 50) > 65:
-        signals += 1
-
-    # Price within 1.5% of nearest structural level
+    # 2. S/R proximity < 1.5%
     levels = d.get("levels", {})
     sup = levels.get("support", 0)
     res = levels.get("resistance", 0)
-    if sup and abs(price - sup) / price < 0.015:
+    if (sup and abs(price - sup) / price < 0.015) or (res and abs(price - res) / price < 0.015):
         signals += 1
-    if res and abs(price - res) / price < 0.015:
-        signals += 1
-
-    # Strong EMA directional bias: ≥3 of 4 short/medium EMAs on the same side
+    # 3. EMA alignment ≥ 3/4 on same side
     emas = [d.get("ema20_15m", 0), d.get("ema50_15m", 0),
             d.get("ema20_1h",  0), d.get("ema50_1h",  0)]
     above = sum(1 for e in emas if e and price > e)
     if above >= 3 or above <= 1:
         signals += 1
-
-    # Volume expanding into recent candles
+    # 4. Volume expanding > 1.2x
     if d.get("vol_trend") == "expanding":
         signals += 1
-
-    # Strong order book pressure (lopsided depth)
+    # 5. Lopsided order book (bid/ask ratio > 1.5 or < 0.65)
     ob = d.get("ob_ratio", 1.0)
     if ob > 1.5 or ob < 0.65:
         signals += 1
+    return signals
 
-    return signals >= 2
+
+def _has_setup(d: dict) -> bool:
+    """Returns True if coin shows ≥3 of 5 distinct signal types — minimum bar for Claude call."""
+    return _count_signals(d) >= 3
 
 
 def _trades_today() -> int:
@@ -439,7 +428,7 @@ def fmt_candles(candles: list, n: int = 20) -> str:
     return "\n".join(lines)
 
 
-def run(forced: bool = False, include_htf: bool = True) -> dict:
+def run(forced: bool = False, include_htf: bool = True, skip_render_post: bool = False, model: str = "haiku") -> dict:
     session = get_session()
     print(f"  Session: {session['session']}  ({session['quality']} quality)  "
           f"{'⚠ CAUTION' if session['caution'] else '✓ active'}", flush=True)
@@ -634,24 +623,23 @@ Whale activity:
             if sigs >= 2:
                 setup_syms.append(s)
 
+    # Cap at top-3 by signal strength to limit Claude calls per cycle
+    if setup_syms:
+        setup_syms = sorted(setup_syms, key=lambda s: _count_signals(coin_data[s]), reverse=True)[:3]
+
     if not setup_syms:
         if forced:
-            # Forced mode: pick the 2 coins with the clearest EMA bias
-            def _ema_bias(s):
-                d = coin_data.get(s, {})
-                p = d.get("price", 0)
-                emas = [d.get("ema20_15m", 0), d.get("ema50_15m", 0),
-                        d.get("ema20_1h",  0), d.get("ema50_1h",  0)]
-                above = sum(1 for e in emas if e and p > e)
-                return abs(above - 2)  # 0 = neutral, 2 = fully aligned
+            # Forced mode: pick top-2 by signal count (strongest bias available)
             setup_syms = sorted([s for s in COINS if s in coin_data],
-                                 key=_ema_bias, reverse=True)[:2]
-            print(f"  [FORCED] No natural setups — using top EMA-aligned coins: "
+                                 key=lambda s: _count_signals(coin_data[s]),
+                                 reverse=True)[:2]
+            print(f"  [FORCED] No natural setups — using top signal-count coins: "
                   f"{[s.replace('USDT','') for s in setup_syms]}", flush=True)
         else:
             print(f"  [PRESCAN] No setups found — skipping Claude call (cost saving)", flush=True)
             output = {
                 "timestamp":      datetime.now(timezone.utc).isoformat(),
+                "claude_called":  False,
                 "trade_signal":   {},
                 "all_signals":    [],
                 "market_summary": None,
@@ -665,40 +653,44 @@ Whale activity:
             return output
     else:
         names = ", ".join(s.replace("USDT", "") for s in setup_syms)
-        print(f"  [PRESCAN] Setup signals on: {names} — generating charts & calling Claude",
+        _chart_action = "charts + Claude (Sonnet)" if model == "sonnet" else "Claude text-only (Haiku)"
+        print(f"  [PRESCAN] Setup signals on: {names} ({len(setup_syms)} coin(s)) — {_chart_action}",
               flush=True)
 
-    # ── Generate charts only for coins with setups (saves vision token cost) ───
-    from agents import chart_capture as _cc
-    for sym in setup_syms:
-        d = coin_data[sym]
-        c15m_s = d["_c15m"]; c1h_s = d["_c1h"]; c4h_s = d["_c4h"]
-        lv = d["levels"]
-        if _cc.is_available():
-            chart_b64 = _cc.capture_coin(sym, ["4h", "1h", "15m"])
-            _src = "TradingView"
-        else:
-            chart_b64 = render_chart_image(
-                sym, c4h_s, c1h_s, c15m_s,
-                d["ema20_4h"], d["ema50_4h"], d["ema20_1h"], d["ema50_1h"],
-                d["ema20_15m"], d["ema50_15m"],
-                lv.get("supports", []), lv.get("resistances", [])
-            )
-            _src = "matplotlib"
-        if chart_b64:
-            chart_images[sym] = chart_b64
-            try:
-                import base64 as _b64
-                from pathlib import Path as _Path
-                _chart_dir = _Path.home() / "Desktop" / "CryptoDashboard" / "charts"
-                _chart_dir.mkdir(exist_ok=True)
-                (_chart_dir / f"{sym}.png").write_bytes(_b64.b64decode(chart_b64))
-                print(f"       {sym.replace('USDT','')}: chart ✓ {_src}", flush=True)
-            except Exception as _ce:
-                print(f"       {sym.replace('USDT','')}: chart ✓ {_src} (save failed: {_ce})",
-                      flush=True)
-        else:
-            print(f"       {sym.replace('USDT','')}: chart ✗ (text-only)", flush=True)
+    # ── Generate charts only for Sonnet cycles (Haiku uses text-only to save cost) ──
+    if model == "sonnet":
+        from agents import chart_capture as _cc
+        for sym in setup_syms:
+            d = coin_data[sym]
+            c15m_s = d["_c15m"]; c1h_s = d["_c1h"]; c4h_s = d["_c4h"]
+            lv = d["levels"]
+            if _cc.is_available():
+                chart_b64 = _cc.capture_coin(sym, ["4h", "1h", "15m"])
+                _src = "TradingView"
+            else:
+                chart_b64 = render_chart_image(
+                    sym, c4h_s, c1h_s, c15m_s,
+                    d["ema20_4h"], d["ema50_4h"], d["ema20_1h"], d["ema50_1h"],
+                    d["ema20_15m"], d["ema50_15m"],
+                    lv.get("supports", []), lv.get("resistances", [])
+                )
+                _src = "matplotlib"
+            if chart_b64:
+                chart_images[sym] = chart_b64
+                try:
+                    import base64 as _b64
+                    from pathlib import Path as _Path
+                    _chart_dir = _Path.home() / "Desktop" / "CryptoDashboard" / "charts"
+                    _chart_dir.mkdir(exist_ok=True)
+                    (_chart_dir / f"{sym}.png").write_bytes(_b64.b64decode(chart_b64))
+                    print(f"       {sym.replace('USDT','')}: chart ✓ {_src}", flush=True)
+                except Exception as _ce:
+                    print(f"       {sym.replace('USDT','')}: chart ✓ {_src} (save failed: {_ce})",
+                          flush=True)
+            else:
+                print(f"       {sym.replace('USDT','')}: chart ✗ (text-only)", flush=True)
+    else:
+        print(f"  [HAIKU] Skipping chart generation — text-only cycle", flush=True)
 
     # Load prior trades for context
     try:
@@ -756,9 +748,13 @@ Whale activity:
 
     client = _claude()
     result = {}
+    _claude_called = False
 
     if client:
-        prompt = f"""You are an experienced CRYPTO trader doing your market read. This is crypto — not stocks. BTC leads everything, alts follow or diverge, and the 24/7 market means momentum can shift fast. You read candle patterns on the actual trading timeframe, project where the NEXT few candles are headed, and set entries at the level that confirms your projection. You never chase. You wait for price to come to you.
+        _chart_note = ("" if chart_images else
+                       "NOTE: No chart images this cycle — analyse based solely on OHLCV data, "
+                       "candle patterns, and indicator values provided below.\n\n")
+        prompt = f"""{_chart_note}You are an experienced CRYPTO trader doing your market read. This is crypto — not stocks. BTC leads everything, alts follow or diverge, and the 24/7 market means momentum can shift fast. You read candle patterns on the actual trading timeframe, project where the NEXT few candles are headed, and set entries at the level that confirms your projection. You never chase. You wait for price to come to you.
 
 MARKET CONTEXT:
 Macro regime: {macro_regime} | Fear & Greed: {fear_greed.get('value','?')} ({fear_greed.get('label','?')})
@@ -968,11 +964,14 @@ Respond with ONLY this JSON:
 
             content.append({"type": "text", "text": prompt})
 
+            _model_id = "claude-sonnet-4-6" if model == "sonnet" else "claude-haiku-4-5-20251001"
+            print(f"  [CLAUDE] {_model_id} ({'sonnet+vision' if model == 'sonnet' and chart_images else 'haiku text-only' if model == 'haiku' else 'sonnet text-only'})", flush=True)
             msg = client.messages.create(
-                model="claude-sonnet-4-6",
+                model=_model_id,
                 max_tokens=2000,
                 messages=[{"role": "user", "content": content}],
             )
+            _claude_called = True
             raw = msg.content[0].text.strip()
             if raw.startswith("```"):
                 raw = raw.split("```")[1].lstrip("json").strip()
@@ -1005,6 +1004,7 @@ Respond with ONLY this JSON:
 
     output = {
         "timestamp":       datetime.now(timezone.utc).isoformat(),
+        "claude_called":   _claude_called,
         "trade_signal":    trade,       # primary signal (highest confidence)
         "all_signals":     trades,      # all signals this cycle
         "market_summary":  result.get("market_summary"),
@@ -1028,16 +1028,17 @@ Respond with ONLY this JSON:
             "reason":     t.get("reason","")[:100],
         })
 
-    post_to_render("/api/agent/insight", {
-        "type":          "analyst_signal",
-        "agent":         "analyst",
-        "timestamp":     output["timestamp"],
-        "trade_signal":  trade,
-        "all_signals":   trades,
-        "market_summary": result.get("market_summary"),
-        "coins_to_avoid": result.get("coins_to_avoid", []),
-        "chart_b64":     chart_images.get(trade.get("symbol", "")) if trade else None,
-    })
+    if not skip_render_post:
+        post_to_render("/api/agent/insight", {
+            "type":          "analyst_signal",
+            "agent":         "analyst",
+            "timestamp":     output["timestamp"],
+            "trade_signal":  trade,
+            "all_signals":   trades,
+            "market_summary": result.get("market_summary"),
+            "coins_to_avoid": result.get("coins_to_avoid", []),
+            "chart_b64":     chart_images.get(trade.get("symbol", "")) if trade else None,
+        })
 
     # Print any chart/number conflicts Claude flagged
     warnings = result.get("chart_warnings", [])
