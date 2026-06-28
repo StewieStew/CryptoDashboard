@@ -2700,13 +2700,23 @@ def admin_set_weights():
 
 @app.route("/api/admin/reset_stop_multiplier", methods=["POST"])
 def admin_reset_stop_multiplier():
-    """Reset stop_multiplier to 1.0 in the config table."""
+    """Reset stop_multiplier to 1.0 and lock adaptation for 24 h so the next _adapt
+    cycle cannot immediately drift it back up based on historical tight stops."""
     import learning as _l
-    with _l._conn() as db:
-        db.execute("UPDATE config SET value='1.0' WHERE key='stop_multiplier'")
-        db.commit()
-        actual = db.execute("SELECT value FROM config WHERE key='stop_multiplier'").fetchone()[0]
-    return jsonify({"status": "ok", "stop_multiplier": float(actual)})
+    from datetime import timedelta
+    lock_until = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
+    with _l._lock:
+        with _l._conn() as db:
+            db.execute("UPDATE config SET value='1.0' WHERE key='stop_multiplier'")
+            db.execute(
+                "INSERT OR REPLACE INTO config (key, value) VALUES ('stop_multiplier_locked_until', ?)",
+                (lock_until,),
+            )
+            db.commit()
+            actual = db.execute(
+                "SELECT value FROM config WHERE key='stop_multiplier'"
+            ).fetchone()[0]
+    return jsonify({"status": "ok", "stop_multiplier": float(actual), "locked_until": lock_until})
 
 
 # ── Backtester routes ─────────────────────────────────────────────────────────

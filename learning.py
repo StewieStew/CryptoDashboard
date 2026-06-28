@@ -965,28 +965,40 @@ def _adapt(db) -> list:
             threshold = new_thresh
 
     # ── Stop multiplier adaptation ────────────────────────
-    # If recent losses were stopped out within 1.0% of entry → stops too tight
-    recent_losses = [r for r in closed[:ADAPT_WINDOW] if r["status"] == "loss"]
-    if len(recent_losses) >= 2:
-        tight = sum(
-            1 for r in recent_losses
-            if r["sl"] and r["entry"]
-            and abs(float(r["sl"]) - float(r["entry"])) / float(r["entry"]) < 0.01
-        )
-        if tight >= 2 and stop_mult < MAX_STOP_MULT:
-            new_mult = min(round(stop_mult + 0.1, 1), MAX_STOP_MULT)
-            if new_mult != stop_mult:
-                changes.append(
-                    f"⬆ Stop multiplier {stop_mult:.1f}→{new_mult:.1f}×ATR "
-                    f"({tight}/5 recent stops hit within 0.5% of entry — likely noise)"
-                )
-                stop_mult = new_mult
+    # If recent losses were stopped out within 1.0% of entry → stops too tight.
+    # Skip adaptation if a manual reset locked the multiplier.
+    stop_mult_changed = False
+    lock_row = db.execute(
+        "SELECT value FROM config WHERE key='stop_multiplier_locked_until'"
+    ).fetchone()
+    sm_locked = (
+        lock_row is not None
+        and datetime.fromisoformat(lock_row[0]) > datetime.now(timezone.utc)
+    )
+    if not sm_locked:
+        recent_losses = [r for r in closed[:ADAPT_WINDOW] if r["status"] == "loss"]
+        if len(recent_losses) >= 2:
+            tight = sum(
+                1 for r in recent_losses
+                if r["sl"] and r["entry"]
+                and abs(float(r["sl"]) - float(r["entry"])) / float(r["entry"]) < 0.01
+            )
+            if tight >= 2 and stop_mult < MAX_STOP_MULT:
+                new_mult = min(round(stop_mult + 0.1, 1), MAX_STOP_MULT)
+                if new_mult != stop_mult:
+                    changes.append(
+                        f"⬆ Stop multiplier {stop_mult:.1f}→{new_mult:.1f}×ATR "
+                        f"({tight}/5 recent stops hit within 0.5% of entry — likely noise)"
+                    )
+                    stop_mult = new_mult
+                    stop_mult_changed = True
 
     # ── Persist changes ───────────────────────────────────
     if changes:
         _set_cfg(db, "weights",          json.dumps(weights))
         _set_cfg(db, "signal_threshold", str(threshold))
-        _set_cfg(db, "stop_multiplier",  str(stop_mult))
+        if stop_mult_changed:
+            _set_cfg(db, "stop_multiplier",  str(stop_mult))
         db.execute(
             "INSERT INTO adaptation_log (timestamp, changes_json) VALUES (?, ?)",
             (datetime.now(timezone.utc).isoformat(), json.dumps(changes))
@@ -1167,6 +1179,16 @@ def get_learning_state() -> dict:
     wins      = [t for t in closed if t["status"] == "win"]
     win_rate  = round(len(wins) / len(closed) * 100, 1) if closed else None
 
+    lock_raw  = _get_cfg("stop_multiplier_locked_until", None)
+    sm_locked_until = None
+    if lock_raw:
+        try:
+            lock_dt = datetime.fromisoformat(lock_raw)
+            if lock_dt > datetime.now(timezone.utc):
+                sm_locked_until = lock_raw
+        except Exception:
+            pass
+
     factor_states = {}
     for f in FACTOR_NAMES:
         dw = DEFAULT_WEIGHTS[f]
@@ -1181,15 +1203,16 @@ def get_learning_state() -> dict:
         }
 
     return {
-        "weights":          factor_states,
-        "signal_threshold": threshold,
-        "default_threshold":DEFAULT_THRESHOLD,
-        "stop_multiplier":  stop_mult,
-        "default_stop_mult":DEFAULT_STOP_MULT,
-        "overall_win_rate": win_rate,
-        "total_closed":     len(closed),
-        "tp_source_stats":  get_tp_source_stats(),
-        "adaptation_log":   get_adaptation_log(10),
+        "weights":                   factor_states,
+        "signal_threshold":          threshold,
+        "default_threshold":         DEFAULT_THRESHOLD,
+        "stop_multiplier":           stop_mult,
+        "default_stop_mult":         DEFAULT_STOP_MULT,
+        "stop_multiplier_locked_until": sm_locked_until,
+        "overall_win_rate":          win_rate,
+        "total_closed":              len(closed),
+        "tp_source_stats":           get_tp_source_stats(),
+        "adaptation_log":            get_adaptation_log(10),
     }
 
 
