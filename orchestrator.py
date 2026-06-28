@@ -357,14 +357,40 @@ def main():
                     _last_run["analyst_htf"] = _last_run["analyst"]
 
                 # CEO agent reviews analyst output and decides which trades to forward
+                _ceo_result    = {"hold_cycle": False, "reanalyze": False}
                 if _last_run["analyst"] != _analyst_ran_before:
                     _hours_since = (now - _had_open_since) / 3600
                     log_divider("CEO AGENT   — reviewing signals & deciding")
                     try:
-                        ceo_agent.run(forced=_forced_15m, hours_since_trade=_hours_since)
+                        _ceo_result = ceo_agent.run(
+                            forced=_forced_15m, hours_since_trade=_hours_since)
                     except Exception as _ceo_err:
                         log(f"CEO agent crashed: {_ceo_err}", "ERROR")
                     log_divider()
+
+                    # CEO requested re-analysis: force analyst + CEO to run once more
+                    if _ceo_result.get("reanalyze"):
+                        log("CEO requested re-analysis — forcing analyst re-run", "WARN")
+                        _last_run["analyst"] = 0  # bypass interval check
+                        _analyst_rerun_before = _last_run["analyst"]
+                        run_agent_safe(
+                            "analyst",
+                            lambda: analyst_agent.run(forced=_forced_15m,
+                                                      include_htf=_include_htf,
+                                                      skip_render_post=True,
+                                                      model=_analyst_model),
+                            ANALYST_INTERVAL,
+                        )
+                        if _last_run["analyst"] != _analyst_rerun_before:
+                            log_divider("CEO AGENT   — reviewing re-analysis")
+                            try:
+                                _ceo_result = ceo_agent.run(
+                                    forced=_forced_15m,
+                                    hours_since_trade=_hours_since,
+                                    is_reanalysis=True)
+                            except Exception as _ceo_err2:
+                                log(f"CEO re-analysis crashed: {_ceo_err2}", "ERROR")
+                            log_divider()
 
                 # After a forced analyst run, only restart the 4h clock if a new trade
                 # actually appeared in the DB. If no trade was placed (e.g. the analyst
@@ -389,8 +415,13 @@ def main():
                     except Exception:
                         _had_open_since = time.time()
                         log("Forced entry attempted — 4h timer restarted (could not verify trade)", "INFO")
-            run_agent_safe("risk",      risk_agent.run,          RISK_INTERVAL)
-            run_agent_safe("trade_mgr", trade_manager_agent.run, TRADE_MGR_INTERVAL)
+
+            run_agent_safe("risk", risk_agent.run, RISK_INTERVAL)
+            # Trade manager suppressed when CEO calls hold_cycle
+            if _ceo_result.get("hold_cycle"):
+                log("Trade manager suppressed — CEO hold_cycle active this cycle", "WARN")
+            else:
+                run_agent_safe("trade_mgr", trade_manager_agent.run, TRADE_MGR_INTERVAL)
             run_agent_safe("learning",  learning_agent.run,      LEARNING_INTERVAL)
 
             # Hourly desk briefing

@@ -131,6 +131,7 @@ def init_db() -> None:
             approved_count INTEGER,
             rejected_count INTEGER,
             message        TEXT,
+            action_data    TEXT,
             timestamp      TEXT
         );
     """)
@@ -230,14 +231,22 @@ def add_knowledge(category: str, entry: dict) -> None:
 
 
 def log_ceo_decision(symbol: str, decision: str, reason: str,
-                     approved_count: int, rejected_count: int, message: str) -> None:
+                     approved_count: int, rejected_count: int, message: str,
+                     action_data: str = "") -> None:
     db = _conn()
+    # Migrate: add action_data column if the table predates this schema
+    try:
+        db.execute("ALTER TABLE ceo_decisions ADD COLUMN action_data TEXT")
+        db.commit()
+    except Exception:
+        pass  # column already exists
     db.execute(
         """INSERT INTO ceo_decisions
-           (symbol, decision, reason, approved_count, rejected_count, message, timestamp)
-           VALUES (?,?,?,?,?,?,?)""",
+           (symbol, decision, reason, approved_count, rejected_count,
+            message, action_data, timestamp)
+           VALUES (?,?,?,?,?,?,?,?)""",
         (symbol, decision, reason, approved_count, rejected_count, message,
-         datetime.now(timezone.utc).isoformat())
+         action_data, datetime.now(timezone.utc).isoformat())
     )
     db.commit()
     db.close()
