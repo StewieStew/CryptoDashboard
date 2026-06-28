@@ -22,7 +22,7 @@ from pathlib import Path
 import anthropic
 import requests
 
-from agents.state import get_state, add_knowledge, post_to_render
+from agents.state import get_state, set_state, add_knowledge, post_to_render
 
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 RENDER_URL    = os.environ.get("RENDER_URL", "https://cryptodashboard-nuf5.onrender.com")
@@ -161,23 +161,37 @@ Respond with ONLY:
         return None
 
 
-def _post_signal(sig: dict):
+def _post_signal(sig: dict, image_b64: str | None = None, mime_type: str = "image/jpeg"):
     """Post a signal to Render and save to knowledge base."""
     global _signals_processed
     _signals_processed += 1
 
-    print(f"[TG AGENT] *** SIGNAL: {sig.get('symbol')} {sig.get('direction')} "
+    img_note = " [+chart]" if image_b64 else ""
+    print(f"[TG AGENT] *** SIGNAL{img_note}: {sig.get('symbol')} {sig.get('direction')} "
           f"entry={sig.get('entry')} tp={sig.get('tp')} sl={sig.get('sl')} "
           f"rr={sig.get('rr_ratio','?')} conf={sig.get('confidence')}/10", flush=True)
 
     post_to_render("/api/agent/insight", {
-        "type":          "telegram_signal",
-        "agent":         "telegram",
-        "timestamp":     datetime.now(timezone.utc).isoformat(),
-        "trade_signal":  sig,
-        "all_signals":   [sig],
-        "market_summary": f"Real-time signal from Telegram group {sig.get('channel_id','')}",
+        "type":               "telegram_signal",
+        "agent":              "telegram",
+        "timestamp":          datetime.now(timezone.utc).isoformat(),
+        "trade_signal":       sig,
+        "all_signals":        [sig],
+        "market_summary":     f"Real-time signal from Telegram group {sig.get('channel_id','')}",
+        "telegram_image_b64": image_b64,
+        "telegram_image_mime": mime_type if image_b64 else None,
     })
+
+    # Store the latest Telegram chart image in shared state so the analyst
+    # can include it as additional confluence in its next analysis cycle.
+    if image_b64:
+        set_state("telegram_latest_image", {
+            "image_b64": image_b64,
+            "mime_type": mime_type,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "symbol":    sig.get("symbol"),
+            "direction": sig.get("direction"),
+        })
 
     add_knowledge("telegram_signals", {
         "symbol":    sig.get("symbol"),
@@ -217,19 +231,29 @@ def _listener_loop():
 
             @client.on(events.NewMessage(chats=channels))
             async def handler(event):
-                msg      = event.message
-                text     = msg.text or ""
+                msg       = event.message
+                text      = msg.text or ""
                 image_b64 = None
+                mime_type = "image/jpeg"
 
-                # Download image if attached
-                if msg.photo or (msg.document and
-                        "image" in (getattr(msg.document, "mime_type", "") or "")):
+                # Download image attachments only (skip video, audio, stickers)
+                if msg.photo:
                     try:
                         img_bytes = await client.download_media(msg, bytes)
                         if img_bytes:
                             image_b64 = base64.b64encode(img_bytes).decode()
                     except Exception as img_err:
                         print(f"[TG AGENT] Image download error: {img_err}", flush=True)
+                elif msg.document:
+                    doc_mime = getattr(msg.document, "mime_type", "") or ""
+                    if doc_mime.startswith("image/"):
+                        try:
+                            img_bytes = await client.download_media(msg, bytes)
+                            if img_bytes:
+                                image_b64 = base64.b64encode(img_bytes).decode()
+                                mime_type = doc_mime
+                        except Exception as img_err:
+                            print(f"[TG AGENT] Image download error: {img_err}", flush=True)
 
                 # Skip empty messages
                 if not text and not image_b64:
@@ -245,7 +269,7 @@ def _listener_loop():
                 # Analyze message
                 sig = analyze_message(text, image_b64, channel_id, macro_regime)
                 if sig:
-                    _post_signal(sig)
+                    _post_signal(sig, image_b64=image_b64, mime_type=mime_type)
                 else:
                     print(f"[TG AGENT] No signal in message.", flush=True)
 

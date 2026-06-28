@@ -13,7 +13,7 @@ Output: best trade signal with full confluence reasoning, key levels, risk notes
 """
 from __future__ import annotations
 import json, os, time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import requests
 import anthropic
@@ -831,6 +831,36 @@ Respond with ONLY this JSON:
                                  f"Cyan = EMA20. Orange = EMA50. "
                                  f"Red dashed = resistance (1D+4H). Green dashed = support (1D+4H).")
                     })
+
+            # Include any recent Telegram chart image as additional confluence
+            tg_img = get_state("telegram_latest_image", {})
+            if tg_img and tg_img.get("image_b64"):
+                try:
+                    ts = datetime.fromisoformat(tg_img["timestamp"].replace("Z", "+00:00"))
+                    age_h = (datetime.now(timezone.utc) - ts).total_seconds() / 3600
+                    if age_h < 4:
+                        tg_sym  = tg_img.get("symbol", "")
+                        tg_dir  = tg_img.get("direction", "")
+                        content.append({
+                            "type": "image",
+                            "source": {
+                                "type":       "base64",
+                                "media_type": tg_img.get("mime_type", "image/jpeg"),
+                                "data":       tg_img["image_b64"],
+                            }
+                        })
+                        content.append({"type": "text", "text": (
+                            f"↑ Telegram signal channel chart"
+                            + (f" for {tg_sym} {tg_dir}" if tg_sym else "")
+                            + f" (posted {age_h:.1f}h ago). "
+                            "A Telegram signal channel posted this chart image alongside their call. "
+                            "Evaluate what you see in this chart as additional confluence for or against the setup."
+                        )})
+                        print(f"  [TG IMAGE] Including Telegram chart in analyst context"
+                              f" ({tg_sym} {tg_dir}, {age_h:.1f}h ago)", flush=True)
+                except Exception as _te:
+                    print(f"  [TG IMAGE] Could not include Telegram image: {_te}", flush=True)
+
             content.append({"type": "text", "text": prompt})
 
             msg = client.messages.create(
