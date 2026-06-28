@@ -52,13 +52,6 @@ for _env_candidate in [
 from agents import state as S
 from agents import macro_agent, analyst_agent, risk_agent, learning_agent, trade_manager_agent
 
-# Telegram agent — optional, only active if TG_API_ID env var is set
-try:
-    from agents import telegram_agent as _tg_agent
-    _TG_ENABLED = bool(os.environ.get("TG_API_ID"))
-except ImportError:
-    _tg_agent   = None
-    _TG_ENABLED = False
 
 RENDER_URL    = os.environ.get("RENDER_URL", "https://cryptodashboard-nuf5.onrender.com")
 DISCORD_URL   = os.environ.get("DISCORD_WEBHOOK_URL", "")
@@ -73,7 +66,6 @@ ANALYST_INTERVAL   = 30 * 60   # 30 minutes — quality setups, not frequency
 RISK_INTERVAL      =  5 * 60   #  5 minutes (Haiku — cheap, keep fast)
 TRADE_MGR_INTERVAL =  5 * 60   #  5 minutes — BE stops, partials, trails
 LEARNING_INTERVAL  = 60 * 60   # 60 minutes
-TELEGRAM_INTERVAL  = 30 * 60   # 30 minutes
 
 _last_run = {
     "macro":       0,
@@ -81,8 +73,45 @@ _last_run = {
     "risk":        0,
     "trade_mgr":   0,
     "learning":    0,
-    "telegram":    0,
 }
+
+# Forced 15m entry: cache last query result to avoid hammering Render every 60s
+_last_15m_check_time = 0.0
+_last_15m_trade_ts   = 0.0
+
+
+def _check_15m_forced() -> bool:
+    """Return True if 4+ hours have passed since the last completed 15m trade (open/win/loss)."""
+    global _last_15m_check_time, _last_15m_trade_ts
+    now = time.time()
+    if now - _last_15m_check_time < 300:  # cache for 5 minutes
+        return now - _last_15m_trade_ts >= 4 * 3600
+    try:
+        r = requests.get(f"{RENDER_URL}/api/trades", timeout=10)
+        if r.status_code == 200:
+            latest = 0.0
+            for t in r.json():
+                if not isinstance(t, dict):
+                    continue
+                if t.get("interval") != "15m":
+                    continue
+                if t.get("status") not in ("open", "win", "loss"):
+                    continue
+                opened = t.get("opened_at", "")
+                if not opened:
+                    continue
+                try:
+                    dt = datetime.fromisoformat(opened.replace("Z", "+00:00"))
+                    ts = dt.timestamp()
+                    if ts > latest:
+                        latest = ts
+                except Exception:
+                    pass
+            _last_15m_trade_ts = latest
+    except Exception:
+        pass
+    _last_15m_check_time = now
+    return now - _last_15m_trade_ts >= 4 * 3600
 
 
 def log(msg: str, level: str = "INFO") -> None:
@@ -141,7 +170,6 @@ def run_agent_safe(name: str, fn, interval: int) -> None:
         "risk":      "RISK     — checking open trades",
         "trade_mgr": "TRADE MGR — managing open positions (BE/trail/partial)",
         "learning":  "LEARNING — reviewing closed trades",
-        "telegram":  "TELEGRAM — listener status",
     }
     log_divider(labels.get(name, name.upper()))
     try:
@@ -239,8 +267,7 @@ def main():
     log("═" * 65)
     log("  AGENTS:")
     log(f"  • MACRO     — runs every {MACRO_INTERVAL//60}min  — news, sentiment, regime")
-    log(f"  • ANALYST   — runs every {ANALYST_INTERVAL//60}min  — price action, levels, charts, ratings")
-    log(f"  • TELEGRAM  — REAL-TIME listener — {'ENABLED' if _TG_ENABLED else 'DISABLED (run setup_telegram.command)'}")
+    log(f"  • ANALYST   — runs every {ANALYST_INTERVAL//60}min  — price action, levels, charts, ratings (forced 15m every 4h)")
     log(f"  • RISK      — runs every {RISK_INTERVAL//60}min   — monitors open trades, flags problems")
     log(f"  • TRADE MGR — runs every {TRADE_MGR_INTERVAL//60}min   — BE stops, partial profits, trailing stops")
     log(f"  • LEARNING  — runs every {LEARNING_INTERVAL//60}min — post-mortems, improvements")
@@ -250,21 +277,10 @@ def main():
         log("Startup checks failed. Exiting.", "ERROR")
         return
 
-    # Start Telegram listener in background thread (real-time, not scheduled)
-    if _TG_ENABLED and _tg_agent:
-        try:
-            started = _tg_agent.start_listener()
-            if started:
-                log("  Telegram listener started — watching groups in real-time")
-            else:
-                log("  Telegram listener failed to start — check setup_telegram.command", "WARN")
-        except Exception as _tg_err:
-            log(f"  Telegram listener error: {_tg_err}", "WARN")
-
     discord(
         "Trading desk is online. All agents starting.\n"
         f"Monitoring: BTC, ETH, XRP, DOGE, SOL\n"
-        f"Telegram: {'real-time' if _TG_ENABLED else 'not configured'}\n"
+        f"Forced 15m entry: every 4 hours guaranteed\n"
         f"Render: {RENDER_URL}",
         "🚀 Trading Desk Online",
         color=0x57f287,
@@ -283,9 +299,16 @@ def main():
             now = time.time()
 
             # Run agents in order (macro → analyst → risk → learning)
-            # Telegram runs in its own background thread — not scheduled here
-            run_agent_safe("macro",     macro_agent.run,         MACRO_INTERVAL)
-            run_agent_safe("analyst",   analyst_agent.run,       ANALYST_INTERVAL)
+            run_agent_safe("macro", macro_agent.run, MACRO_INTERVAL)
+
+            # Check 4h forced 15m entry timer — if expired, force an early analyst run
+            _forced_15m = _check_15m_forced()
+            if _forced_15m:
+                elapsed_h = (now - _last_15m_trade_ts) / 3600
+                log(f"[FORCED ENTRY] {elapsed_h:.1f}h since last 15m trade — analyst MUST take a 15m trade", "WARN")
+                if not should_run("analyst", ANALYST_INTERVAL):
+                    _last_run["analyst"] = 0  # trigger early analyst run
+            run_agent_safe("analyst", lambda: analyst_agent.run(forced=_forced_15m), ANALYST_INTERVAL)
             run_agent_safe("risk",      risk_agent.run,          RISK_INTERVAL)
             run_agent_safe("trade_mgr", trade_manager_agent.run, TRADE_MGR_INTERVAL)
             run_agent_safe("learning",  learning_agent.run,      LEARNING_INTERVAL)

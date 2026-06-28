@@ -390,12 +390,14 @@ def fmt_candles(candles: list, n: int = 20) -> str:
     return "\n".join(lines)
 
 
-def run() -> dict:
+def run(forced: bool = False) -> dict:
     session = get_session()
     print(f"  Session: {session['session']}  ({session['quality']} quality)  "
           f"{'⚠ CAUTION' if session['caution'] else '✓ active'}", flush=True)
     if session["caution"]:
         print(f"  ⚠  {session['note']}", flush=True)
+    if forced:
+        print("  [FORCED ENTRY] 4-hour timer expired — analyst MUST take a 15m trade this cycle", flush=True)
     print("  Scanning charts...", flush=True)
 
     macro        = get_state("macro_regime", {})
@@ -779,6 +781,25 @@ Respond with ONLY this JSON:
             else:
                 print(f"  [DAILY MIN] {_today_count} trade(s) taken today — no fallback needed", flush=True)
 
+        if forced:
+            prompt += (
+                "\n\n🚨 FORCED ENTRY MODE — 4-HOUR TIMER EXPIRED\n\n"
+                "You MUST include at least one 15m trade in your response. This is non-negotiable.\n"
+                "4+ hours have passed without a 15m trade. Stop waiting for perfect signals.\n\n"
+                "For the forced 15m trade:\n"
+                "- Pick the coin with the clearest short-term directional bias right now\n"
+                "- Look at the 15M chart and call the most likely direction for the next 1-2 hours\n"
+                "- Set entry_type to \"market\" — enter immediately at current price\n"
+                "- Set SL just beyond the most recent 15M swing high (for SHORT) or swing low (for LONG)\n"
+                "- Set TP to achieve at least 2:1 R:R (TP = entry ± 2 × SL distance)\n"
+                "- Set timeframe to \"15m\"\n"
+                "- Set confidence to whatever is genuinely appropriate\n\n"
+                "You MUST return this trade. Do NOT return an empty trades array.\n"
+                "Do NOT wait for perfect confluence — just call the most likely next move and go.\n"
+                "The 1h and 4h trades are separate and can coexist with this 15m trade.\n"
+            )
+            print("  [FORCED ENTRY] Forced 15m directive appended to analyst prompt", flush=True)
+
         try:
             # ── Self-evaluation: ask Claude to critique its own charts ────
             # Runs once per session, saves suggestions to state so we can act on them
@@ -861,8 +882,13 @@ Respond with ONLY this JSON:
         trades = [result["best_trade"]]  # backward compat
 
     # Hard filter: drop any trade that doesn't meet minimum R:R
+    # In forced mode, 15m trades bypass this gate — they just need a valid SL and TP
     before = len(trades)
-    trades = [t for t in trades if float(t.get("rr_ratio", 0)) >= MIN_RR]
+    if forced:
+        trades = [t for t in trades
+                  if float(t.get("rr_ratio", 0)) >= MIN_RR or t.get("timeframe") == "15m"]
+    else:
+        trades = [t for t in trades if float(t.get("rr_ratio", 0)) >= MIN_RR]
     if len(trades) < before:
         print(f"  [FILTER] Dropped {before - len(trades)} trade(s) below R:R {MIN_RR}:1", flush=True)
 
@@ -939,6 +965,8 @@ Respond with ONLY this JSON:
             ereason = t.get('entry_type_reason', '')
             arrow = "SHORT ↓" if dirn == "SHORT" else "LONG ↑"
             stars = "★★★" if qual == "strong" else "★★☆" if qual == "moderate" else "★☆☆"
+            if forced and tf == "15m":
+                print(f"  [FORCED ENTRY] {sym} 15m {dirn} — 4h timer expired", flush=True)
             print(f"  [{i}] {sym} {arrow} ({tf})  —  R:R {rr:.1f}:1  —  Confidence {conf}/10  {stars}", flush=True)
             entry_tag = "[MARKET ENTRY]" if etype == "market" else "[LIMIT ENTRY - expires in 30min]"
             print(f"      Entry {entry_tag}: ${entry:,.4f}", flush=True)
