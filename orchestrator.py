@@ -62,8 +62,8 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Schedule config ───────────────────────────────────────────────────────────
 MACRO_INTERVAL     = 60 * 60   # 60 minutes
-ANALYST_INTERVAL   = 15 * 60   # 15 minutes — catches 15m setups quickly
-HTF_INTERVAL       = 30 * 60   # 30 minutes — 1h/4h setups change more slowly
+ANALYST_INTERVAL   = 30 * 60   # 30 minutes — Haiku text-only; Sonnet only on forced entry
+HTF_INTERVAL       = 60 * 60   # 60 minutes — 1h/4h structure changes slowly
 RISK_INTERVAL      =  5 * 60   #  5 minutes (Haiku — cheap, keep fast)
 TRADE_MGR_INTERVAL =  5 * 60   #  5 minutes — BE stops, partials, trails
 LEARNING_INTERVAL  = 60 * 60   # 60 minutes
@@ -76,6 +76,10 @@ _last_run = {
     "trade_mgr":    0,
     "learning":     0,
 }
+
+# Daily Claude call counter — hard cap at 48 calls/day to keep cost ~$1-2/day
+_claude_calls_today: int  = 0
+_claude_day_reset:   float = 0.0   # epoch timestamp of last midnight-UTC reset
 
 # Forced 15m entry: tracks when we last saw at least one open trade (any timeframe)
 _last_15m_check_time = 0.0
@@ -248,7 +252,7 @@ def startup_checks() -> bool:
 
 
 def main():
-    global _had_open_since
+    global _had_open_since, _claude_calls_today, _claude_day_reset
     log("═" * 65)
     log("  CRYPTO TRADING DESK — MULTI-AGENT SYSTEM STARTING")
     log(f"  Render: {RENDER_URL}")
@@ -269,7 +273,9 @@ def main():
 
     discord(
         "Trading desk is online. All agents starting.\n"
-        f"Monitoring: BTC, ETH, XRP, DOGE, SOL\n"
+        f"Monitoring: BTC, ETH, SOL (3 coins, 3-signal minimum)\n"
+        f"Analyst: every 30min Haiku text-only | Sonnet+vision on forced entry\n"
+        f"Daily Claude cap: 48 calls/day (~$1-2/day)\n"
         f"Forced 15m entry: every 4 hours guaranteed\n"
         f"Render: {RENDER_URL}",
         "🚀 Trading Desk Online",
@@ -287,6 +293,16 @@ def main():
         loop_count += 1
         try:
             now = time.time()
+
+            # Reset daily Claude counter at UTC midnight
+            _today_midnight = (datetime.now(timezone.utc)
+                               .replace(hour=0, minute=0, second=0, microsecond=0)
+                               .timestamp())
+            if _today_midnight > _claude_day_reset:
+                if _claude_day_reset > 0:
+                    log(f"Midnight UTC: daily Claude counter reset ({_claude_calls_today} calls yesterday)")
+                _claude_calls_today = 0
+                _claude_day_reset = _today_midnight
 
             # Run agents in order (macro → analyst → risk → learning)
             run_agent_safe("macro", macro_agent.run, MACRO_INTERVAL)
@@ -313,51 +329,66 @@ def main():
                 except Exception:
                     pass
 
-            # Include 1h/4h setup checks only every 30 min (15m checks run every cycle)
-            _analyst_ran_before = _last_run["analyst"]
-            _include_htf = (now - _last_run["analyst_htf"] >= HTF_INTERVAL)
-            # skip_render_post=True: CEO agent controls what reaches the Render executor
-            run_agent_safe("analyst",
-                           lambda: analyst_agent.run(forced=_forced_15m,
-                                                     include_htf=_include_htf,
-                                                     skip_render_post=True),
-                           ANALYST_INTERVAL)
-            if _last_run["analyst"] != _analyst_ran_before and _include_htf:
-                _last_run["analyst_htf"] = _last_run["analyst"]
+            # ── Analyst — Haiku text-only by default, Sonnet+vision on forced entry ──
+            _analyst_model    = "sonnet" if _forced_15m else "haiku"
+            _budget_exceeded  = _claude_calls_today >= 48
 
-            # CEO agent reviews analyst output and decides which trades to forward
-            if _last_run["analyst"] != _analyst_ran_before:
-                _hours_since = (now - _had_open_since) / 3600
-                log_divider("CEO AGENT   — reviewing signals & deciding")
-                try:
-                    ceo_agent.run(forced=_forced_15m, hours_since_trade=_hours_since)
-                except Exception as _ceo_err:
-                    log(f"CEO agent crashed: {_ceo_err}", "ERROR")
-                log_divider()
+            if _budget_exceeded and not _forced_15m:
+                log(f"COST GUARD: {_claude_calls_today}/48 Claude calls today — skipping non-forced scan", "WARN")
+            else:
+                _analyst_ran_before = _last_run["analyst"]
+                _include_htf = (now - _last_run["analyst_htf"] >= HTF_INTERVAL)
+                # skip_render_post=True: CEO agent controls what reaches the Render executor
+                _analyst_result = run_agent_safe(
+                    "analyst",
+                    lambda: analyst_agent.run(forced=_forced_15m,
+                                              include_htf=_include_htf,
+                                              skip_render_post=True,
+                                              model=_analyst_model),
+                    ANALYST_INTERVAL,
+                )
+                # Track actual Claude calls for daily budget
+                if isinstance(_analyst_result, dict) and _analyst_result.get("claude_called"):
+                    _claude_calls_today += 1
+                    if _claude_calls_today >= 48:
+                        log(f"COST GUARD: {_claude_calls_today}/48 Claude calls — non-forced scans paused until midnight UTC", "WARN")
 
-            # After a forced analyst run, only restart the 4h clock if a new trade
-            # actually appeared in the DB. If no trade was placed (e.g. the analyst
-            # returned a limit order that was rejected or Claude returned nothing),
-            # keep the clock running so the next cycle tries again.
-            if _forced_15m and _last_run["analyst"] != _analyst_ran_before:
-                try:
-                    _snap2 = requests.get(f"{RENDER_URL}/api/trades", timeout=10)
-                    if _snap2.status_code == 200:
-                        _open_trade_ids_after = {
-                            t["id"] for t in _snap2.json()
-                            if isinstance(t, dict) and t.get("status") in ("open", "pending")
-                        }
-                        if _open_trade_ids_after - _open_trade_ids_before:
-                            _had_open_since = time.time()
-                            log("Forced entry placed — new trade confirmed, 4h timer restarted", "INFO")
+                if _last_run["analyst"] != _analyst_ran_before and _include_htf:
+                    _last_run["analyst_htf"] = _last_run["analyst"]
+
+                # CEO agent reviews analyst output and decides which trades to forward
+                if _last_run["analyst"] != _analyst_ran_before:
+                    _hours_since = (now - _had_open_since) / 3600
+                    log_divider("CEO AGENT   — reviewing signals & deciding")
+                    try:
+                        ceo_agent.run(forced=_forced_15m, hours_since_trade=_hours_since)
+                    except Exception as _ceo_err:
+                        log(f"CEO agent crashed: {_ceo_err}", "ERROR")
+                    log_divider()
+
+                # After a forced analyst run, only restart the 4h clock if a new trade
+                # actually appeared in the DB. If no trade was placed (e.g. the analyst
+                # returned a limit order that was rejected or Claude returned nothing),
+                # keep the clock running so the next cycle tries again.
+                if _forced_15m and _last_run["analyst"] != _analyst_ran_before:
+                    try:
+                        _snap2 = requests.get(f"{RENDER_URL}/api/trades", timeout=10)
+                        if _snap2.status_code == 200:
+                            _open_trade_ids_after = {
+                                t["id"] for t in _snap2.json()
+                                if isinstance(t, dict) and t.get("status") in ("open", "pending")
+                            }
+                            if _open_trade_ids_after - _open_trade_ids_before:
+                                _had_open_since = time.time()
+                                log("Forced entry placed — new trade confirmed, 4h timer restarted", "INFO")
+                            else:
+                                log("Forced analyst ran but no new trade appeared — 4h timer continues", "WARN")
                         else:
-                            log("Forced analyst ran but no new trade appeared — 4h timer continues", "WARN")
-                    else:
+                            _had_open_since = time.time()
+                            log("Forced entry attempted — 4h timer restarted (API unavailable)", "INFO")
+                    except Exception:
                         _had_open_since = time.time()
-                        log("Forced entry attempted — 4h timer restarted (API unavailable)", "INFO")
-                except Exception:
-                    _had_open_since = time.time()
-                    log("Forced entry attempted — 4h timer restarted (could not verify trade)", "INFO")
+                        log("Forced entry attempted — 4h timer restarted (could not verify trade)", "INFO")
             run_agent_safe("risk",      risk_agent.run,          RISK_INTERVAL)
             run_agent_safe("trade_mgr", trade_manager_agent.run, TRADE_MGR_INTERVAL)
             run_agent_safe("learning",  learning_agent.run,      LEARNING_INTERVAL)
