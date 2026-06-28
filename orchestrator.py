@@ -62,17 +62,19 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Schedule config ───────────────────────────────────────────────────────────
 MACRO_INTERVAL     = 60 * 60   # 60 minutes
-ANALYST_INTERVAL   = 30 * 60   # 30 minutes — quality setups, not frequency
+ANALYST_INTERVAL   = 15 * 60   # 15 minutes — catches 15m setups quickly
+HTF_INTERVAL       = 30 * 60   # 30 minutes — 1h/4h setups change more slowly
 RISK_INTERVAL      =  5 * 60   #  5 minutes (Haiku — cheap, keep fast)
 TRADE_MGR_INTERVAL =  5 * 60   #  5 minutes — BE stops, partials, trails
 LEARNING_INTERVAL  = 60 * 60   # 60 minutes
 
 _last_run = {
-    "macro":       0,
-    "analyst":     0,
-    "risk":        0,
-    "trade_mgr":   0,
-    "learning":    0,
+    "macro":        0,
+    "analyst":      0,
+    "analyst_htf":  0,  # last time 1h/4h setups were checked
+    "risk":         0,
+    "trade_mgr":    0,
+    "learning":     0,
 }
 
 # Forced 15m entry: tracks when we last saw at least one open trade (any timeframe)
@@ -254,7 +256,7 @@ def main():
     log("═" * 65)
     log("  AGENTS:")
     log(f"  • MACRO     — runs every {MACRO_INTERVAL//60}min  — news, sentiment, regime")
-    log(f"  • ANALYST   — runs every {ANALYST_INTERVAL//60}min  — price action, levels, charts, ratings (forced 15m every 4h)")
+    log(f"  • ANALYST   — runs every {ANALYST_INTERVAL//60}min  — pre-scan (Python) → Claude only when setup found (forced every 4h)")
     log(f"  • RISK      — runs every {RISK_INTERVAL//60}min   — monitors open trades, flags problems")
     log(f"  • TRADE MGR — runs every {TRADE_MGR_INTERVAL//60}min   — BE stops, partial profits, trailing stops")
     log(f"  • LEARNING  — runs every {LEARNING_INTERVAL//60}min — post-mortems, improvements")
@@ -295,7 +297,16 @@ def main():
                 log(f"[FORCED ENTRY] No open trades for {elapsed_h:.1f}h — analyst MUST take a 15m trade", "WARN")
                 if not should_run("analyst", ANALYST_INTERVAL):
                     _last_run["analyst"] = 0  # trigger early analyst run
-            run_agent_safe("analyst", lambda: analyst_agent.run(forced=_forced_15m), ANALYST_INTERVAL)
+
+            # Include 1h/4h setup checks only every 30 min (15m checks run every cycle)
+            _analyst_ran_before = _last_run["analyst"]
+            _include_htf = (now - _last_run["analyst_htf"] >= HTF_INTERVAL)
+            run_agent_safe("analyst",
+                           lambda: analyst_agent.run(forced=_forced_15m,
+                                                     include_htf=_include_htf),
+                           ANALYST_INTERVAL)
+            if _last_run["analyst"] != _analyst_ran_before and _include_htf:
+                _last_run["analyst_htf"] = _last_run["analyst"]
             run_agent_safe("risk",      risk_agent.run,          RISK_INTERVAL)
             run_agent_safe("trade_mgr", trade_manager_agent.run, TRADE_MGR_INTERVAL)
             run_agent_safe("learning",  learning_agent.run,      LEARNING_INTERVAL)

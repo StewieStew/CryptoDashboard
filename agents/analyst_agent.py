@@ -28,6 +28,55 @@ BINANCE_BASE  = "https://api.binance.us/api/v3"
 MIN_RR        = 1.2   # minimum risk:reward — just needs to be better than 1:1
 
 
+def _has_setup(d: dict) -> bool:
+    """Python-only pre-scan. Returns True if this coin shows ≥2 technical signals.
+
+    Used to skip the expensive Claude+vision call when the market is flat/ranging.
+    Err on the side of inclusion — a false positive costs one Claude call; a
+    false negative means a missed trade.
+    """
+    price = d.get("price", 0)
+    if not price:
+        return False
+
+    signals = 0
+
+    # RSI momentum extremes — any timeframe counts
+    if d.get("rsi_15m", 50) < 35 or d.get("rsi_15m", 50) > 65:
+        signals += 1
+    if d.get("rsi_1h", 50) < 30 or d.get("rsi_1h", 50) > 70:
+        signals += 1
+    if d.get("rsi_4h", 50) < 35 or d.get("rsi_4h", 50) > 65:
+        signals += 1
+
+    # Price within 1.5% of nearest structural level
+    levels = d.get("levels", {})
+    sup = levels.get("support", 0)
+    res = levels.get("resistance", 0)
+    if sup and abs(price - sup) / price < 0.015:
+        signals += 1
+    if res and abs(price - res) / price < 0.015:
+        signals += 1
+
+    # Strong EMA directional bias: ≥3 of 4 short/medium EMAs on the same side
+    emas = [d.get("ema20_15m", 0), d.get("ema50_15m", 0),
+            d.get("ema20_1h",  0), d.get("ema50_1h",  0)]
+    above = sum(1 for e in emas if e and price > e)
+    if above >= 3 or above <= 1:
+        signals += 1
+
+    # Volume expanding into recent candles
+    if d.get("vol_trend") == "expanding":
+        signals += 1
+
+    # Strong order book pressure (lopsided depth)
+    ob = d.get("ob_ratio", 1.0)
+    if ob > 1.5 or ob < 0.65:
+        signals += 1
+
+    return signals >= 2
+
+
 def _trades_today() -> int:
     """Count trades opened today (UTC) by querying the Render API."""
     try:
@@ -390,7 +439,7 @@ def fmt_candles(candles: list, n: int = 20) -> str:
     return "\n".join(lines)
 
 
-def run(forced: bool = False) -> dict:
+def run(forced: bool = False, include_htf: bool = True) -> dict:
     session = get_session()
     print(f"  Session: {session['session']}  ({session['quality']} quality)  "
           f"{'⚠ CAUTION' if session['caution'] else '✓ active'}", flush=True)
@@ -487,6 +536,8 @@ def run(forced: bool = False) -> dict:
             "ema20_4h": ema20_4h,   "ema50_4h": ema50_4h,
             "ema20_1d": ema20_1d,   "ema50_1d": ema50_1d,
             "vol_trend": vol_trend, "bias": coin_bias.get(coin, "neutral"),
+            # raw candles stored for deferred chart generation (only for setup coins)
+            "_c15m": c15m, "_c1h": c1h, "_c4h": c4h,
         }
 
         # Print what we found for this coin
@@ -524,38 +575,6 @@ def run(forced: bool = False) -> dict:
             for c in clusters[:6]
         ) or "  None"
 
-        # Generate chart image so Claude can visually read the candles
-        # Try TradingView first (real professional charts via Playwright)
-        # Falls back to matplotlib if Playwright isn't installed
-        from agents import chart_capture as _cc
-        if _cc.is_available():
-            print(f"       Chart: capturing TradingView (4H / 1H / 15M)...", flush=True)
-            chart_b64 = _cc.capture_coin(sym, ["4h", "1h", "15m"])
-            _source = "TradingView"
-        else:
-            chart_b64 = render_chart_image(
-                sym, c4h, c1h, c15m,
-                ema20_4h, ema50_4h, ema20_1h, ema50_1h, ema20_15m, ema50_15m,
-                levels.get("supports", []), levels.get("resistances", [])
-            )
-            _source = "matplotlib"
-
-        if chart_b64:
-            chart_images[sym] = chart_b64
-            # Save to disk so you can see what Claude is looking at
-            try:
-                import base64 as _b64
-                from pathlib import Path as _Path
-                _chart_dir = _Path.home() / "Desktop" / "CryptoDashboard" / "charts"
-                _chart_dir.mkdir(exist_ok=True)
-                _chart_path = _chart_dir / f"{sym}.png"
-                _chart_path.write_bytes(_b64.b64decode(chart_b64))
-                print(f"       Chart: ✓ {_source} → charts/{sym}.png", flush=True)
-            except Exception as _ce:
-                print(f"       Chart: ✓ {_source} (save failed: {_ce})", flush=True)
-        else:
-            print(f"       Chart: ✗ failed (text-only)", flush=True)
-
         coin_blocks.append(f"""
 ══ {sym} ══════════════════════════════════════
 Price: ${price:.6f}  |  1h: {chg_1h:+.2f}%  |  24h: {chg_24h:+.2f}%  |  7d: {chg_7d:+.2f}%
@@ -589,6 +608,97 @@ Whale activity:
 {fmt_candles(c1d, 5)}
 """)
         time.sleep(0.5)
+
+    # ── Pre-scan: find coins with setups ──────────────────────────────────────
+    # Use _has_setup() (Python-only) to decide whether to call Claude at all.
+    # include_htf=False means only 15m signals qualify this cycle (saves cost on
+    # rapid 15m-only scans where 1h/4h hasn't had time to change).
+    if include_htf:
+        setup_syms = [s for s in COINS if s in coin_data and _has_setup(coin_data[s])]
+    else:
+        # 15m-only scan: only count RSI/EMA/volume signals on 15m
+        setup_syms = []
+        for s in COINS:
+            d = coin_data.get(s, {})
+            sigs = 0
+            r = d.get("rsi_15m", 50)
+            if r < 35 or r > 65:
+                sigs += 1
+            p = d.get("price", 0)
+            emas = [d.get("ema20_15m", 0), d.get("ema50_15m", 0)]
+            above = sum(1 for e in emas if e and p > e)
+            if above == 2 or above == 0:
+                sigs += 1
+            if d.get("vol_trend") == "expanding":
+                sigs += 1
+            if sigs >= 2:
+                setup_syms.append(s)
+
+    if not setup_syms:
+        if forced:
+            # Forced mode: pick the 2 coins with the clearest EMA bias
+            def _ema_bias(s):
+                d = coin_data.get(s, {})
+                p = d.get("price", 0)
+                emas = [d.get("ema20_15m", 0), d.get("ema50_15m", 0),
+                        d.get("ema20_1h",  0), d.get("ema50_1h",  0)]
+                above = sum(1 for e in emas if e and p > e)
+                return abs(above - 2)  # 0 = neutral, 2 = fully aligned
+            setup_syms = sorted([s for s in COINS if s in coin_data],
+                                 key=_ema_bias, reverse=True)[:2]
+            print(f"  [FORCED] No natural setups — using top EMA-aligned coins: "
+                  f"{[s.replace('USDT','') for s in setup_syms]}", flush=True)
+        else:
+            print(f"  [PRESCAN] No setups found — skipping Claude call (cost saving)", flush=True)
+            output = {
+                "timestamp":      datetime.now(timezone.utc).isoformat(),
+                "trade_signal":   {},
+                "all_signals":    [],
+                "market_summary": None,
+                "coins_to_avoid": [],
+                "next_focus":     None,
+                "coin_data":      {s: {k: v for k, v in d.items()
+                                       if not k.startswith("_") and k != "clusters"}
+                                   for s, d in coin_data.items()},
+            }
+            set_state("analyst_ratings", output)
+            return output
+    else:
+        names = ", ".join(s.replace("USDT", "") for s in setup_syms)
+        print(f"  [PRESCAN] Setup signals on: {names} — generating charts & calling Claude",
+              flush=True)
+
+    # ── Generate charts only for coins with setups (saves vision token cost) ───
+    from agents import chart_capture as _cc
+    for sym in setup_syms:
+        d = coin_data[sym]
+        c15m_s = d["_c15m"]; c1h_s = d["_c1h"]; c4h_s = d["_c4h"]
+        lv = d["levels"]
+        if _cc.is_available():
+            chart_b64 = _cc.capture_coin(sym, ["4h", "1h", "15m"])
+            _src = "TradingView"
+        else:
+            chart_b64 = render_chart_image(
+                sym, c4h_s, c1h_s, c15m_s,
+                d["ema20_4h"], d["ema50_4h"], d["ema20_1h"], d["ema50_1h"],
+                d["ema20_15m"], d["ema50_15m"],
+                lv.get("supports", []), lv.get("resistances", [])
+            )
+            _src = "matplotlib"
+        if chart_b64:
+            chart_images[sym] = chart_b64
+            try:
+                import base64 as _b64
+                from pathlib import Path as _Path
+                _chart_dir = _Path.home() / "Desktop" / "CryptoDashboard" / "charts"
+                _chart_dir.mkdir(exist_ok=True)
+                (_chart_dir / f"{sym}.png").write_bytes(_b64.b64decode(chart_b64))
+                print(f"       {sym.replace('USDT','')}: chart ✓ {_src}", flush=True)
+            except Exception as _ce:
+                print(f"       {sym.replace('USDT','')}: chart ✓ {_src} (save failed: {_ce})",
+                      flush=True)
+        else:
+            print(f"       {sym.replace('USDT','')}: chart ✗ (text-only)", flush=True)
 
     # Load prior trades for context
     try:
