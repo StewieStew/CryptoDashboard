@@ -136,6 +136,12 @@ def init_db() -> None:
         );
     """)
     db.commit()
+    # Migrate ceo_decisions: add action_data column if table predates this schema
+    try:
+        db.execute("ALTER TABLE ceo_decisions ADD COLUMN action_data TEXT")
+        db.commit()
+    except Exception:
+        pass  # column already exists
     db.close()
 
 
