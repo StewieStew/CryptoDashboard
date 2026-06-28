@@ -299,6 +299,20 @@ def main():
                 if not should_run("analyst", ANALYST_INTERVAL):
                     _last_run["analyst"] = 0  # trigger early analyst run
 
+            # Snapshot open/pending trade IDs before analyst runs so we can detect
+            # whether a new trade actually appeared after a forced entry cycle.
+            _open_trade_ids_before: set = set()
+            if _forced_15m:
+                try:
+                    _snap = requests.get(f"{RENDER_URL}/api/trades", timeout=10)
+                    if _snap.status_code == 200:
+                        _open_trade_ids_before = {
+                            t["id"] for t in _snap.json()
+                            if isinstance(t, dict) and t.get("status") in ("open", "pending")
+                        }
+                except Exception:
+                    pass
+
             # Include 1h/4h setup checks only every 30 min (15m checks run every cycle)
             _analyst_ran_before = _last_run["analyst"]
             _include_htf = (now - _last_run["analyst_htf"] >= HTF_INTERVAL)
@@ -308,11 +322,29 @@ def main():
                            ANALYST_INTERVAL)
             if _last_run["analyst"] != _analyst_ran_before and _include_htf:
                 _last_run["analyst_htf"] = _last_run["analyst"]
-            # After a forced analyst run, restart the 4h clock so it doesn't
-            # retrigger the analyst every 60s while waiting for the trade to fill.
+            # After a forced analyst run, only restart the 4h clock if a new trade
+            # actually appeared in the DB. If no trade was placed (e.g. the analyst
+            # returned a limit order that was rejected or Claude returned nothing),
+            # keep the clock running so the next cycle tries again.
             if _forced_15m and _last_run["analyst"] != _analyst_ran_before:
-                _had_open_since = time.time()
-                log("Forced entry attempted — 4h timer restarted", "INFO")
+                try:
+                    _snap2 = requests.get(f"{RENDER_URL}/api/trades", timeout=10)
+                    if _snap2.status_code == 200:
+                        _open_trade_ids_after = {
+                            t["id"] for t in _snap2.json()
+                            if isinstance(t, dict) and t.get("status") in ("open", "pending")
+                        }
+                        if _open_trade_ids_after - _open_trade_ids_before:
+                            _had_open_since = time.time()
+                            log("Forced entry placed — new trade confirmed, 4h timer restarted", "INFO")
+                        else:
+                            log("Forced analyst ran but no new trade appeared — 4h timer continues", "WARN")
+                    else:
+                        _had_open_since = time.time()
+                        log("Forced entry attempted — 4h timer restarted (API unavailable)", "INFO")
+                except Exception:
+                    _had_open_since = time.time()
+                    log("Forced entry attempted — 4h timer restarted (could not verify trade)", "INFO")
             run_agent_safe("risk",      risk_agent.run,          RISK_INTERVAL)
             run_agent_safe("trade_mgr", trade_manager_agent.run, TRADE_MGR_INTERVAL)
             run_agent_safe("learning",  learning_agent.run,      LEARNING_INTERVAL)

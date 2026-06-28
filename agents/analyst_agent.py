@@ -900,7 +900,9 @@ Respond with ONLY this JSON:
                 "For the forced 15m trade:\n"
                 "- Pick the coin with the clearest short-term directional bias right now\n"
                 "- Look at the 15M chart and call the most likely direction for the next 1-2 hours\n"
-                "- Set entry_type to \"market\" — enter immediately at current price\n"
+                "- You MUST return a trade. You may use a market entry if price is at your level now, "
+                "or a limit entry if you see a clear level within 1% of current price where you want "
+                "to enter. Do NOT skip.\n"
                 "- Set SL just beyond the most recent 15M swing high (for SHORT) or swing low (for LONG)\n"
                 "- Set TP to achieve at least 2:1 R:R (TP = entry ± 2 × SL distance)\n"
                 "- Set timeframe to \"15m\"\n"
@@ -997,14 +999,6 @@ Respond with ONLY this JSON:
     trades = [t for t in trades if float(t.get("rr_ratio", 0)) >= MIN_RR]
     if len(trades) < before:
         print(f"  [FILTER] Dropped {before - len(trades)} trade(s) below R:R {MIN_RR}:1", flush=True)
-
-    # Forced mode: override 15m trades to market entry so they execute immediately
-    # rather than sitting as pending limit orders that may never fill in 30 min.
-    if forced:
-        for t in trades:
-            if t.get("timeframe") == "15m" and t.get("entry_type", "limit") != "market":
-                t["entry_type"] = "market"
-                print(f"  [FORCED] {t.get('symbol','').replace('USDT','')} 15m: entry_type overridden to market", flush=True)
 
     # Use the highest-confidence trade as the primary signal for dashboard display
     trade = max(trades, key=lambda t: t.get("confidence", 0)) if trades else {}
